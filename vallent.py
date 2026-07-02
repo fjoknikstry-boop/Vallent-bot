@@ -408,46 +408,42 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
     embed = discord.Embed(title=str(user.display_name) + "'s Profile", color=color)
     embed.set_thumbnail(url=user.display_avatar.url)
 
-    # Semua info dalam SATU field — rapat, tidak ada jarak
-    lines_out = []
-
-    # Badge section
-    lines_out.append("**ALL BADGES**")
+    # ── ALL BADGES — field sendiri, satu badge per baris ──────────────
     if badges:
+        badge_lines = []
         for b in badges:
-            info = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
+            info      = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
             emoji_str = info.get("emoji", "")
-            if emoji_str:
-                lines_out.append(emoji_str + " \u2022 **" + info["label"] + "**")
-            else:
-                lines_out.append("\u2022 **" + info["label"] + "**")
-        lines_out.append("**Total Badges: " + str(len(badges)) + "**")
+            prefix    = (emoji_str + " ") if emoji_str else "\u2022 "
+            badge_lines.append(prefix + "**" + info["label"] + "**")
+        badges_value = "\n".join(badge_lines)
     else:
-        lines_out.append("Belum ada badge.")
         invite = SUPPORT_INVITE
+        badges_value = "Belum ada badge."
         if invite:
-            lines_out.append("[Join server support](" + invite + ") untuk dapat badge **USER**!")
+            badges_value += "\n[Join server support](" + invite + ") untuk dapat badge **USER**!"
         else:
-            lines_out.append("Join server support untuk dapat badge **USER**!")
+            badges_value += "\nJoin server support untuk dapat badge **USER**!"
 
-    # Commands counter — langsung di bawah badge
-    lines_out.append("**Commands Runned:** " + str(cmds_run))
+    embed.add_field(name="\u2728 ALL BADGES", value=badges_value, inline=False)
 
-    # Premium info kalau ada
+    # ── Total Badges & Commands Runned — dua field sejajar ────────────
+    embed.add_field(name="Total Badges", value="**" + str(len(badges)) + "**", inline=True)
+    embed.add_field(name="Commands Runned", value="**" + str(cmds_run) + "**", inline=True)
+
+    # ── Premium — field sendiri kalau ada ──────────────────────────────
     if has_prem:
         exp_str = expiry_map.get(str(uid))
+        prem_value = "Lifetime"
         if exp_str:
             try:
                 exp = datetime.datetime.fromisoformat(exp_str)
                 if exp.tzinfo is None:
                     exp = exp.replace(tzinfo=datetime.timezone.utc)
-                lines_out.append("**Premium:** " + discord.utils.format_dt(exp, "R"))
+                prem_value = discord.utils.format_dt(exp, "R")
             except Exception:
-                lines_out.append("**Premium:** Active")
-        else:
-            lines_out.append("**Premium:** Lifetime")
-
-    embed.add_field(name="\u200b", value="\n".join(lines_out), inline=True)
+                prem_value = "Active"
+        embed.add_field(name="Premium", value=prem_value, inline=True)
 
     embed.set_footer(
         text=BOT_NAME + " \u2022 ID: " + str(uid),
@@ -1869,7 +1865,7 @@ async def pfx_help(ctx):
         value="`antispam setchannel #ch` · `antispam status`", inline=False)
     embed.add_field(name=sec(ICON_LANGUAGE, "Language"),
         value="`language list` · `language set <code>`", inline=False)
-    embed.add_field(name=sec(ICON_OWNER, "", "Owner Only"), value=(
+    embed.add_field(name=sec(ICON_OWNER, "Owner Only"), value=(
         "`noprefix grant/revoke/list`\n"
         "`botrole set/remove/list`\n"
         "`grantpremium @user <durasi>/revoke`\n"
