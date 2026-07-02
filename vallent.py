@@ -52,6 +52,9 @@ COLOR_ERROR   = 0xEF4444   # Red
 COLOR_WARNING = 0xF59E0B   # Amber
 COLOR_INFO    = 0xDC143C   # Crimson
 
+# Support server invite link — set via env var SUPPORT_INVITE
+SUPPORT_INVITE = os.getenv("SUPPORT_INVITE", "")
+
 SPAM_THRESHOLD = 3
 SPAM_WINDOW    = 8.0
 
@@ -91,6 +94,7 @@ def load_config() -> dict:
     data.setdefault("no_prefix_guilds", [])
     data.setdefault("bot_roles",        {})
     data.setdefault("votes",            {})
+    data.setdefault("support_server_members", [])  # user IDs yang sudah join support server
     for gid, gc in data.get("guilds", {}).items():
         _init_guild(gc)
     save_config(data)
@@ -359,6 +363,12 @@ def get_bot_role(uid: int) -> str:
     return cfg.get("bot_roles", {}).get(str(uid), "user")
 
 def get_user_badges(uid: int) -> list:
+    """
+    Kumpulkan semua badge user.
+    Hierarki: founder > developer > management > staff > noprefix > premium > user
+    Badge USER hanya didapat kalau user join server support bot.
+    Kalau tidak punya badge apapun → list kosong.
+    """
     badges = []
     role   = get_bot_role(uid)
     if role != "user":
@@ -367,43 +377,62 @@ def get_user_badges(uid: int) -> list:
         badges.append("noprefix")
     if uid in cfg.get("premium_users", []):
         badges.append("premium")
-    if not badges:
+    if uid in cfg.get("support_server_members", []):
         badges.append("user")
+    # Tidak ada default badge — kalau kosong ya kosong
     return badges
 
 def build_profile_embed(user: discord.abc.User) -> discord.Embed:
-    uid    = user.id
-    role   = get_bot_role(uid)
-    badges = get_user_badges(uid)
-    top    = role if role != "user" else (badges[0] if badges else "user")
-    color  = BOT_ROLE_BADGES.get(top, BOT_ROLE_BADGES["user"])["color"]
-    embed  = discord.Embed(
-        title=f"{user.display_name}'s Profile",
+    uid        = user.id
+    role       = get_bot_role(uid)
+    badges     = get_user_badges(uid)
+    expiry_map = cfg.get("premium_expiry", {})
+    has_prem   = uid in cfg.get("premium_users", [])
+    has_np     = (uid in cfg.get("no_prefix_users", []) or uid == bot.owner_id)
+    top        = role if role != "user" else (badges[0] if badges else "user")
+    color      = BOT_ROLE_BADGES.get(top, BOT_ROLE_BADGES["user"])["color"]
+    embed = discord.Embed(
+        title=str(user.display_name) + "'s Profile",
         color=color,
         timestamp=discord.utils.utcnow()
     )
     embed.set_thumbnail(url=user.display_avatar.url)
-    badge_lines = ["**ALL BADGES**"]
-    for b in badges:
-        info = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
-        badge_lines.append(f"• **{info['label']}**")
-    embed.add_field(name="\u200b", value="\n".join(badge_lines), inline=True)
-    expiry_map = cfg.get("premium_expiry", {})
-    if uid in cfg.get("premium_users", []):
+    # Badge list
+    if badges:
+        badge_lines = ["**ALL BADGES**"]
+        for b in badges:
+            info = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
+            badge_lines.append("\u2022 **" + info["label"] + "**")
+        embed.add_field(name="\u200b", value="\n".join(badge_lines), inline=True)
+    else:
+        invite = SUPPORT_INVITE
+        no_badge = "Belum ada badge."
+        if invite:
+            no_badge += "\n\nJoin server support untuk\nmendapat badge **USER**!\n[Join Server](" + invite + ")"
+        else:
+            no_badge += "\n\nJoin server support untuk\nmendapat badge **USER**!"
+        embed.add_field(name="ALL BADGES", value=no_badge, inline=True)
+    # Info
+    info_lines = ["**Role:** " + role.capitalize()]
+    if has_prem:
         exp_str = expiry_map.get(str(uid))
         if exp_str:
             try:
                 exp = datetime.datetime.fromisoformat(exp_str)
                 if exp.tzinfo is None:
                     exp = exp.replace(tzinfo=datetime.timezone.utc)
-                embed.add_field(name="Premium Expires", value=discord.utils.format_dt(exp, "R"), inline=True)
+                info_lines.append("**Premium:** " + discord.utils.format_dt(exp, "R"))
             except Exception:
-                embed.add_field(name="Premium", value="Active", inline=True)
+                info_lines.append("**Premium:** Active")
         else:
-            embed.add_field(name="Premium", value="Active (lifetime)", inline=True)
-    embed.add_field(name="Bot Role", value=role.capitalize(), inline=True)
-    embed.set_footer(text=f"{BOT_NAME} • ID: {uid}")
+            info_lines.append("**Premium:** Lifetime")
+    else:
+        info_lines.append("**Premium:** -")
+    info_lines.append("**No-Prefix:** " + ("Active" if has_np else "-"))
+    embed.add_field(name="\u200b", value="\n".join(info_lines), inline=True)
+    embed.set_footer(text=BOT_NAME + " • ID: " + str(uid))
     return embed
+
 
 # ══════════════════════════════════════════════════════════════════
 # ANTI SPAM — Cross-channel fingerprint tracker
@@ -967,6 +996,17 @@ async def on_message(message: discord.Message):
 # ══════════════════════════════════════════════════════════════════
 
 @bot.event
+async def on_member_remove(member: discord.Member):
+    """Cabut badge USER saat user leave server support."""
+    support_server_id = int(os.getenv("SUPPORT_SERVER_ID", "0"))
+    if member.guild.id != support_server_id:
+        return
+    support_members = cfg.get("support_server_members", [])
+    if member.id in support_members:
+        support_members.remove(member.id)
+        save_config(cfg)
+
+@bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     if str(payload.emoji) != "🎉":
         return
@@ -1272,32 +1312,69 @@ async def pfx_leaderboard(ctx):
 async def pfx_level(ctx, sub: str = "", *args):
     sub = sub.lower()
     gc  = guild_cfg(cfg, ctx.guild.id)
+
     if sub == "rank":
         m = None
         if args:
             try: m = ctx.guild.get_member(int(args[0].strip("<@!>")))
             except Exception: pass
         await pfx_rank(ctx, m)
+
     elif sub == "leaderboard":
         await pfx_leaderboard(ctx)
+
+    elif sub == "toggle":
+        if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        current = gc.get("leveling_enabled", True)
+        gc["leveling_enabled"] = not current
+        save_config(cfg)
+        state = "diaktifkan" if gc["leveling_enabled"] else "dimatikan"
+        color = COLOR_SUCCESS if gc["leveling_enabled"] else COLOR_ERROR
+        await ctx.send(embed=base_embed("Leveling System",
+            "Sistem leveling **" + state + "** di server ini.", color=color))
+
     elif sub == "setchannel":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
             return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
         if not args:
             gc["level_channel"] = None
             save_config(cfg)
-            return await ctx.send(embed=success_embed("Level channel dinonaktifkan."))
-        try:
+            return await ctx.send(embed=success_embed("Level channel dinonaktifkan. Notif dikirim ke channel aktif."))
+        ch = None
+        if ctx.message.channel_mentions:
+            ch = ctx.message.channel_mentions[0]
+        elif args[0].isdigit():
             ch = ctx.guild.get_channel(int(args[0]))
-            if not ch: return await ctx.send(embed=error_embed("Channel tidak ditemukan."))
-            gc["level_channel"] = ch.id
-            save_config(cfg)
-            await ctx.send(embed=success_embed(f"Level-up notif → {ch.mention}."))
-        except ValueError:
-            await ctx.send(embed=error_embed("Gunakan channel ID."))
-    else:
-        await ctx.send(embed=info_embed("Level", "`level rank [@user]` · `level leaderboard` · `level setchannel <id>`"))
+        if not ch:
+            return await ctx.send(embed=error_embed("Channel tidak ditemukan. Gunakan #mention atau channel ID."))
+        gc["level_channel"] = ch.id
+        save_config(cfg)
+        await ctx.send(embed=success_embed("Level-up notif akan dikirim ke " + ch.mention + "."))
 
+    elif sub == "status":
+        enabled  = gc.get("leveling_enabled", True)
+        lvl_ch   = ctx.guild.get_channel(gc["level_channel"]) if gc.get("level_channel") else None
+        xp_range = gc.get("xp_per_message", [15, 25])
+        cooldown = gc.get("xp_cooldown", 60)
+        embed = base_embed("Leveling Status", None, COLOR_SUCCESS if enabled else COLOR_ERROR)
+        embed.add_field(name="Status",     value="Aktif" if enabled else "Mati",                  inline=True)
+        embed.add_field(name="Channel",    value=lvl_ch.mention if lvl_ch else "Current channel",  inline=True)
+        embed.add_field(name="XP/Message", value=str(xp_range[0]) + "-" + str(xp_range[1]) + " XP", inline=True)
+        embed.add_field(name="Cooldown",   value=str(cooldown) + " detik",                        inline=True)
+        await ctx.send(embed=embed)
+
+    else:
+        enabled = gc.get("leveling_enabled", True)
+        status  = "Aktif" if enabled else "Mati"
+        await ctx.send(embed=info_embed("Level System",
+            "Status: **" + status + "**\n\n"
+            "`level toggle` - nyalain/matiin leveling\n"
+            "`level setchannel #channel` - set channel notif\n"
+            "`level setchannel` - nonaktifkan channel\n"
+            "`level status` - lihat konfigurasi\n"
+            "`level rank [@user]` - lihat rank\n"
+            "`level leaderboard` - top 10"))
 @bot.command(name="xp")
 async def pfx_xp(ctx, sub: str = "", *args):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
@@ -1879,9 +1956,51 @@ async def slash_help(i: discord.Interaction):
     embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {BOT_TAGLINE}")
     await i.response.send_message(embed=embed, ephemeral=True)
 
-# ══════════════════════════════════════════════════════════════════
-# ERROR HANDLER
-# ══════════════════════════════════════════════════════════════════
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    support_server_id = int(os.getenv("SUPPORT_SERVER_ID", "0"))
+    if member.guild.id != support_server_id or member.bot:
+        return
+    uid = member.id
+    # Grant badge USER saat join support server
+    support_members = cfg.setdefault("support_server_members", [])
+    if uid not in support_members:
+        support_members.append(uid)
+        save_config(cfg)
+    badges = get_user_badges(uid)
+    role   = get_bot_role(uid)
+    embed  = discord.Embed(
+        title="Selamat datang di " + member.guild.name + "!",
+        description="Halo " + member.mention + "!\n\nKamu baru saja mendapatkan badge **USER**!\nKetik `profile` untuk lihat badge kamu.\n\nKetik `help` untuk lihat semua command.",
+        color=COLOR_PRIMARY,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    badge_lines = []
+    for b in badges:
+        info = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
+        badge_lines.append("\u2022 **" + info["label"] + "**")
+    embed.add_field(name="ALL BADGES", value="\n".join(badge_lines), inline=True)
+    embed.add_field(name="Bot Role", value=role.capitalize(), inline=True)
+    embed.set_footer(text=BOT_NAME + " \u2022 " + BOT_TAGLINE)
+    try:
+        await member.send(embed=embed)
+    except discord.Forbidden:
+        pass
+    gc = guild_cfg(cfg, member.guild.id)
+    main_ch_id = gc.get("main_channel") or gc.get("announce_channel")
+    if main_ch_id:
+        ch = member.guild.get_channel(main_ch_id)
+        if ch:
+            w = discord.Embed(description=member.mention + " bergabung!", color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
+            w.set_author(name=str(member), icon_url=member.display_avatar.url)
+            w.set_footer(text=BOT_NAME)
+            try:
+                await ch.send(embed=w)
+            except Exception:
+                pass
 
 @bot.tree.error
 async def on_app_command_error(i: discord.Interaction, error: app_commands.AppCommandError):
