@@ -22,7 +22,7 @@ Contoh:
 # BADGE EMOJI
 # ══════════════════════════════════════════════════════════════════
 
-BADGE_FOUNDER    = "<:Coowner:1522213410773794877>"   # Emoji untuk badge FOUNDER
+BADGE_FOUNDER    = "<:emoji_46:1522314531886334083>"   # Emoji untuk badge FOUNDER
 BADGE_DEVELOPER  = "<:staff_red:1522211962153336863>"   # Emoji untuk badge DEVELOPER
 BADGE_MANAGEMENT = "<:Red_Star:1522212285874045049>"   # Emoji untuk badge MANAGEMENT
 BADGE_STAFF      = "<:roles:1522207871037735022>"   # Emoji untuk badge STAFF
