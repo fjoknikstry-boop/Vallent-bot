@@ -376,13 +376,13 @@ BOT_ROLE_HIERARCHY = ["staff", "management", "developer", "founder"]
 
 BOT_ROLE_BADGES = {
     # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
-    "founder":    {"label": "FOUNDER",    "color": 0x8B0000, "emoji": BADGE_FOUNDER},
-    "developer":  {"label": "DEVELOPER",  "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
-    "management": {"label": "MANAGEMENT", "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
-    "staff":      {"label": "STAFF",      "color": 0xCD5C5C, "emoji": BADGE_STAFF},
-    "premium":    {"label": "PREMIUM",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
-    "noprefix":   {"label": "NO PREFIX",  "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
-    "user":       {"label": "USER",       "color": 0x6B7280, "emoji": BADGE_USER},
+    "founder":    {"label": "• FOUNDER",    "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "developer":  {"label": "• DEVELOPER",  "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
+    "management": {"label": "• Management", "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
+    "staff":      {"label": "• Staff",      "color": 0xCD5C5C, "emoji": BADGE_STAFF},
+    "premium":    {"label": "• Premium",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
+    "noprefix":   {"label": "• NO PREFIX",  "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
+    "user":       {"label": "• User",       "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
 def get_bot_role(uid: int) -> str:
