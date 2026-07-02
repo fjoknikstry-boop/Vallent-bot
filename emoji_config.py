@@ -27,7 +27,7 @@ BADGE_DEVELOPER  = "<:staff_red:1522211962153336863>"   # Emoji untuk badge DEVE
 BADGE_MANAGEMENT = "<:Red_Star:1522212285874045049>"   # Emoji untuk badge MANAGEMENT
 BADGE_STAFF      = "<:roles:1522207871037735022>"   # Emoji untuk badge STAFF
 BADGE_PREMIUM    = "<:premium:1522207934174593044>"   # Emoji untuk badge PREMIUM
-BADGE_NOPREFIX   = "<:potassium:1522209119157882960>"   # Emoji untuk badge NO PREFIX
+BADGE_NOPREFIX   = "<:emoji_45:1522308127637373029>"   # Emoji untuk badge NO PREFIX
 BADGE_USER       = "<:friend:1522208555753803858>"   # Emoji untuk badge USER
 
 # ══════════════════════════════════════════════════════════════════
