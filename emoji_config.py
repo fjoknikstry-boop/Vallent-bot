@@ -37,7 +37,7 @@ BADGE_USER       = "<:friend:1522208555753803858>"   # Emoji untuk badge USER
 # Section headers di !vx help
 ICON_MODERATION  = "<:Staff:1522207707493433526>"   # Icon untuk section Moderation
 ICON_ROLE        = "<a:music_2:1522289402058113225>"   # Icon untuk section Role & Voice
-ICON_INFO        = "<:info:1245334310462947349>"   # Icon untuk section Info
+ICON_INFO        = "<:Commands:1522207444087078954>"   # Icon untuk section Info
 ICON_TICKET      = "<a:kenji_chat:1522290686727291001>"   # Icon untuk section Ticket
 ICON_LEVEL       = "<a:Walking:1522213874320019477>"   # Icon untuk section Level & XP
 ICON_GIVEAWAY    = "<:gift:1522208233698230333>"   # Icon untuk section Giveaway
