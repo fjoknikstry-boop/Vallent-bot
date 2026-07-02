@@ -22,13 +22,13 @@ Contoh:
 # BADGE EMOJI
 # ══════════════════════════════════════════════════════════════════
 
-BADGE_FOUNDER    = "<:emoji_46:1522314531886334083>"   # Emoji untuk badge FOUNDER
+BADGE_FOUNDER    = "<:emoji_63:1522209621773783070>"   # Emoji untuk badge FOUNDER
 BADGE_DEVELOPER  = "<:staff_red:1522211962153336863>"   # Emoji untuk badge DEVELOPER
 BADGE_MANAGEMENT = "<:Red_Star:1522212285874045049>"   # Emoji untuk badge MANAGEMENT
 BADGE_STAFF      = "<:roles:1522207871037735022>"   # Emoji untuk badge STAFF
 BADGE_PREMIUM    = "<:premium:1522207934174593044>"   # Emoji untuk badge PREMIUM
 BADGE_NOPREFIX   = "<:emoji_45:1522308127637373029>"   # Emoji untuk badge NO PREFIX
-BADGE_USER       = "<:friend:1522208555753803858>"   # Emoji untuk badge USER
+BADGE_USER       = "<:emoji_46:1522314531886334083>"   # Emoji untuk badge USER
 
 # ══════════════════════════════════════════════════════════════════
 # UI / SECTION EMOJI (untuk help, info, dll)
