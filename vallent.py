@@ -34,6 +34,16 @@ from typing import Optional
 
 logging.basicConfig(level=logging.INFO)
 
+from emoji_config import (
+    BADGE_FOUNDER, BADGE_DEVELOPER, BADGE_MANAGEMENT, BADGE_STAFF,
+    BADGE_PREMIUM, BADGE_NOPREFIX, BADGE_USER,
+    ICON_MODERATION, ICON_ROLE, ICON_INFO, ICON_TICKET, ICON_LEVEL,
+    ICON_GIVEAWAY, ICON_ANTISPAM, ICON_LANGUAGE, ICON_OWNER,
+    ICON_SUCCESS, ICON_ERROR, ICON_PROFILE, ICON_BADGES, ICON_COMMANDS,
+    ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
+    e
+)
+
 # ══════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════
@@ -95,6 +105,7 @@ def load_config() -> dict:
     data.setdefault("bot_roles",        {})
     data.setdefault("votes",            {})
     data.setdefault("support_server_members", [])  # user IDs yang sudah join support server
+    data.setdefault("commands_run",           {})  # uid → jumlah command dijalankan
     for gid, gc in data.get("guilds", {}).items():
         _init_guild(gc)
     save_config(data)
@@ -348,13 +359,14 @@ async def check_premium_expiry():
 BOT_ROLE_HIERARCHY = ["staff", "management", "developer", "founder"]
 
 BOT_ROLE_BADGES = {
-    "founder":    {"label": "FOUNDER",    "color": 0x8B0000},
-    "developer":  {"label": "DEVELOPER",  "color": 0xDC143C},
-    "management": {"label": "MANAGEMENT", "color": 0xB22222},
-    "staff":      {"label": "STAFF",      "color": 0xCD5C5C},
-    "premium":    {"label": "PREMIUM",    "color": 0xF59E0B},
-    "noprefix":   {"label": "NO PREFIX",  "color": 0x22C55E},
-    "user":       {"label": "USER",       "color": 0x6B7280},
+    # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
+    "founder":    {"label": "FOUNDER",    "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "developer":  {"label": "DEVELOPER",  "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
+    "management": {"label": "MANAGEMENT", "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
+    "staff":      {"label": "STAFF",      "color": 0xCD5C5C, "emoji": BADGE_STAFF},
+    "premium":    {"label": "PREMIUM",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
+    "noprefix":   {"label": "NO PREFIX",  "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
+    "user":       {"label": "USER",       "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
 def get_bot_role(uid: int) -> str:
@@ -389,31 +401,39 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
     expiry_map = cfg.get("premium_expiry", {})
     has_prem   = uid in cfg.get("premium_users", [])
     has_np     = (uid in cfg.get("no_prefix_users", []) or uid == bot.owner_id)
+    cmds_run   = cfg.get("commands_run", {}).get(str(uid), 0)
     top        = role if role != "user" else (badges[0] if badges else "user")
     color      = BOT_ROLE_BADGES.get(top, BOT_ROLE_BADGES["user"])["color"]
-    embed = discord.Embed(
-        title=str(user.display_name) + "'s Profile",
-        color=color,
-        timestamp=discord.utils.utcnow()
-    )
+
+    embed = discord.Embed(title=str(user.display_name) + "'s Profile", color=color)
     embed.set_thumbnail(url=user.display_avatar.url)
-    # Badge list
+
+    # Semua info dalam SATU field — rapat, tidak ada jarak
+    lines_out = []
+
+    # Badge section
+    lines_out.append("**ALL BADGES**")
     if badges:
-        badge_lines = ["**ALL BADGES**"]
         for b in badges:
             info = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
-            badge_lines.append("\u2022 **" + info["label"] + "**")
-        embed.add_field(name="\u200b", value="\n".join(badge_lines), inline=True)
+            emoji_str = info.get("emoji", "")
+            if emoji_str:
+                lines_out.append(emoji_str + " \u2022 **" + info["label"] + "**")
+            else:
+                lines_out.append("\u2022 **" + info["label"] + "**")
+        lines_out.append("**Total Badges: " + str(len(badges)) + "**")
     else:
+        lines_out.append("Belum ada badge.")
         invite = SUPPORT_INVITE
-        no_badge = "Belum ada badge."
         if invite:
-            no_badge += "\n\nJoin server support untuk\nmendapat badge **USER**!\n[Join Server](" + invite + ")"
+            lines_out.append("[Join server support](" + invite + ") untuk dapat badge **USER**!")
         else:
-            no_badge += "\n\nJoin server support untuk\nmendapat badge **USER**!"
-        embed.add_field(name="ALL BADGES", value=no_badge, inline=True)
-    # Info
-    info_lines = ["**Role:** " + role.capitalize()]
+            lines_out.append("Join server support untuk dapat badge **USER**!")
+
+    # Commands counter — langsung di bawah badge
+    lines_out.append("**Commands Runned:** " + str(cmds_run))
+
+    # Premium info kalau ada
     if has_prem:
         exp_str = expiry_map.get(str(uid))
         if exp_str:
@@ -421,16 +441,18 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
                 exp = datetime.datetime.fromisoformat(exp_str)
                 if exp.tzinfo is None:
                     exp = exp.replace(tzinfo=datetime.timezone.utc)
-                info_lines.append("**Premium:** " + discord.utils.format_dt(exp, "R"))
+                lines_out.append("**Premium:** " + discord.utils.format_dt(exp, "R"))
             except Exception:
-                info_lines.append("**Premium:** Active")
+                lines_out.append("**Premium:** Active")
         else:
-            info_lines.append("**Premium:** Lifetime")
-    else:
-        info_lines.append("**Premium:** -")
-    info_lines.append("**No-Prefix:** " + ("Active" if has_np else "-"))
-    embed.add_field(name="\u200b", value="\n".join(info_lines), inline=True)
-    embed.set_footer(text=BOT_NAME + " • ID: " + str(uid))
+            lines_out.append("**Premium:** Lifetime")
+
+    embed.add_field(name="\u200b", value="\n".join(lines_out), inline=True)
+
+    embed.set_footer(
+        text=BOT_NAME + " \u2022 ID: " + str(uid),
+        icon_url=user.display_avatar.url
+    )
     return embed
 
 
@@ -936,6 +958,13 @@ async def on_message(message: discord.Message):
     uid         = message.author.id
     fingerprint = _spam_fingerprint(message)
     if fingerprint == "empty":
+        # Track command run count untuk empty messages
+        if message.content.startswith("!vx "):
+            uid_str = str(message.author.id)
+            cmds_run = cfg.setdefault("commands_run", {})
+            cmds_run[uid_str] = cmds_run.get(uid_str, 0) + 1
+            if cmds_run[uid_str] % 10 == 0:
+                save_config(cfg)
         await bot.process_commands(message)
         return
     now_ts = discord.utils.utcnow().timestamp()
@@ -1008,7 +1037,8 @@ async def on_member_remove(member: discord.Member):
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    if str(payload.emoji) != "🎉":
+    GIVEAWAY_EMOJI = ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉"
+    if str(payload.emoji) != GIVEAWAY_EMOJI:
         return
     gw = active_giveaways.get(payload.message_id)
     if not gw or gw.get("ended"):
@@ -1236,7 +1266,11 @@ async def pfx_profile(ctx, member: discord.Member = None):
     target = member or ctx.author
     embed  = build_profile_embed(target)
     embed.set_author(name="Profile & Badge Panel", icon_url=target.display_avatar.url)
-    embed.add_field(name="Requested By", value=ctx.author.display_name, inline=False)
+    # Requested By di footer dengan avatar
+    embed.set_footer(
+        text=BOT_NAME + " \u2022 ID: " + str(target.id) + "  |  Requested By " + ctx.author.display_name,
+        icon_url=ctx.author.display_avatar.url
+    )
     await ctx.send(embed=embed)
 
 # ── RANK & LEADERBOARD ────────────────────────────────────────────
@@ -1459,7 +1493,7 @@ async def pfx_ticket(ctx, sub: str = "", *args):
         title_txt = " ".join(args) if args else "Support Tickets"
         class TicketView(discord.ui.View):
             def __init__(self): super().__init__(timeout=None)
-            @discord.ui.button(label="Open Ticket", style=discord.ButtonStyle.danger, emoji="🎫", custom_id="vx_ticket_open")
+            @discord.ui.button(label="Open Ticket", style=discord.ButtonStyle.danger, emoji=ICON_TICKET_OPEN if ICON_TICKET_OPEN else "🎫", custom_id="vx_ticket_open")
             async def open_btn(self, interaction, _btn): await handle_open_ticket(interaction)
         await ctx.send(embed=base_embed(title_txt, "Klik tombol untuk membuka support ticket."), view=TicketView())
     elif sub == "close":
@@ -1567,7 +1601,7 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
         gw_embed = build_giveaway_embed(gw)
         try:
             msg = await ctx.channel.send(embed=gw_embed)
-            await msg.add_reaction("🎉")
+            await msg.add_reaction(ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉")
         except discord.Forbidden:
             return await ctx.send(embed=error_embed("Bot tidak bisa kirim pesan di channel ini."))
         gw["message_id"] = msg.id
@@ -1813,27 +1847,36 @@ async def pfx_help(ctx):
         color=COLOR_PRIMARY,
         timestamp=discord.utils.utcnow()
     )
-    embed.add_field(name="Moderation", value=(
+    def sec(icon_var, name):
+        return (icon_var + " " if icon_var else "") + name
+
+    embed.add_field(name=sec(ICON_MODERATION, "Moderation"), value=(
         "`kick` · `ban` · `unban` · `timeout` · `untimeout`\n"
         "`warn` · `warnings` · `unwarn` · `clearwarnings`\n"
         "`purge` · `lock` · `unlock` · `slowmode`"
     ), inline=False)
-    embed.add_field(name="Role & Voice", value="`addrole` · `removerole` · `move`", inline=False)
-    embed.add_field(name="Info", value="`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`", inline=False)
-    embed.add_field(name="Ticket", value="`ticket setup` · `ticket panel` · `ticket close`", inline=False)
-    embed.add_field(name="Level & XP", value="`rank` · `leaderboard` · `level` · `xp`", inline=False)
-    embed.add_field(name="Giveaway", value="`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`", inline=False)
-    embed.add_field(name="Antispam", value="`antispam setchannel #ch` · `antispam status`", inline=False)
-    embed.add_field(name="Language", value="`language list` · `language set <code>`", inline=False)
-    if is_owner_user:
-        embed.add_field(name="Owner Only", value=(
-            "`noprefix grant/revoke/list`\n"
-            "`botrole set/remove/list`\n"
-            "`grantpremium @user <durasi>/revoke`\n"
-            "`blacklist add/remove/list`\n"
-            "`vxleave <guild_id>`"
-        ), inline=False)
-    embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {BOT_TAGLINE}")
+    embed.add_field(name=sec(ICON_ROLE, "Role & Voice"),
+        value="`addrole` · `removerole` · `move`", inline=False)
+    embed.add_field(name=sec(ICON_INFO, "Info"),
+        value="`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`", inline=False)
+    embed.add_field(name=sec(ICON_TICKET, "Ticket"),
+        value="`ticket setup` · `ticket panel` · `ticket close`", inline=False)
+    embed.add_field(name=sec(ICON_LEVEL, "Level & XP"),
+        value="`rank` · `leaderboard` · `level toggle/setchannel/status` · `xp`", inline=False)
+    embed.add_field(name=sec(ICON_GIVEAWAY, "Giveaway"),
+        value="`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`", inline=False)
+    embed.add_field(name=sec(ICON_ANTISPAM, "Antispam"),
+        value="`antispam setchannel #ch` · `antispam status`", inline=False)
+    embed.add_field(name=sec(ICON_LANGUAGE, "Language"),
+        value="`language list` · `language set <code>`", inline=False)
+    embed.add_field(name=sec(ICON_OWNER, "", "Owner Only"), value=(
+        "`noprefix grant/revoke/list`\n"
+        "`botrole set/remove/list`\n"
+        "`grantpremium @user <durasi>/revoke`\n"
+        "`blacklist add/remove/list`\n"
+        "`vxleave <guild_id>`"
+    ), inline=False)
+    embed.set_footer(text=BOT_NAME + " v" + BOT_VERSION + " • " + BOT_TAGLINE)
     await ctx.send(embed=embed)
 
 # ══════════════════════════════════════════════════════════════════
@@ -1902,7 +1945,10 @@ async def slash_profile(i: discord.Interaction, member: Optional[discord.Member]
     target = member or i.user
     embed  = build_profile_embed(target)
     embed.set_author(name="Profile & Badge Panel", icon_url=target.display_avatar.url)
-    embed.add_field(name="Requested By", value=i.user.display_name, inline=False)
+    embed.set_footer(
+        text=BOT_NAME + " \u2022 ID: " + str(target.id) + "  |  Requested By " + i.user.display_name,
+        icon_url=i.user.display_avatar.url
+    )
     await i.response.send_message(embed=embed)
 
 @bot.tree.command(name="userinfo", description="Lihat info lengkap tentang member.")
