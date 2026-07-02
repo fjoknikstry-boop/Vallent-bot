@@ -22,7 +22,7 @@ Contoh:
 # BADGE EMOJI
 # ══════════════════════════════════════════════════════════════════
 
-BADGE_FOUNDER    = "<:emoji_63:1522209621773783070>"   # Emoji untuk badge FOUNDER
+BADGE_FOUNDER    = "<:Coowner:1522213410773794877>"   # Emoji untuk badge FOUNDER
 BADGE_DEVELOPER  = "<:staff_red:1522211962153336863>"   # Emoji untuk badge DEVELOPER
 BADGE_MANAGEMENT = "<:Red_Star:1522212285874045049>"   # Emoji untuk badge MANAGEMENT
 BADGE_STAFF      = "<:roles:1522207871037735022>"   # Emoji untuk badge STAFF
@@ -36,12 +36,12 @@ BADGE_USER       = "<:friend:1522208555753803858>"   # Emoji untuk badge USER
 
 # Section headers di !vx help
 ICON_MODERATION  = "<:Staff:1522207707493433526>"   # Icon untuk section Moderation
-ICON_ROLE        = "<:Coowner:1522213410773794877>"   # Icon untuk section Role & Voice
+ICON_ROLE        = "<a:music_2:1522289402058113225>"   # Icon untuk section Role & Voice
 ICON_INFO        = "<:info:1245334310462947349>"   # Icon untuk section Info
-ICON_TICKET      = "<:money_money:1522213737522663454>"   # Icon untuk section Ticket
+ICON_TICKET      = "<a:kenji_chat:1522290686727291001>"   # Icon untuk section Ticket
 ICON_LEVEL       = "<a:Walking:1522213874320019477>"   # Icon untuk section Level & XP
 ICON_GIVEAWAY    = "<:gift:1522208233698230333>"   # Icon untuk section Giveaway
-ICON_ANTISPAM    = "<a:HeadMod:1522208736205213826>"   # Icon untuk section Antispam
+ICON_ANTISPAM    = "<a:offical_sarkar:1522208889670602846>"   # Icon untuk section Antispam
 ICON_LANGUAGE    = "<a:globe:1522214311194394788>"   # Icon untuk section Language
 ICON_OWNER       = "<:owner:1522208043994058903>"   # Icon untuk section Owner Only
 
@@ -53,7 +53,7 @@ ICON_LOADING     = "<a:loading:1522215143830847602>"   # Icon loading / proses
 
 # Profile card icons
 ICON_PROFILE     = "<:author:1522209388537053194>"   # Icon di header profile
-ICON_BADGES      = "<:Red_wal:1522215269622349999>"   # Icon di ALL BADGES
+ICON_BADGES      = "<a:HeadMod:1478516188681338880> "   # Icon di ALL BADGES
 ICON_COMMANDS    = "<:settings:1522216254448992317>"   # Icon di Commands Runned
 ICON_PREMIUM_TAG = "<a:emoji_773:1522210263821062301>"   # Icon di keterangan premium
 
