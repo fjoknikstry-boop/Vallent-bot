@@ -22,13 +22,13 @@ Contoh:
 # BADGE EMOJI
 # ══════════════════════════════════════════════════════════════════
 
-BADGE_FOUNDER    = "<:emoji_50:1522428696479268994>"   # Emoji untuk badge FOUNDER
-BADGE_DEVELOPER  = "<:emoji_57:1522399082918969444>"   # Emoji untuk badge DEVELOPER
-BADGE_MANAGEMENT = "<:emoji_53:1522398735886319698>"   # Emoji untuk badge MANAGEMENT
-BADGE_STAFF      = "<:emoji_60:1522404179661033604>"   # Emoji untuk badge STAFF
+BADGE_FOUNDER    = "<:emoji_58:1522615540500398080>"   # Emoji untuk badge FOUNDER
+BADGE_DEVELOPER  = "<:emoji_56:1522618679358132264>"   # Emoji untuk badge DEVELOPER
+BADGE_MANAGEMENT = "<:emoji_54:1522618599468961903>"   # Emoji untuk badge MANAGEMENT
+BADGE_STAFF      = "<:emoji_55:1522618640397111507>"   # Emoji untuk badge STAFF
 BADGE_PREMIUM    = "<:emoji_63:1522588934498943016>"   # Emoji untuk badge PREMIUM
 BADGE_NOPREFIX   = "<:emoji_51:1522398604562665573>"   # Emoji untuk badge NO PREFIX
-BADGE_USER       = "<:emoji_55:1522429080023339028>"   # Emoji untuk badge USER
+BADGE_USER       = "<:emoji_58:1522626657658212362>"   # Emoji untuk badge USER
 
 # ══════════════════════════════════════════════════════════════════
 # UI / SECTION EMOJI (untuk help, info, dll)
@@ -53,13 +53,13 @@ ICON_LOADING     = "<a:loading:1522215143830847602>"   # Icon loading / proses
 
 # Profile card icons
 ICON_PROFILE     = "<:emoji_54:1522429025471954994>"   # Icon di header profile
-ICON_BADGES      = "<:emoji_54:1522407563147219074>"   # Icon di ALL BADGES
+ICON_BADGES      = "<a:emoji_57:1522620020167938159>"   # Icon di ALL BADGES
 ICON_COMMANDS    = "<:emoji_53:1522428945100705812>"   # Icon di Commands Runned
 ICON_PREMIUM_TAG = "<:emoji_63:1522444496799924274>"   # Icon di keterangan premium
 
 # Ticket icons
-ICON_TICKET_OPEN  = "<:emoji_54:1522398918694928664>"  # Icon tombol Open Ticket
-ICON_TICKET_CLOSE = "<:emoji_55:1522411835725185186>"  # Icon tombol Close Ticket
+ICON_TICKET_OPEN  = "<:emoji_54:1522627571798380674>"  # Icon tombol Open Ticket
+ICON_TICKET_CLOSE = "<:emoji_55:1522627616224313414>"  # Icon tombol Close Ticket
 
 # Giveaway icons
 ICON_GIVEAWAY_REACT = "<a:A_Tada:1522215069470036010>" # Icon reaksi giveaway (default 🎉 kalau kosong)
