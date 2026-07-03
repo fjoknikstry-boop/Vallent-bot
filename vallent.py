@@ -36,12 +36,13 @@ logging.basicConfig(level=logging.INFO)
 
 from emoji_config import (
     BADGE_FOUNDER, BADGE_DEVELOPER, BADGE_MANAGEMENT, BADGE_STAFF,
-    BADGE_PREMIUM, BADGE_NOPREFIX, BADGE_USER,
+    BADGE_PREMIUM, BADGE_NOPREFIX, BADGE_USER, BADGE_MODERATOR, BADGE_SERVER_MANAGER,
     ICON_MODERATION, ICON_ROLE, ICON_INFO, ICON_TICKET, ICON_LEVEL,
     ICON_GIVEAWAY, ICON_ANTISPAM, ICON_LANGUAGE, ICON_OWNER,
     ICON_SUCCESS, ICON_ERROR, ICON_WARNING, ICON_LOADING,
     ICON_PROFILE, ICON_BADGES, ICON_COMMANDS, ICON_PREMIUM_TAG,
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
+    ICON_BOOST,
     e
 )
 
@@ -51,7 +52,7 @@ from emoji_config import (
 # ══════════════════════════════════════════════════════════════════
 
 BOT_NAME      = "VALLENT EXS"
-BOT_TAGLINE   = "Noctune Development."
+BOT_TAGLINE   = "Nocturne Development."
 BOT_VERSION   = "1.0.0"
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -133,12 +134,12 @@ def _init_guild(gc: dict):
     gc.setdefault("boost", {
         "channel":     None,
         "title":       "New Server Boost!",
-        "emoji":       "🎉",
+        "emoji":       e(ICON_BOOST, "🎉"),
         "description": "{mention} just boosted **{server}**! Thanks for the support 💜",
     })
     gc["boost"].setdefault("channel",     None)
     gc["boost"].setdefault("title",       "New Server Boost!")
-    gc["boost"].setdefault("emoji",       "🎉")
+    gc["boost"].setdefault("emoji",       e(ICON_BOOST, "🎉"))
     gc["boost"].setdefault("description", "{mention} just boosted **{server}**! Thanks for the support 💜")
     gc.setdefault("active_tickets",    {})   # uid(str) -> [{"channel_id","panel_id","opened_at"}, ...]
     gc.setdefault("mod_log_channel",   None)
@@ -492,17 +493,19 @@ def is_maintenance_on() -> bool:
 # BOT ROLES SYSTEM
 # ══════════════════════════════════════════════════════════════════
 
-BOT_ROLE_HIERARCHY = ["staff", "management", "developer", "founder"]
+BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "developer", "founder"]
 
 BOT_ROLE_BADGES = {
     # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
-    "founder":    {"label": "• FOUNDER",    "color": 0x8B0000, "emoji": BADGE_FOUNDER},
-    "developer":  {"label": "• Developer",  "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
-    "management": {"label": "• Management", "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
-    "staff":      {"label": "• Staff",      "color": 0xCD5C5C, "emoji": BADGE_STAFF},
-    "premium":    {"label": "• PREMIUM",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
-    "noprefix":   {"label": "• NOPREFIX",  "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
-    "user":       {"label": "• User",       "color": 0x6B7280, "emoji": BADGE_USER},
+    "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
+    "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
+    "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
+    "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
+    "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
+    "premium":        {"label": "• PREMIUM",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
+    "noprefix":       {"label": "• NOPREFIX",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
+    "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
 def get_support_guild() -> Optional[discord.Guild]:
@@ -1371,7 +1374,7 @@ async def handle_new_boost(member: discord.Member):
                 .replace("{tier}",    str(member.guild.premium_tier)))
 
     title = fill(bc.get("title") or "New Server Boost!")
-    emoji_str = bc.get("emoji") or "🎉"
+    emoji_str = bc.get("emoji") or e(ICON_BOOST, "🎉")
     desc  = fill(bc.get("description") or "{mention} just boosted **{server}**! Thanks for the support 💜")
 
     embed = discord.Embed(
@@ -2331,7 +2334,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
     action    = action.lower()
     bot_roles = cfg.setdefault("bot_roles", {})
     role_sync = cfg.setdefault("role_sync", {})
-    valid_tiers = ("staff", "management", "developer")
+    valid_tiers = ("staff", "moderator", "server_manager", "management", "developer")
 
     if action == "list":
         if not bot_roles: return await ctx.send(embed=info_embed("Bot Roles (Manual)", "Belum ada assignment manual."))
@@ -2359,14 +2362,14 @@ async def pfx_botrole(ctx, action: str = "", *args):
         if sub == "remove":
             tier = args[1].lower() if len(args) > 1 else ""
             if tier not in valid_tiers:
-                return await ctx.send(embed=error_embed("Tier valid: `staff`, `management`, `developer`."))
+                return await ctx.send(embed=error_embed("Tier valid: `staff`, `moderator`, `server_manager`, `management`, `developer`."))
             role_sync.pop(tier, None)
             save_config(cfg)
             return await ctx.send(embed=success_embed(f"Sync role untuk **{tier.capitalize()}** dihapus."))
         # botrole sync <tier> <role_id/mention>
         if len(args) < 2:
             return await ctx.send(embed=info_embed("Bot Role Sync", (
-                "`botrole sync <staff/management/developer> <role_id atau @role>` — hubungkan role Discord di support server ke badge\n"
+                "`botrole sync <staff/moderator/server_manager/management/developer> <role_id atau @role>` — hubungkan role Discord di support server ke badge\n"
                 "`botrole sync remove <tier>` — putuskan hubungan\n"
                 "`botrole sync list` — lihat mapping sekarang\n\n"
                 "Begitu di-set, siapapun yang punya role itu di support server otomatis dapat badge-nya "
@@ -2374,7 +2377,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
             )))
         tier = args[0].lower()
         if tier not in valid_tiers:
-            return await ctx.send(embed=error_embed("Tier valid: `staff`, `management`, `developer`."))
+            return await ctx.send(embed=error_embed("Tier valid: `staff`, `moderator`, `server_manager`, `management`, `developer`."))
         role_match = re.match(r"<@&(\d+)>|(\d{17,20})", args[1].strip())
         if not role_match:
             return await ctx.send(embed=error_embed("Masukkan role ID atau mention role yang valid."))
@@ -2396,7 +2399,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
 
     if not args:
         return await ctx.send(embed=info_embed("Bot Role", (
-            "`botrole set @user <staff/management/developer>` — assign manual (untuk yang di luar support server)\n"
+            "`botrole set @user <staff/moderator/server_manager/management/developer>` — assign manual (untuk yang di luar support server)\n"
             "`botrole remove @user` — cabut manual\n"
             "`botrole list` — lihat assignment manual\n"
             "`botrole sync <tier> <role_id>` — auto-sync dari role Discord di support server"
@@ -2415,7 +2418,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
 
     if action == "set":
         if role not in valid_tiers:
-            return await ctx.send(embed=error_embed("Role valid: `staff`, `management`, `developer`"))
+            return await ctx.send(embed=error_embed("Role valid: `staff`, `moderator`, `server_manager`, `management`, `developer`"))
         bot_roles[str(member.id)] = role
         save_config(cfg)
         info = BOT_ROLE_BADGES[role]
@@ -2551,7 +2554,7 @@ async def pfx_help(ctx):
         value="`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`", inline=False)
     embed.add_field(name=sec(ICON_ANTISPAM, "Antispam"),
         value="`antispam setchannel #ch` · `antispam status`", inline=False)
-    embed.add_field(name="🎉 Server Boost",
+    embed.add_field(name=sec(ICON_BOOST, "Server Boost"),
         value="`/boostconfig` (slash only) — atur channel & tampilan notifikasi boost", inline=False)
     embed.add_field(name=sec(ICON_LANGUAGE, "Language"),
         value="`language list` · `language set <code>`", inline=False)
@@ -2718,7 +2721,7 @@ async def slash_boostconfig(
                 .replace("{tier}",    str(i.guild.premium_tier)))
 
     preview = discord.Embed(
-        title=f"{bc.get('emoji', '🎉')} {fill(bc.get('title', 'New Server Boost!'))}".strip(),
+        title=f"{bc.get('emoji') or e(ICON_BOOST, '🎉')} {fill(bc.get('title', 'New Server Boost!'))}".strip(),
         description=fill(bc.get("description", "{mention} just boosted **{server}**! Thanks for the support 💜")),
         color=0xF47FFF,
         timestamp=discord.utils.utcnow()
@@ -2753,7 +2756,7 @@ async def slash_help(i: discord.Interaction):
     embed.add_field(name="Level & XP", value="`rank` · `leaderboard` · `level` · `xp`", inline=False)
     embed.add_field(name="Giveaway", value="`giveaway start/end/reroll/list`", inline=False)
     embed.add_field(name="Antispam", value="`antispam setchannel` · `antispam status`", inline=False)
-    embed.add_field(name="🎉 Server Boost", value="`/boostconfig` — atur channel & tampilan notifikasi boost", inline=False)
+    embed.add_field(name=f"{e(ICON_BOOST, '🎉')} Server Boost".strip(), value="`/boostconfig` — atur channel & tampilan notifikasi boost", inline=False)
     if is_owner_user:
         embed.add_field(name="Owner Only", value=(
             "`maintenance on/off/status`\n"
