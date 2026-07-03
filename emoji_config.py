@@ -26,7 +26,7 @@ BADGE_FOUNDER    = "<:emoji_50:1522428696479268994>"   # Emoji untuk badge FOUND
 BADGE_DEVELOPER  = "<:emoji_57:1522399082918969444>"   # Emoji untuk badge DEVELOPER
 BADGE_MANAGEMENT = "<:emoji_53:1522398735886319698>"   # Emoji untuk badge MANAGEMENT
 BADGE_STAFF      = "<:emoji_60:1522404179661033604>"   # Emoji untuk badge STAFF
-BADGE_PREMIUM    = "<:emoji_56:1522399040753635428>"   # Emoji untuk badge PREMIUM
+BADGE_PREMIUM    = "<:emoji_63:1522444610239074397>"   # Emoji untuk badge PREMIUM
 BADGE_NOPREFIX   = "<:emoji_51:1522398604562665573>"   # Emoji untuk badge NO PREFIX
 BADGE_USER       = "<:emoji_55:1522429080023339028>"   # Emoji untuk badge USER
 
@@ -55,7 +55,7 @@ ICON_LOADING     = "<a:loading:1522215143830847602>"   # Icon loading / proses
 ICON_PROFILE     = "<:emoji_54:1522429025471954994>"   # Icon di header profile
 ICON_BADGES      = "<:emoji_54:1522407563147219074>"   # Icon di ALL BADGES
 ICON_COMMANDS    = "<:emoji_53:1522428945100705812>"   # Icon di Commands Runned
-ICON_PREMIUM_TAG = "<:emoji_62:1522435146542878741>"   # Icon di keterangan premium
+ICON_PREMIUM_TAG = "<:emoji_63:1522444496799924274>"   # Icon di keterangan premium
 
 # Ticket icons
 ICON_TICKET_OPEN  = "<:emoji_54:1522398918694928664>"  # Icon tombol Open Ticket
