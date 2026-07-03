@@ -51,7 +51,7 @@ from emoji_config import (
 # ══════════════════════════════════════════════════════════════════
 
 BOT_NAME      = "VALLENT EXS"
-BOT_TAGLINE   = "Nocturne Development."
+BOT_TAGLINE   = "Noctune Development."
 BOT_VERSION   = "1.0.0"
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -130,6 +130,16 @@ def _init_guild(gc: dict):
     gc.setdefault("members_xp",        {})
     gc.setdefault("level_roles",       {})
     gc.setdefault("warnings",          {})
+    gc.setdefault("boost", {
+        "channel":     None,
+        "title":       "New Server Boost!",
+        "emoji":       "🎉",
+        "description": "{mention} just boosted **{server}**! Thanks for the support 💜",
+    })
+    gc["boost"].setdefault("channel",     None)
+    gc["boost"].setdefault("title",       "New Server Boost!")
+    gc["boost"].setdefault("emoji",       "🎉")
+    gc["boost"].setdefault("description", "{mention} just boosted **{server}**! Thanks for the support 💜")
     gc.setdefault("active_tickets",    {})   # uid(str) -> [{"channel_id","panel_id","opened_at"}, ...]
     gc.setdefault("mod_log_channel",   None)
     gc.setdefault("ticket", {"panels": {}})
@@ -1339,11 +1349,54 @@ async def on_member_remove(member: discord.Member):
         support_members.remove(member.id)
         save_config(cfg)
 
+async def handle_new_boost(member: discord.Member):
+    """Kirim notifikasi ke channel yang dikonfigurasi lewat /boostconfig ketika
+    seorang member baru mulai boost server ini."""
+    gc    = guild_cfg(cfg, member.guild.id)
+    bc    = gc.get("boost", {})
+    ch_id = bc.get("channel")
+    if not ch_id:
+        return
+    channel = member.guild.get_channel(ch_id)
+    if not channel:
+        return
+
+    count = member.guild.premium_subscription_count or 0
+    def fill(template: str) -> str:
+        return (template
+                .replace("{mention}", member.mention)
+                .replace("{user}",    member.display_name)
+                .replace("{server}",  member.guild.name)
+                .replace("{count}",   str(count))
+                .replace("{tier}",    str(member.guild.premium_tier)))
+
+    title = fill(bc.get("title") or "New Server Boost!")
+    emoji_str = bc.get("emoji") or "🎉"
+    desc  = fill(bc.get("description") or "{mention} just boosted **{server}**! Thanks for the support 💜")
+
+    embed = discord.Embed(
+        title=f"{emoji_str} {title}".strip(),
+        description=desc,
+        color=0xF47FFF,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"{member.guild.name} • Boost #{count}")
+    try:
+        await channel.send(embed=embed)
+    except Exception:
+        pass
+
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-    """Badge role-sync itu live (dihitung langsung dari role Discord tiap kali get_bot_role()
-    dipanggil), jadi gak butuh update apapun di sini. Ini cuma buat kasih DM selamat pas
-    seseorang baru dapat role yang di-sync ke badge — biar mereka sadar badge-nya naik."""
+    # ── Server boost notification — jalan di semua guild yang dikonfigurasi ──
+    if not before.premium_since and after.premium_since:
+        await handle_new_boost(after)
+
+    # ── Badge role-sync itu live (dihitung langsung dari role Discord tiap kali
+    # get_bot_role() dipanggil), jadi gak butuh update apapun di sini. Ini cuma
+    # buat kasih DM selamat pas seseorang baru dapat role yang di-sync ke badge
+    # — biar mereka sadar badge-nya naik. Cuma berlaku di support server. ────
     support_server_id = int(os.getenv("SUPPORT_SERVER_ID", "0"))
     if after.guild.id != support_server_id or after.bot:
         return
@@ -2498,6 +2551,8 @@ async def pfx_help(ctx):
         value="`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`", inline=False)
     embed.add_field(name=sec(ICON_ANTISPAM, "Antispam"),
         value="`antispam setchannel #ch` · `antispam status`", inline=False)
+    embed.add_field(name="🎉 Server Boost",
+        value="`/boostconfig` (slash only) — atur channel & tampilan notifikasi boost", inline=False)
     embed.add_field(name=sec(ICON_LANGUAGE, "Language"),
         value="`language list` · `language set <code>`", inline=False)
     # Catatan: section Owner Only SENGAJA tidak pernah ditaruh di sini.
@@ -2629,6 +2684,54 @@ async def slash_serverinfo(i: discord.Interaction):
     embed.set_footer(text=f"{BOT_NAME} • ID: {g.id}")
     await i.response.send_message(embed=embed)
 
+@bot.tree.command(name="boostconfig", description="Atur notifikasi server boost.")
+@app_commands.describe(
+    channel="Channel buat kirim notifikasi boost",
+    title="Judul custom (opsional, default: 'New Server Boost!')",
+    emoji="Emoji custom di depan judul (opsional, default: 🎉)",
+    description="Deskripsi custom (opsional). Placeholder: {mention} {user} {server} {count} {tier}"
+)
+async def slash_boostconfig(
+    i: discord.Interaction,
+    channel: discord.TextChannel,
+    title: Optional[str] = None,
+    emoji: Optional[str] = None,
+    description: Optional[str] = None
+):
+    if not (i.user.id == bot.owner_id or i.user.guild_permissions.manage_guild):
+        return await i.response.send_message(embed=error_embed(t(cfg, i.guild.id, "no_perm")), ephemeral=True)
+
+    gc = guild_cfg(cfg, i.guild.id)
+    bc = gc.setdefault("boost", {})
+    bc["channel"] = channel.id
+    if title       is not None: bc["title"]       = title
+    if emoji       is not None: bc["emoji"]       = emoji
+    if description is not None: bc["description"] = description
+    save_config(cfg)
+
+    def fill(template: str) -> str:
+        return (template
+                .replace("{mention}", i.user.mention)
+                .replace("{user}",    i.user.display_name)
+                .replace("{server}",  i.guild.name)
+                .replace("{count}",   str(i.guild.premium_subscription_count or 0))
+                .replace("{tier}",    str(i.guild.premium_tier)))
+
+    preview = discord.Embed(
+        title=f"{bc.get('emoji', '🎉')} {fill(bc.get('title', 'New Server Boost!'))}".strip(),
+        description=fill(bc.get("description", "{mention} just boosted **{server}**! Thanks for the support 💜")),
+        color=0xF47FFF,
+        timestamp=discord.utils.utcnow()
+    )
+    preview.set_thumbnail(url=i.user.display_avatar.url)
+    preview.set_footer(text=f"{i.guild.name} • Preview — begini nanti tampilannya")
+
+    await i.response.send_message(
+        embed=success_embed(f"Notifikasi boost sekarang dikirim ke {channel.mention} setiap ada member baru boost."),
+        ephemeral=True
+    )
+    await i.followup.send(embed=preview, ephemeral=True)
+
 @bot.tree.command(name="ping", description="Cek latency bot.")
 async def slash_ping(i: discord.Interaction):
     lat = round(bot.latency * 1000)
@@ -2650,6 +2753,7 @@ async def slash_help(i: discord.Interaction):
     embed.add_field(name="Level & XP", value="`rank` · `leaderboard` · `level` · `xp`", inline=False)
     embed.add_field(name="Giveaway", value="`giveaway start/end/reroll/list`", inline=False)
     embed.add_field(name="Antispam", value="`antispam setchannel` · `antispam status`", inline=False)
+    embed.add_field(name="🎉 Server Boost", value="`/boostconfig` — atur channel & tampilan notifikasi boost", inline=False)
     if is_owner_user:
         embed.add_field(name="Owner Only", value=(
             "`maintenance on/off/status`\n"
