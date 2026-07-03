@@ -25,9 +25,11 @@ Contoh:
 BADGE_FOUNDER    = "<:emoji_58:1522615540500398080>"   # Emoji untuk badge FOUNDER
 BADGE_DEVELOPER  = "<:emoji_56:1522618679358132264>"   # Emoji untuk badge DEVELOPER
 BADGE_MANAGEMENT = "<:emoji_54:1522618599468961903>"   # Emoji untuk badge MANAGEMENT
+BADGE_MODERATOR       = "<:emoji_53:1522689662769037493>"   # Emoji untuk badge MODERATOR — isi ID emoji lu di sini
+BADGE_SERVER_MANAGER  = "<:emoji_55:1522689748785959024>"   # Emoji untuk badge SERVER MANAGER — isi ID emoji lu di sini
 BADGE_STAFF      = "<:emoji_55:1522618640397111507>"   # Emoji untuk badge STAFF
 BADGE_PREMIUM    = "<:emoji_63:1522588934498943016>"   # Emoji untuk badge PREMIUM
-BADGE_NOPREFIX   = "<:emoji_51:1522398604562665573>"   # Emoji untuk badge NO PREFIX
+BADGE_NOPREFIX   = "<:emoji_56:1522684281560764577>"   # Emoji untuk badge NO PREFIX
 BADGE_USER       = "<:emoji_58:1522626657658212362>"   # Emoji untuk badge USER
 
 # ══════════════════════════════════════════════════════════════════
@@ -44,7 +46,7 @@ ICON_GIVEAWAY    = "<:emoji_61:1522400637646671912>"   # Icon untuk section Give
 ICON_ANTISPAM    = "<:emoji_61:1522404287898976317>"   # Icon untuk section Antispam
 ICON_LANGUAGE    = "<:emoji_59:1522399712563564595>"   # Icon untuk section Language
 ICON_OWNER       = "<:emoji_56:1522402451104464946>"   # Icon untuk section Owner Only
-
+ICON_BOOST       = "<:emoji_56:1522694857913667684>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
 # Status / result icons
 ICON_SUCCESS     = "<:emoji_59:1522429663690100756>"   # Icon sukses (checklist, dll)
 ICON_ERROR       = "<:emoji_60:1522431940492398754>"   # Icon error / gagal
