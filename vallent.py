@@ -51,7 +51,7 @@ from emoji_config import (
 # ══════════════════════════════════════════════════════════════════
 
 BOT_NAME      = "VALLENT EXS"
-BOT_TAGLINE   = "Nocturne Development."
+BOT_TAGLINE   = "No mercy. No limits. Full control."
 BOT_VERSION   = "1.0.0"
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -556,7 +556,7 @@ def _spam_fingerprint(message: discord.Message) -> str:
 # OWNER / PERMISSION HELPERS
 # ══════════════════════════════════════════════════════════════════
 
-OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave"}
+OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave", "ownerhelp"}
 
 def is_owner():
     async def predicate(ctx: commands.Context) -> bool:
@@ -2234,8 +2234,7 @@ async def pfx_vxleave(ctx, guild_id: str = ""):
 
 @bot.command(name="help")
 async def pfx_help(ctx):
-    is_owner_user = (ctx.author.id == bot.owner_id)
-    has_np        = user_has_no_prefix(ctx.guild, ctx.author)
+    has_np = user_has_no_prefix(ctx.guild, ctx.author)
     embed = discord.Embed(
         title=f"{BOT_NAME} — Command Reference",
         description=(
@@ -2269,18 +2268,38 @@ async def pfx_help(ctx):
         value="`antispam setchannel #ch` · `antispam status`", inline=False)
     embed.add_field(name=sec(ICON_LANGUAGE, "Language"),
         value="`language list` · `language set <code>`", inline=False)
-    if is_owner_user:
-        embed.add_field(name=sec(ICON_OWNER, "Owner Only"), value=(
-            "`maintenance on/off/status`\n"
-            "`noprefix grant/revoke/list`\n"
-            "`botrole set/remove/list`\n"
-            "`grantpremium @user <durasi>/revoke`\n"
-            "`premiumlock add/remove/list`\n"
-            "`blacklist add/remove/list`\n"
-            "`vxleave <guild_id>`"
-        ), inline=False)
+    # Catatan: section Owner Only SENGAJA tidak pernah ditaruh di sini.
+    # !vx help selalu ngirim pesan publik ke channel — kalau owner yang jalanin,
+    # command owner-only bakal ikut kebaca semua orang yang ada di channel itu.
+    # Command owner ada sendiri di `ownerhelp`, yang dikirim lewat DM.
     embed.set_footer(text=BOT_NAME + " v" + BOT_VERSION + " • " + BOT_TAGLINE)
     await ctx.send(embed=embed)
+
+@bot.command(name="ownerhelp")
+@is_owner()
+async def pfx_ownerhelp(ctx):
+    """Reference command owner-only — selalu dikirim lewat DM biar gak kebaca orang lain di channel."""
+    embed = discord.Embed(
+        title=f"{e(ICON_OWNER, '👑')} {BOT_NAME} — Owner Command Reference".strip(),
+        description="Daftar ini cuma dikirim ke DM kamu, gak pernah ditampilin di channel publik.",
+        color=COLOR_PRIMARY,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Maintenance", value="`maintenance on [alasan]` · `maintenance off` · `maintenance status`", inline=False)
+    embed.add_field(name="No-Prefix", value="`noprefix grant @user` · `noprefix revoke @user` · `noprefix list`", inline=False)
+    embed.add_field(name="Bot Role", value="`botrole set @user <role>` · `botrole remove @user` · `botrole list`", inline=False)
+    embed.add_field(name="Premium", value="`grantpremium @user <durasi>` · `grantpremium @user revoke`", inline=False)
+    embed.add_field(name="Premium Lock", value="`premiumlock add <command>` · `premiumlock remove <command>` · `premiumlock list`", inline=False)
+    embed.add_field(name="Blacklist", value="`blacklist add <id>` · `blacklist remove <id>` · `blacklist list`", inline=False)
+    embed.add_field(name="Other", value="`vxleave <guild_id>`", inline=False)
+    embed.set_footer(text=BOT_NAME + " v" + BOT_VERSION + " • Owner Only")
+
+    try:
+        await ctx.author.send(embed=embed)
+        ack = success_embed("Command reference udah dikirim ke DM kamu.")
+    except discord.Forbidden:
+        ack = error_embed("Gagal DM kamu — buka dulu DM dari server/bot ini, terus coba lagi.")
+    await ctx.send(embed=ack, delete_after=8)
 
 # ══════════════════════════════════════════════════════════════════
 # SLASH COMMANDS
@@ -2394,7 +2413,7 @@ async def slash_help(i: discord.Interaction):
     )
     embed.add_field(name="Moderation", value="`kick` · `ban` · `unban` · `timeout` · `untimeout`\n`warn` · `warnings` · `unwarn` · `clearwarnings`\n`purge` · `lock` · `unlock` · `slowmode`", inline=False)
     embed.add_field(name="Role & Voice", value="`addrole` · `removerole` · `move`", inline=False)
-    embed.add_field(name="Info", value="`userinfo` · `serverinfo` · `avatar` · `ping` · `profile`", inline=False)
+    embed.add_field(name="Info", value="`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`", inline=False)
     embed.add_field(name="Ticket", value="`ticket setup` · `ticket panel` · `ticket edit` · `ticket list` · `ticket delete` · `ticket close`", inline=False)
     embed.add_field(name="Level & XP", value="`rank` · `leaderboard` · `level` · `xp`", inline=False)
     embed.add_field(name="Giveaway", value="`giveaway start/end/reroll/list`", inline=False)
