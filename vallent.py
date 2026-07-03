@@ -87,6 +87,7 @@ def load_config() -> dict:
             "no_prefix_guilds":  [],
             "no_prefix_expiry":  {},
             "bot_roles":         {},
+            "role_sync":         {},
             "votes":             {},
             "payment_methods": {
                 "qris":    {"enabled": True, "image_url": "", "info": ""},
@@ -107,6 +108,7 @@ def load_config() -> dict:
     data.setdefault("no_prefix_guilds", [])
     data.setdefault("no_prefix_expiry", {})
     data.setdefault("bot_roles",        {})
+    data.setdefault("role_sync",        {})
     data.setdefault("votes",            {})
     data.setdefault("support_server_members", [])  # user IDs yang sudah join support server
     data.setdefault("commands_run",           {})  # uid → jumlah command dijalankan
@@ -488,14 +490,38 @@ BOT_ROLE_BADGES = {
     "developer":  {"label": "• Developer",  "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management": {"label": "• Management", "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "staff":      {"label": "• Staff",      "color": 0xCD5C5C, "emoji": BADGE_STAFF},
-    "premium":    {"label": "• Premium",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
+    "premium":    {"label": "• PREMIUM",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
     "noprefix":   {"label": "• NOPREFIX",  "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
     "user":       {"label": "• User",       "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
+def get_support_guild() -> Optional[discord.Guild]:
+    support_server_id = int(os.getenv("SUPPORT_SERVER_ID", "0"))
+    return bot.get_guild(support_server_id) if support_server_id else None
+
+def get_synced_role(uid: int) -> Optional[str]:
+    """Cek role Discord asli user di support server, cocokin ke role_sync mapping.
+    Dicek dari yang tertinggi (founder) ke terendah (staff) — kalau punya beberapa
+    role yang disync, badge tertinggi yang menang."""
+    guild = get_support_guild()
+    if not guild:
+        return None
+    member = guild.get_member(uid)
+    if not member:
+        return None
+    role_sync = cfg.get("role_sync", {})
+    for tier in reversed(BOT_ROLE_HIERARCHY):  # founder → developer → management → staff
+        role_id = role_sync.get(tier)
+        if role_id and any(r.id == role_id for r in member.roles):
+            return tier
+    return None
+
 def get_bot_role(uid: int) -> str:
     if uid == bot.owner_id:
         return "founder"
+    synced = get_synced_role(uid)
+    if synced:
+        return synced
     return cfg.get("bot_roles", {}).get(str(uid), "user")
 
 def get_user_badges(uid: int) -> list:
@@ -1312,6 +1338,38 @@ async def on_member_remove(member: discord.Member):
     if member.id in support_members:
         support_members.remove(member.id)
         save_config(cfg)
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    """Badge role-sync itu live (dihitung langsung dari role Discord tiap kali get_bot_role()
+    dipanggil), jadi gak butuh update apapun di sini. Ini cuma buat kasih DM selamat pas
+    seseorang baru dapat role yang di-sync ke badge — biar mereka sadar badge-nya naik."""
+    support_server_id = int(os.getenv("SUPPORT_SERVER_ID", "0"))
+    if after.guild.id != support_server_id or after.bot:
+        return
+    if before.roles == after.roles:
+        return
+    role_sync = cfg.get("role_sync", {})
+    if not role_sync:
+        return
+    before_ids = {r.id for r in before.roles}
+    after_ids  = {r.id for r in after.roles}
+    gained     = after_ids - before_ids
+    for tier in reversed(BOT_ROLE_HIERARCHY):
+        role_id = role_sync.get(tier)
+        if role_id and role_id in gained:
+            info      = BOT_ROLE_BADGES[tier]
+            badge_tag = (info["emoji"] + " ") if info.get("emoji") else ""
+            try:
+                await after.send(embed=base_embed(
+                    "Badge Updated!",
+                    f"Kamu baru dapat role di **{after.guild.name}** dan sekarang otomatis punya badge "
+                    f"{badge_tag}**{info['label']}** di {BOT_NAME}!\nCek profil: `profile`",
+                    color=info["color"]
+                ))
+            except Exception:
+                pass
+            break
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
@@ -2216,22 +2274,94 @@ async def pfx_noprefix(ctx, action: str = "", *, rest: str = ""):
 
 @bot.command(name="botrole")
 @is_owner()
-async def pfx_botrole(ctx, action: str = "", member: discord.Member = None, role: str = ""):
+async def pfx_botrole(ctx, action: str = "", *args):
     action    = action.lower()
     bot_roles = cfg.setdefault("bot_roles", {})
+    role_sync = cfg.setdefault("role_sync", {})
+    valid_tiers = ("staff", "management", "developer")
+
     if action == "list":
-        if not bot_roles: return await ctx.send(embed=info_embed("Bot Roles", "Belum ada assignment."))
+        if not bot_roles: return await ctx.send(embed=info_embed("Bot Roles (Manual)", "Belum ada assignment manual."))
         lines = []
         for uid_str, r in bot_roles.items():
             user = bot.get_user(int(uid_str))
             name = user.display_name if user else f"ID {uid_str}"
             lines.append(f"**{name}** → {r.capitalize()}")
-        return await ctx.send(embed=info_embed("Bot Roles", "\n".join(lines)))
+        return await ctx.send(embed=info_embed("Bot Roles (Manual)", "\n".join(lines)))
+
+    if action == "sync":
+        sub = args[0].lower() if args else ""
+        if sub == "list":
+            guild = get_support_guild()
+            lines = []
+            for tier in valid_tiers:
+                role_id = role_sync.get(tier)
+                if not role_id:
+                    lines.append(f"**{tier.capitalize()}** → *(belum di-set)*")
+                    continue
+                role = guild.get_role(role_id) if guild else None
+                lines.append(f"**{tier.capitalize()}** → {role.mention if role else f'`{role_id}` (role tidak ditemukan)'}")
+            note = "" if guild else "\n\n⚠️ `SUPPORT_SERVER_ID` belum di-set di environment, sync tidak akan jalan."
+            return await ctx.send(embed=info_embed("Bot Role Sync", "\n".join(lines) + note))
+        if sub == "remove":
+            tier = args[1].lower() if len(args) > 1 else ""
+            if tier not in valid_tiers:
+                return await ctx.send(embed=error_embed("Tier valid: `staff`, `management`, `developer`."))
+            role_sync.pop(tier, None)
+            save_config(cfg)
+            return await ctx.send(embed=success_embed(f"Sync role untuk **{tier.capitalize()}** dihapus."))
+        # botrole sync <tier> <role_id/mention>
+        if len(args) < 2:
+            return await ctx.send(embed=info_embed("Bot Role Sync", (
+                "`botrole sync <staff/management/developer> <role_id atau @role>` — hubungkan role Discord di support server ke badge\n"
+                "`botrole sync remove <tier>` — putuskan hubungan\n"
+                "`botrole sync list` — lihat mapping sekarang\n\n"
+                "Begitu di-set, siapapun yang punya role itu di support server otomatis dapat badge-nya "
+                "di `profile` — gak perlu `botrole set` manual lagi."
+            )))
+        tier = args[0].lower()
+        if tier not in valid_tiers:
+            return await ctx.send(embed=error_embed("Tier valid: `staff`, `management`, `developer`."))
+        role_match = re.match(r"<@&(\d+)>|(\d{17,20})", args[1].strip())
+        if not role_match:
+            return await ctx.send(embed=error_embed("Masukkan role ID atau mention role yang valid."))
+        role_id = int(role_match.group(1) or role_match.group(2))
+        guild = get_support_guild()
+        if not guild:
+            return await ctx.send(embed=error_embed("`SUPPORT_SERVER_ID` belum di-set di environment bot."))
+        disc_role = guild.get_role(role_id)
+        if not disc_role:
+            return await ctx.send(embed=error_embed("Role tidak ditemukan di support server."))
+        role_sync[tier] = role_id
+        save_config(cfg)
+        info = BOT_ROLE_BADGES[tier]
+        badge_tag = (info["emoji"] + " ") if info.get("emoji") else ""
+        return await ctx.send(embed=success_embed(
+            f"Role {disc_role.mention} sekarang otomatis kasih badge {badge_tag}**{info['label']}**.\n"
+            f"Siapapun member support server yang punya role ini langsung ke-update badge-nya."
+        ))
+
+    if not args:
+        return await ctx.send(embed=info_embed("Bot Role", (
+            "`botrole set @user <staff/management/developer>` — assign manual (untuk yang di luar support server)\n"
+            "`botrole remove @user` — cabut manual\n"
+            "`botrole list` — lihat assignment manual\n"
+            "`botrole sync <tier> <role_id>` — auto-sync dari role Discord di support server"
+        )))
+
+    member = None
+    for tok in args:
+        m = re.match(r"<@!?(\d+)>|(\d{17,20})", tok.strip())
+        if m:
+            uid = int(m.group(1) or m.group(2))
+            member = ctx.guild.get_member(uid)
+            break
     if not member:
-        return await ctx.send(embed=info_embed("Bot Role", "`botrole set @user <staff/management/developer>`\n`botrole remove @user`\n`botrole list`"))
+        return await ctx.send(embed=error_embed("User tidak ditemukan di server ini."))
+    role = next((a.lower() for a in args if a.lower() in valid_tiers), "")
+
     if action == "set":
-        role = role.lower()
-        if role not in ["staff","management","developer"]:
+        if role not in valid_tiers:
             return await ctx.send(embed=error_embed("Role valid: `staff`, `management`, `developer`"))
         bot_roles[str(member.id)] = role
         save_config(cfg)
@@ -2245,10 +2375,10 @@ async def pfx_botrole(ctx, action: str = "", member: discord.Member = None, role
         except Exception: pass
         await ctx.send(embed=embed)
     elif action == "remove":
-        if str(member.id) not in bot_roles: return await ctx.send(embed=error_embed(f"{member.display_name} tidak punya bot role."))
+        if str(member.id) not in bot_roles: return await ctx.send(embed=error_embed(f"{member.display_name} tidak punya bot role manual."))
         removed = bot_roles.pop(str(member.id))
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Bot role **{removed.capitalize()}** dihapus dari {member.mention}."))
+        await ctx.send(embed=success_embed(f"Bot role manual **{removed.capitalize()}** dihapus dari {member.mention}."))
 
 @bot.command(name="grantpremium")
 @is_owner()
@@ -2389,7 +2519,7 @@ async def pfx_ownerhelp(ctx):
     )
     embed.add_field(name="Maintenance", value="`maintenance on [alasan]` · `maintenance off` · `maintenance status`", inline=False)
     embed.add_field(name="No-Prefix", value="`noprefix grant @user [durasi]` · `noprefix revoke @user` · `noprefix list`\nDurasi: `7d` / `24h` / `30m` / kosongkan untuk permanent.", inline=False)
-    embed.add_field(name="Bot Role", value="`botrole set @user <role>` · `botrole remove @user` · `botrole list`", inline=False)
+    embed.add_field(name="Bot Role", value="`botrole set @user <role>` · `botrole remove @user` · `botrole list`\n`botrole sync <tier> <role_id>` — auto badge dari role Discord di support server", inline=False)
     embed.add_field(name="Premium", value="`grantpremium @user <durasi>` · `grantpremium @user revoke`", inline=False)
     embed.add_field(name="Premium Lock", value="`premiumlock add <command>` · `premiumlock remove <command>` · `premiumlock list`", inline=False)
     embed.add_field(name="Blacklist", value="`blacklist add <id>` · `blacklist remove <id>` · `blacklist list`", inline=False)
