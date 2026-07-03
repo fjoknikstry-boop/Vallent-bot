@@ -55,7 +55,7 @@ ICON_LOADING     = "<a:loading:1522215143830847602>"   # Icon loading / proses
 ICON_PROFILE     = "<:emoji_54:1522429025471954994>"   # Icon di header profile
 ICON_BADGES      = "<:emoji_54:1522407563147219074>"   # Icon di ALL BADGES
 ICON_COMMANDS    = "<:emoji_53:1522428945100705812>"   # Icon di Commands Runned
-ICON_PREMIUM_TAG = "<:emoji_56:1522399040753635428>"   # Icon di keterangan premium
+ICON_PREMIUM_TAG = "<:emoji_62:1522435146542878741>"   # Icon di keterangan premium
 
 # Ticket icons
 ICON_TICKET_OPEN  = "<:emoji_54:1522398918694928664>"  # Icon tombol Open Ticket
