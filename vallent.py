@@ -25,7 +25,6 @@ from discord.ext import commands, tasks
 import json
 import os
 import re
-import shlex
 import asyncio
 import datetime
 import logging
@@ -40,17 +39,19 @@ from emoji_config import (
     BADGE_PREMIUM, BADGE_NOPREFIX, BADGE_USER,
     ICON_MODERATION, ICON_ROLE, ICON_INFO, ICON_TICKET, ICON_LEVEL,
     ICON_GIVEAWAY, ICON_ANTISPAM, ICON_LANGUAGE, ICON_OWNER,
-    ICON_SUCCESS, ICON_ERROR, ICON_PROFILE, ICON_BADGES, ICON_COMMANDS,
+    ICON_SUCCESS, ICON_ERROR, ICON_WARNING, ICON_LOADING,
+    ICON_PROFILE, ICON_BADGES, ICON_COMMANDS, ICON_PREMIUM_TAG,
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
     e
 )
+
 
 # ══════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════════════
 
 BOT_NAME      = "VALLENT EXS"
-BOT_TAGLINE   = "Nocturne Development"
+BOT_TAGLINE   = "Nocturne Development."
 BOT_VERSION   = "1.0.0"
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -86,7 +87,6 @@ def load_config() -> dict:
             "no_prefix_guilds":  [],
             "bot_roles":         {},
             "votes":             {},
-            "maintenance": {"enabled": False, "reason": ""},
             "payment_methods": {
                 "qris":    {"enabled": True, "image_url": "", "info": ""},
                 "bank":    {"enabled": True, "bank_name": "", "account_number": "", "account_name": ""},
@@ -108,7 +108,7 @@ def load_config() -> dict:
     data.setdefault("votes",            {})
     data.setdefault("support_server_members", [])  # user IDs yang sudah join support server
     data.setdefault("commands_run",           {})  # uid → jumlah command dijalankan
-    data.setdefault("maintenance", {"enabled": False, "reason": ""})
+    data.setdefault("maintenance", {"enabled": False, "reason": "", "since": None})
     for gid, gc in data.get("guilds", {}).items():
         _init_guild(gc)
     save_config(data)
@@ -120,28 +120,47 @@ def _init_guild(gc: dict):
     gc.setdefault("announce_channel",  None)
     gc.setdefault("level_channel",     None)
     gc.setdefault("spam_trap_channel", None)
-    gc.setdefault("mod_log_channel",   None)
     gc.setdefault("leveling_enabled",  True)
     gc.setdefault("xp_per_message",    [15, 25])
     gc.setdefault("xp_cooldown",       60)
     gc.setdefault("members_xp",        {})
     gc.setdefault("level_roles",       {})
     gc.setdefault("warnings",          {})
-    gc.setdefault("active_tickets",    {})
-    gc.setdefault("ticket", {
-        "category":     None,
-        "log_category": None,
-        "support_role": None,
-        "max_tickets":  1,
-        "panels":       [],
-        "counter":      0,
-    })
-    gc["ticket"].setdefault("category",     None)
-    gc["ticket"].setdefault("log_category", None)
-    gc["ticket"].setdefault("support_role", None)
-    gc["ticket"].setdefault("max_tickets",  1)
-    gc["ticket"].setdefault("panels",       [])
-    gc["ticket"].setdefault("counter",      0)
+    gc.setdefault("active_tickets",    {})   # uid(str) -> [{"channel_id","panel_id","opened_at"}, ...]
+    gc.setdefault("mod_log_channel",   None)
+    gc.setdefault("ticket", {"panels": {}})
+    gc["ticket"].setdefault("panels", {})
+    # Migrasi struktur ticket lama (single-config, panels sebagai list) ke multi-panel dict.
+    legacy_cat  = gc["ticket"].pop("category",     None) if "category"     in gc["ticket"] else None
+    legacy_log  = gc["ticket"].pop("log_channel",  None) if "log_channel"  in gc["ticket"] else None
+    legacy_role = gc["ticket"].pop("support_role", None) if "support_role" in gc["ticket"] else None
+    legacy_max  = gc["ticket"].pop("max_tickets",  None) if "max_tickets"  in gc["ticket"] else None
+    if isinstance(gc["ticket"].get("panels"), list):
+        gc["ticket"]["panels"] = {}
+    if legacy_cat and "default" not in gc["ticket"]["panels"]:
+        gc["ticket"]["panels"]["default"] = {
+            "category":     legacy_cat,
+            "log_channel":  legacy_log,
+            "support_role": legacy_role,
+            "max_tickets":  legacy_max or 1,
+            "title":        "Support Tickets",
+            "description":  "Klik tombol untuk membuka support ticket.",
+            "message_id":   None,
+            "channel_id":   None,
+        }
+    for p in gc["ticket"]["panels"].values():
+        p.setdefault("category",     None)
+        p.setdefault("log_channel",  None)
+        p.setdefault("support_role", None)
+        p.setdefault("max_tickets",  1)
+        p.setdefault("title",        "Support Tickets")
+        p.setdefault("description",  "Klik tombol untuk membuka support ticket.")
+        p.setdefault("message_id",   None)
+        p.setdefault("channel_id",   None)
+    # Migrasi active_tickets lama (uid -> single channel_id int) ke format baru (uid -> list).
+    for uid, val in list(gc["active_tickets"].items()):
+        if isinstance(val, int):
+            gc["active_tickets"][uid] = [{"channel_id": val, "panel_id": "default", "opened_at": None}]
 
 def save_config(cfg: dict):
     os.makedirs("data", exist_ok=True)
@@ -214,17 +233,24 @@ def _footer(embed: discord.Embed):
     embed.timestamp = discord.utils.utcnow()
     return embed
 
+def _title_with_icon(icon: str, fallback: str, text: str) -> str:
+    ic = e(icon, fallback) if icon else fallback
+    return f"{ic} {text}" if ic else text
+
 def base_embed(title: str, description: str = "", color: int = COLOR_PRIMARY) -> discord.Embed:
     return _footer(discord.Embed(title=title, description=description, color=color))
 
 def success_embed(desc: str) -> discord.Embed:
-    return base_embed("Success", desc, COLOR_SUCCESS)
+    return base_embed(_title_with_icon(ICON_SUCCESS, "✅", "Success"), desc, COLOR_SUCCESS)
 
 def error_embed(desc: str) -> discord.Embed:
-    return base_embed("Error", desc, COLOR_ERROR)
+    return base_embed(_title_with_icon(ICON_ERROR, "❌", "Error"), desc, COLOR_ERROR)
+
+def warning_embed(title: str, desc: str) -> discord.Embed:
+    return base_embed(_title_with_icon(ICON_WARNING, "⚠️", title), desc, COLOR_WARNING)
 
 def info_embed(title: str, desc: str) -> discord.Embed:
-    return base_embed(title, desc, COLOR_INFO)
+    return base_embed(_title_with_icon(ICON_INFO, "ℹ️", title), desc, COLOR_INFO)
 
 # ══════════════════════════════════════════════════════════════════
 # XP / LEVELING
@@ -271,13 +297,11 @@ class VallentTree(app_commands.CommandTree):
         data = getattr(interaction, "data", None)
         if not data:
             return True
-        if interaction.type not in (
-            discord.InteractionType.application_command,
-            discord.InteractionType.autocomplete,
-        ):
+        # Hanya proses pemanggilan slash command sungguhan — biarkan
+        # autocomplete dan tipe interaksi lain lewat tanpa disentuh.
+        if interaction.type != discord.InteractionType.application_command or data.get("type", 1) != 1:
             return True
-        if data.get("type", 1) != 1:
-            return True
+
         parts   = [data.get("name", "")]
         options = data.get("options", [])
         while options:
@@ -287,31 +311,41 @@ class VallentTree(app_commands.CommandTree):
                 options = opt.get("options", [])
             else:
                 break
-        cmd_name      = " ".join(parts)
-        is_owner_user = interaction.user.id == bot.owner_id
+        cmd_name  = " ".join(parts)
+        is_owner_ = interaction.user.id == bot.owner_id
 
-        # Maintenance mode — hanya owner yang boleh lewat
-        if is_maintenance() and not is_owner_user:
+        # ── Maintenance mode — cuma owner yang bisa lewat ──────────────
+        if is_maintenance_on() and not is_owner_:
+            m = cfg.get("maintenance", {})
+            desc = f"**{BOT_NAME}** lagi maintenance, coba lagi nanti."
+            if m.get("reason"):
+                desc += f"\n\n**Alasan:** {m['reason']}"
             try:
-                await interaction.response.send_message(embed=maintenance_embed(), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=warning_embed("Under Maintenance", desc), ephemeral=True)
             except discord.InteractionResponded:
                 pass
             return False
 
-        if cmd_name in cfg.get("premium_commands", []) and not is_owner_user and not user_has_premium(interaction.guild, interaction.user):
+        # ── Premium-locked command ──────────────────────────────────────
+        if cmd_name in cfg.get("premium_commands", []) and not is_owner_ and not user_has_premium(interaction.guild, interaction.user):
             try:
                 await interaction.response.send_message(
-                    embed=base_embed(
+                    embed=warning_embed(
                         "Premium Required",
                         f"Command `/{cmd_name}` hanya untuk **Premium** users.\n"
-                        "Hubungi owner atau kunjungi server support untuk berlangganan.",
-                        color=COLOR_WARNING
+                        "Hubungi owner atau kunjungi server support untuk berlangganan."
                     ), ephemeral=True)
             except discord.InteractionResponded:
                 pass
             return False
 
-        track_command_use(interaction.user.id)
+        # ── Command usage counter ───────────────────────────────────────
+        cmds_run = cfg.setdefault("commands_run", {})
+        uid_str  = str(interaction.user.id)
+        cmds_run[uid_str] = cmds_run.get(uid_str, 0) + 1
+        save_config(cfg)
+
         return True
 
 bot = commands.Bot(
@@ -367,6 +401,32 @@ async def check_premium_expiry():
     if revoked:
         save_config(cfg)
         logging.info(f"[Premium] Expired and revoked: {revoked}")
+        for uid in revoked:
+            try:
+                user = bot.get_user(uid) or await bot.fetch_user(uid)
+                await user.send(embed=base_embed(
+                    "Premium Berakhir",
+                    f"Masa aktif Premium kamu di **{BOT_NAME}** sudah habis.\n"
+                    "Semua command premium dan akses no-prefix sudah dinonaktifkan.\n"
+                    "Hubungi owner kalau mau perpanjang.",
+                    color=COLOR_ERROR
+                ))
+            except Exception:
+                pass
+
+def user_has_no_prefix(guild: Optional[discord.Guild], user: discord.abc.User) -> bool:
+    """No-prefix aktif untuk: owner, user yang di-grant manual, guild yang di-grant,
+    atau siapapun yang lagi Premium (Premium otomatis membuka no-prefix)."""
+    if user.id == bot.owner_id:
+        return True
+    if user.id in cfg.get("no_prefix_users", []):
+        return True
+    if guild and guild.id in cfg.get("no_prefix_guilds", []):
+        return True
+    return user_has_premium(guild, user)
+
+def is_maintenance_on() -> bool:
+    return bool(cfg.get("maintenance", {}).get("enabled", False))
 
 # ══════════════════════════════════════════════════════════════════
 # BOT ROLES SYSTEM
@@ -376,13 +436,13 @@ BOT_ROLE_HIERARCHY = ["staff", "management", "developer", "founder"]
 
 BOT_ROLE_BADGES = {
     # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
-    "founder":    {"label": "• FOUNDER",    "color": 0x8B0000, "emoji": BADGE_FOUNDER},
-    "developer":  {"label": "• DEVELOPER",  "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
-    "management": {"label": "• Management", "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
-    "staff":      {"label": "• Staff",      "color": 0xCD5C5C, "emoji": BADGE_STAFF},
-    "premium":    {"label": "• Premium",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
-    "noprefix":   {"label": "• NO PREFIX",  "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
-    "user":       {"label": "• User",       "color": 0x6B7280, "emoji": BADGE_USER},
+    "founder":    {"label": "FOUNDER",    "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "developer":  {"label": "DEVELOPER",  "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
+    "management": {"label": "MANAGEMENT", "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
+    "staff":      {"label": "STAFF",      "color": 0xCD5C5C, "emoji": BADGE_STAFF},
+    "premium":    {"label": "PREMIUM",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
+    "noprefix":   {"label": "NO PREFIX",  "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
+    "user":       {"label": "USER",       "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
 def get_bot_role(uid: int) -> str:
@@ -397,13 +457,14 @@ def get_user_badges(uid: int) -> list:
     Badge USER hanya didapat kalau user join server support bot.
     Kalau tidak punya badge apapun → list kosong.
     """
-    badges = []
-    role   = get_bot_role(uid)
+    badges  = []
+    role    = get_bot_role(uid)
+    is_prem = uid in cfg.get("premium_users", [])
     if role != "user":
         badges.append(role)
-    if uid in cfg.get("no_prefix_users", []):
+    if uid in cfg.get("no_prefix_users", []) or is_prem:
         badges.append("noprefix")
-    if uid in cfg.get("premium_users", []):
+    if is_prem:
         badges.append("premium")
     if uid in cfg.get("support_server_members", []):
         badges.append("user")
@@ -416,12 +477,12 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
     badges     = get_user_badges(uid)
     expiry_map = cfg.get("premium_expiry", {})
     has_prem   = uid in cfg.get("premium_users", [])
-    has_np     = (uid in cfg.get("no_prefix_users", []) or uid == bot.owner_id or has_prem)
     cmds_run   = cfg.get("commands_run", {}).get(str(uid), 0)
     top        = role if role != "user" else (badges[0] if badges else "user")
     color      = BOT_ROLE_BADGES.get(top, BOT_ROLE_BADGES["user"])["color"]
 
-    embed = discord.Embed(title=str(user.display_name) + "'s Profile", color=color)
+    profile_icon = e(ICON_PROFILE, "🪪")
+    embed = discord.Embed(title=f"{profile_icon} {user.display_name}'s Profile".strip(), color=color)
     embed.set_thumbnail(url=user.display_avatar.url)
 
     # ── ALL BADGES — field sendiri, satu badge per baris ──────────────
@@ -441,11 +502,12 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
         else:
             badges_value += "\nJoin server support untuk dapat badge **USER**!"
 
-    embed.add_field(name="\u2728 ALL BADGES", value=badges_value, inline=False)
+    badges_icon = e(ICON_BADGES, "✨")
+    embed.add_field(name=f"{badges_icon} ALL BADGES".strip(), value=badges_value, inline=False)
 
     # ── Total Badges & Commands Runned — dua field sejajar ────────────
     embed.add_field(name="Total Badges", value="**" + str(len(badges)) + "**", inline=True)
-    embed.add_field(name="Commands Runned", value="**" + str(cmds_run) + "**", inline=True)
+    embed.add_field(name=f"{e(ICON_COMMANDS, '⚙️')} Commands Runned".strip(), value="**" + str(cmds_run) + "**", inline=True)
 
     # ── Premium — field sendiri kalau ada ──────────────────────────────
     if has_prem:
@@ -459,7 +521,7 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
                 prem_value = discord.utils.format_dt(exp, "R")
             except Exception:
                 prem_value = "Active"
-        embed.add_field(name="Premium", value=prem_value, inline=True)
+        embed.add_field(name=f"{e(ICON_PREMIUM_TAG, '💎')} Premium".strip(), value=prem_value, inline=True)
 
     embed.set_footer(
         text=BOT_NAME + " \u2022 ID: " + str(uid),
@@ -494,7 +556,7 @@ def _spam_fingerprint(message: discord.Message) -> str:
 # OWNER / PERMISSION HELPERS
 # ══════════════════════════════════════════════════════════════════
 
-OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave", "syncsupport"}
+OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave"}
 
 def is_owner():
     async def predicate(ctx: commands.Context) -> bool:
@@ -505,66 +567,34 @@ def is_staff_or_above(uid: int) -> bool:
     role = get_bot_role(uid)
     return role in BOT_ROLE_HIERARCHY
 
-# ══════════════════════════════════════════════════════════════════
-# MAINTENANCE MODE
-# ══════════════════════════════════════════════════════════════════
-
-def is_maintenance() -> bool:
-    return bool(cfg.get("maintenance", {}).get("enabled", False))
-
-def maintenance_reason() -> str:
-    return cfg.get("maintenance", {}).get("reason") or "Bot sedang dalam perbaikan. Coba lagi nanti."
-
-def maintenance_embed() -> discord.Embed:
-    return base_embed(
-        "Under Maintenance",
-        f"{BOT_NAME} sedang maintenance, semua command dikunci sementara.\n**Alasan:** {maintenance_reason()}",
-        color=COLOR_WARNING
-    )
-
-# ══════════════════════════════════════════════════════════════════
-# COMMAND USAGE TRACKER (Commands Runned)
-# ══════════════════════════════════════════════════════════════════
-
-def track_command_use(uid: int) -> None:
-    """Catat setiap command yang berhasil dijalankan oleh seorang user."""
-    cmds_run  = cfg.setdefault("commands_run", {})
-    key       = str(uid)
-    cmds_run[key] = cmds_run.get(key, 0) + 1
-    save_config(cfg)
+@bot.check
+async def global_maintenance_check(ctx: commands.Context) -> bool:
+    if ctx.author.id == bot.owner_id or not is_maintenance_on():
+        return True
+    m    = cfg.get("maintenance", {})
+    desc = f"**{BOT_NAME}** lagi maintenance, coba lagi nanti."
+    if m.get("reason"):
+        desc += f"\n\n**Alasan:** {m['reason']}"
+    await ctx.send(embed=warning_embed("Under Maintenance", desc), delete_after=10)
+    return False
 
 @bot.check
 async def global_prefix_premium_check(ctx: commands.Context) -> bool:
     cmd = ctx.command.qualified_name if ctx.command else None
-    if not cmd:
-        return True
-    is_owner_user = (ctx.author.id == bot.owner_id)
-
-    # Maintenance mode — hanya owner yang boleh lewat
-    if is_maintenance() and cmd not in OWNER_ONLY_CMDS and not is_owner_user:
-        await ctx.send(embed=maintenance_embed())
-        return False
-
-    if cmd in OWNER_ONLY_CMDS:
+    if not cmd or cmd in OWNER_ONLY_CMDS:
         return True
     if cmd not in cfg.get("premium_commands", []):
         return True
-    if is_owner_user:
+    if ctx.author.id == bot.owner_id:
         return True
     if user_has_premium(ctx.guild, ctx.author):
         return True
-    await ctx.send(embed=base_embed(
+    await ctx.send(embed=warning_embed(
         "Premium Required",
         f"Command `{cmd}` hanya untuk **Premium** users.\n"
-        "Hubungi owner untuk berlangganan.",
-        color=COLOR_WARNING
+        "Hubungi owner untuk berlangganan."
     ))
     return False
-
-@bot.event
-async def on_command_completion(ctx: commands.Context):
-    """Dipanggil setiap command prefix berhasil dijalankan tanpa error."""
-    track_command_use(ctx.author.id)
 
 # ══════════════════════════════════════════════════════════════════
 # MODERATION HELPERS
@@ -708,77 +738,146 @@ async def do_addemoji(guild, emoji_or_url: str, name: str):
 # TICKET HANDLER
 # ══════════════════════════════════════════════════════════════════
 
-class TicketCloseButton(discord.ui.Button):
-    """Tombol close ticket persisten — dipasang ulang tiap start via bot.add_view di on_ready."""
-    def __init__(self):
-        super().__init__(
-            label="Close Ticket", style=discord.ButtonStyle.danger,
-            emoji=ICON_TICKET_CLOSE if ICON_TICKET_CLOSE else "🔒",
-            custom_id="vx_ticket_close"
-        )
+def _fallback_log_channel(gc: dict) -> Optional[int]:
+    """Dipakai honeypot/log umum kalau mod_log_channel belum di-set —
+    pinjam log channel dari panel ticket pertama yang punya satu."""
+    if gc.get("mod_log_channel"):
+        return gc["mod_log_channel"]
+    for p in gc["ticket"]["panels"].values():
+        if p.get("log_channel"):
+            return p["log_channel"]
+    return None
 
-    async def callback(self, i: discord.Interaction):
-        gc  = guild_cfg(cfg, i.guild.id)
-        rec = gc["active_tickets"].get(str(i.channel.id))
-        if not rec:
-            return await i.response.send_message(embed=error_embed("Ticket ini sudah tidak aktif."), ephemeral=True)
-        if not (i.user.guild_permissions.manage_channels or rec.get("owner") == i.user.id):
-            return await i.response.send_message(embed=error_embed("Kamu tidak bisa menutup ticket ini."), ephemeral=True)
-        await i.response.send_message(embed=info_embed("Ticket", "Menutup ticket..."), ephemeral=True)
-        await close_ticket(i.guild, i.channel, i.user, "Closed via button.")
+def _find_active_ticket(gc: dict, channel_id: int):
+    """Cari ticket aktif berdasarkan channel_id.
+    Return (uid_str, ticket_dict, panel_dict) atau (None, None, None)."""
+    for uid, tickets in gc["active_tickets"].items():
+        for tk in tickets:
+            if tk.get("channel_id") == channel_id:
+                panel = gc["ticket"]["panels"].get(tk.get("panel_id"), {})
+                return uid, tk, panel
+    return None, None, None
 
-class TicketPersistentView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(TicketCloseButton())
+async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
+    gc    = guild_cfg(cfg, interaction.guild.id)
+    panel = gc["ticket"]["panels"].get(panel_id)
+    uid   = str(interaction.user.id)
 
-class TicketOpenButton(discord.ui.Button):
-    """Tombol buka ticket di panel — persisten, tetap jalan walau bot restart."""
-    def __init__(self, label: str = "Open Ticket"):
-        super().__init__(
-            label=label, style=discord.ButtonStyle.danger,
-            emoji=ICON_TICKET_OPEN if ICON_TICKET_OPEN else "🎫",
-            custom_id="vx_ticket_open"
-        )
+    if not panel or not panel.get("category"):
+        return await interaction.response.send_message(
+            embed=error_embed("Ticket panel ini belum dikonfigurasi dengan benar."), ephemeral=True)
 
-    async def callback(self, i: discord.Interaction):
-        await handle_open_ticket(i)
+    tickets    = gc["active_tickets"].setdefault(uid, [])
+    same_panel = [tk for tk in tickets if tk.get("panel_id") == panel_id and interaction.guild.get_channel(tk.get("channel_id"))]
+    max_t      = panel.get("max_tickets", 1)
+    if len(same_panel) >= max_t:
+        ch  = interaction.guild.get_channel(same_panel[0]["channel_id"]) if same_panel else None
+        msg = t(cfg, interaction.guild.id, "ticket_exists") if max_t == 1 else \
+            f"Kamu sudah punya {len(same_panel)}/{max_t} ticket terbuka untuk panel **{panel.get('title', panel_id)}**."
+        if ch:
+            msg += f"\n{ch.mention}"
+        return await interaction.response.send_message(embed=error_embed(msg), ephemeral=True)
 
-class TicketPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(TicketOpenButton())
+    category = interaction.guild.get_channel(panel["category"])
+    if not category:
+        return await interaction.response.send_message(
+            embed=error_embed("Ticket category tidak ditemukan."), ephemeral=True)
 
-async def close_ticket(guild: discord.Guild, channel: discord.TextChannel, closer: discord.abc.User, reason: str):
-    """
-    Menutup satu ticket: umumkan di channel, kirim ringkasan ke log channel
-    milik ticket tsb (log channel TETAP ADA sebagai arsip), lalu hapus channel ticket-nya.
-    Dipakai bersama oleh tombol Close dan command `ticket close`.
-    """
-    gc  = guild_cfg(cfg, guild.id)
-    rec = gc["active_tickets"].pop(str(channel.id), None)
+    overwrites = {
+        interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        interaction.user:               discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        interaction.guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
+    }
+    role_id = panel.get("support_role")
+    if role_id:
+        role = interaction.guild.get_role(role_id)
+        if role:
+            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+
+    ch = await category.create_text_channel(
+        name=f"ticket-{interaction.user.name}",
+        overwrites=overwrites,
+        topic=f"Ticket [{panel_id}] for {interaction.user} ({interaction.user.id})"
+    )
+    tickets.append({
+        "channel_id": ch.id,
+        "panel_id":   panel_id,
+        "opened_at":  discord.utils.utcnow().isoformat(),
+    })
     save_config(cfg)
 
-    try:
-        await channel.send(embed=base_embed(
-            "Ticket Closing",
-            f"Ditutup oleh {closer.mention}.\n{reason}\n\nChannel akan dihapus dalam 5 detik.",
-            color=COLOR_ERROR
-        ))
-    except Exception:
-        pass
+    welcome_embed = base_embed(
+        panel.get("title") or f"Ticket — {interaction.user.display_name}",
+        panel.get("description") or "Tim support akan segera membantu. Jelaskan keperluanmu di sini.",
+        color=COLOR_PRIMARY
+    )
+    await ch.send(content=interaction.user.mention, embed=welcome_embed, view=TicketCloseView())
 
-    if rec and rec.get("log_channel"):
-        log_ch = guild.get_channel(rec["log_channel"])
+    log_id = panel.get("log_channel")
+    if log_id:
+        log_ch = interaction.guild.get_channel(log_id)
         if log_ch:
-            summary = base_embed("Ticket Closed", None, color=COLOR_ERROR)
-            summary.add_field(name="Ticket",    value=f"#{rec.get('number', '?'):04d}" if isinstance(rec.get("number"), int) else "-", inline=True)
-            summary.add_field(name="Owner",     value=f"<@{rec.get('owner')}>", inline=True)
-            summary.add_field(name="Closed By", value=closer.mention, inline=True)
-            summary.add_field(name="Reason",    value=reason or "-", inline=False)
+            log_emb = base_embed("Ticket Opened", None, color=COLOR_PRIMARY)
+            log_emb.add_field(name="User",    value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=True)
+            log_emb.add_field(name="Channel", value=ch.mention, inline=True)
+            log_emb.add_field(name="Panel",   value=panel.get("title") or panel_id, inline=True)
             try:
-                await log_ch.send(embed=summary)
-                await log_ch.edit(name=("closed-" + log_ch.name)[:100], reason="Ticket closed — archived")
+                await log_ch.send(embed=log_emb)
+            except Exception:
+                pass
+
+    await interaction.response.send_message(
+        embed=success_embed(t(cfg, interaction.guild.id, "ticket_open", channel=ch.mention)),
+        ephemeral=True
+    )
+
+async def close_ticket_channel(guild: discord.Guild, channel: discord.abc.GuildChannel,
+                                closer: discord.abc.User, reason: str, send_confirmation) -> bool:
+    """Logic inti penutupan ticket, dipakai bareng tombol Close dan command `ticket close`.
+    Log dikirim ke log channel milik PANEL asal ticket tersebut, bukan log channel global."""
+    gc = guild_cfg(cfg, guild.id)
+    uid, tk, panel = _find_active_ticket(gc, channel.id)
+    if not tk:
+        await send_confirmation(embed=error_embed("Channel ini bukan ticket aktif."))
+        return False
+
+    is_owner_  = closer.id == bot.owner_id
+    can_manage = getattr(closer, "guild_permissions", None) and closer.guild_permissions.manage_channels
+    if not (is_owner_ or can_manage or str(closer.id) == uid):
+        await send_confirmation(embed=error_embed("Kamu tidak bisa menutup ticket ini."))
+        return False
+
+    gc["active_tickets"][uid] = [x for x in gc["active_tickets"][uid] if x.get("channel_id") != channel.id]
+    if not gc["active_tickets"][uid]:
+        del gc["active_tickets"][uid]
+    save_config(cfg)
+
+    reason = reason or "Closed via command."
+    await send_confirmation(embed=base_embed(
+        "Ticket Closing", f"Ditutup oleh {closer.mention}.\n{reason}\n\nChannel dihapus dalam 5 detik.", color=COLOR_ERROR))
+
+    log_id = panel.get("log_channel")
+    if log_id:
+        log_ch = guild.get_channel(log_id)
+        if log_ch:
+            duration_str = "?"
+            try:
+                opened_dt = datetime.datetime.fromisoformat(tk.get("opened_at"))
+                if opened_dt.tzinfo is None:
+                    opened_dt = opened_dt.replace(tzinfo=datetime.timezone.utc)
+                mins = int((discord.utils.utcnow() - opened_dt).total_seconds() // 60)
+                duration_str = f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m"
+            except Exception:
+                pass
+            owner_member = guild.get_member(int(uid))
+            log_emb = base_embed("Ticket Closed", None, color=COLOR_ERROR)
+            log_emb.add_field(name="Ticket Owner", value=f"{owner_member.mention if owner_member else '<@'+uid+'>'} (`{uid}`)", inline=True)
+            log_emb.add_field(name="Closed By",    value=closer.mention, inline=True)
+            log_emb.add_field(name="Panel",        value=panel.get("title") or tk.get("panel_id", "?"), inline=True)
+            log_emb.add_field(name="Duration",     value=duration_str, inline=True)
+            log_emb.add_field(name="Reason",       value=reason, inline=False)
+            try:
+                await log_ch.send(embed=log_emb)
             except Exception:
                 pass
 
@@ -787,95 +886,41 @@ async def close_ticket(guild: discord.Guild, channel: discord.TextChannel, close
         await channel.delete(reason=f"Ticket closed by {closer}")
     except Exception:
         pass
+    return True
 
-async def handle_open_ticket(interaction: discord.Interaction):
-    gc     = guild_cfg(cfg, interaction.guild.id)
-    cat_id = gc["ticket"].get("category")
-    log_cat_id = gc["ticket"].get("log_category")
-    max_t  = gc["ticket"].get("max_tickets", 1)
-    uid    = interaction.user.id
+class TicketCloseView(discord.ui.View):
+    """View persisten & statis — satu custom_id untuk semua ticket, aman dipakai
+    lintas restart bot lewat bot.add_view() di on_ready."""
+    def __init__(self):
+        super().__init__(timeout=None)
 
-    if not cat_id:
-        return await interaction.response.send_message(
-            embed=error_embed("Ticket system belum dikonfigurasi. Jalankan `ticket setup` dulu."), ephemeral=True)
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger,
+                        emoji=ICON_TICKET_CLOSE if ICON_TICKET_CLOSE else "🔒",
+                        custom_id="vx_ticket_close")
+    async def close_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        async def _respond(**kw):
+            try:
+                await interaction.response.send_message(**kw)
+            except discord.InteractionResponded:
+                await interaction.followup.send(**kw)
+        await close_ticket_channel(interaction.guild, interaction.channel, interaction.user, "Ditutup via tombol.", _respond)
 
-    user_tickets = [t for t in gc["active_tickets"].values() if t.get("owner") == uid]
-    if len(user_tickets) >= max_t:
-        return await interaction.response.send_message(
-            embed=error_embed(f"Kamu sudah memiliki {len(user_tickets)}/{max_t} ticket terbuka."), ephemeral=True)
+class TicketOpenView(discord.ui.View):
+    """Satu instance per panel — custom_id menyimpan panel_id supaya tombol tetap
+    tahu panel mana yang harus dibuka, termasuk setelah bot restart."""
+    def __init__(self, panel_id: str):
+        super().__init__(timeout=None)
+        self.panel_id = panel_id
+        btn = discord.ui.Button(
+            label="Open Ticket", style=discord.ButtonStyle.danger,
+            emoji=ICON_TICKET_OPEN if ICON_TICKET_OPEN else "🎫",
+            custom_id=f"vx_ticket_open:{panel_id}"
+        )
+        btn.callback = self._open_callback
+        self.add_item(btn)
 
-    category = interaction.guild.get_channel(cat_id)
-    if not category:
-        return await interaction.response.send_message(
-            embed=error_embed("Ticket category tidak ditemukan."), ephemeral=True)
-
-    gc["ticket"]["counter"] = gc["ticket"].get("counter", 0) + 1
-    number = gc["ticket"]["counter"]
-
-    role_id = gc["ticket"].get("support_role")
-    role    = interaction.guild.get_role(role_id) if role_id else None
-
-    overwrites = {
-        interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        interaction.user:               discord.PermissionOverwrite(view_channel=True, send_messages=True),
-        interaction.guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
-    }
-    if role:
-        overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-
-    ch = await category.create_text_channel(
-        name=f"ticket-{number:04d}-{interaction.user.name}",
-        overwrites=overwrites,
-        topic=f"Ticket #{number} for {interaction.user} ({interaction.user.id})"
-    )
-
-    # ── Log channel khusus untuk ticket ini ─────────────────────────────
-    log_ch = None
-    log_category = interaction.guild.get_channel(log_cat_id) if log_cat_id else None
-    if log_category:
-        log_overwrites = {
-            interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True),
-        }
-        if role:
-            log_overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=False)
-        try:
-            log_ch = await log_category.create_text_channel(
-                name=f"log-{number:04d}-{interaction.user.name}",
-                overwrites=log_overwrites,
-                topic=f"Log arsip untuk ticket #{number} ({interaction.user.id})"
-            )
-        except Exception:
-            log_ch = None
-
-    gc["active_tickets"][str(ch.id)] = {
-        "owner":       uid,
-        "log_channel": log_ch.id if log_ch else None,
-        "number":      number,
-    }
-    save_config(cfg)
-
-    welcome_embed = base_embed(
-        f"Ticket #{number:04d} — {interaction.user.display_name}",
-        f"Halo {interaction.user.mention}, tim support akan segera membantu.\nJelaskan keperluanmu di sini.",
-        color=COLOR_PRIMARY
-    )
-    await ch.send(embed=welcome_embed, view=TicketPersistentView())
-
-    if log_ch:
-        open_emb = base_embed("Ticket Opened", None, color=COLOR_PRIMARY)
-        open_emb.add_field(name="Ticket",  value=f"#{number:04d}", inline=True)
-        open_emb.add_field(name="User",    value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=True)
-        open_emb.add_field(name="Channel", value=ch.mention, inline=True)
-        try:
-            await log_ch.send(embed=open_emb)
-        except Exception:
-            pass
-
-    await interaction.response.send_message(
-        embed=success_embed(t(cfg, interaction.guild.id, "ticket_open", channel=ch.mention)),
-        ephemeral=True
-    )
+    async def _open_callback(self, interaction: discord.Interaction):
+        await handle_open_ticket(interaction, self.panel_id)
 
 # ══════════════════════════════════════════════════════════════════
 # GIVEAWAY SYSTEM
@@ -956,7 +1001,7 @@ async def end_giveaway(gw: dict):
             if assigned:
                 role_note = f"\nRole {win_role.mention} diberikan ke {assigned} pemenang."
     win_embed = discord.Embed(
-        title="Giveaway Winners!",
+        title=f"{e(ICON_WINNER, '🏆')} Giveaway Winners!".strip(),
         description=f"Selamat {winner_str}!\n\n**Prize:** {gw['prize']}{role_note}",
         color=COLOR_SUCCESS,
         timestamp=discord.utils.utcnow()
@@ -982,6 +1027,15 @@ async def cleanup_spam_cache():
 
 @tasks.loop(minutes=5)
 async def rotate_status():
+    if is_maintenance_on():
+        try:
+            await bot.change_presence(
+                activity=discord.Activity(type=discord.ActivityType.playing, name="Under Maintenance ⚠️"),
+                status=discord.Status.dnd
+            )
+        except Exception:
+            pass
+        return
     statuses = [
         discord.Activity(type=discord.ActivityType.watching, name="every move."),
         discord.Activity(type=discord.ActivityType.listening, name="!vx help"),
@@ -991,6 +1045,31 @@ async def rotate_status():
     import random as _r
     await bot.change_presence(activity=_r.choice(statuses), status=discord.Status.dnd)
 
+async def sync_premium_descriptions():
+    """Tempel prefix [💎] di deskripsi slash command yang lagi di-lock ke Premium,
+    lalu re-sync ke Discord biar kelihatan di UI slash command."""
+    locked  = set(cfg.get("premium_commands", []))
+    changed = False
+    for cmd in bot.tree.get_commands():
+        base   = ORIGINAL_CMD_DESCRIPTIONS.get(cmd.name, cmd.description.removeprefix("[💎] "))
+        wanted = f"[💎] {base}" if cmd.name in locked else base
+        if cmd.description != wanted:
+            cmd.description = wanted
+            changed = True
+        if hasattr(cmd, "commands"):
+            for sub in cmd.commands:
+                key      = f"{cmd.name} {sub.name}"
+                base_sub = ORIGINAL_CMD_DESCRIPTIONS.get(key, sub.description.removeprefix("[💎] "))
+                wanted_sub = f"[💎] {base_sub}" if key in locked else base_sub
+                if sub.description != wanted_sub:
+                    sub.description = wanted_sub
+                    changed = True
+    if changed:
+        try:
+            await bot.tree.sync()
+        except Exception as e:
+            logging.error(f"[{BOT_NAME}] Gagal sync deskripsi premium: {e}")
+
 # ══════════════════════════════════════════════════════════════════
 # BOT EVENTS
 # ══════════════════════════════════════════════════════════════════
@@ -998,23 +1077,40 @@ async def rotate_status():
 @bot.event
 async def on_ready():
     print(f"[{BOT_NAME}] Ready as {bot.user} (ID: {bot.user.id})")
-    bot.add_view(TicketPanelView())
-    bot.add_view(TicketPersistentView())
     for cmd in bot.tree.get_commands():
         ORIGINAL_CMD_DESCRIPTIONS[cmd.name] = cmd.description.removeprefix("[💎] ")
         if hasattr(cmd, "commands"):
             for sub in cmd.commands:
                 ORIGINAL_CMD_DESCRIPTIONS[f"{cmd.name} {sub.name}"] = sub.description.removeprefix("[💎] ")
+    await sync_premium_descriptions()
     try:
         synced = await bot.tree.sync()
         print(f"[{BOT_NAME}] Synced {len(synced)} slash commands.")
     except Exception as e:
         print(f"[{BOT_NAME}] Sync error: {e}")
-    cleanup_spam_cache.start()
-    rotate_status.start()
+
+    # Daftarkan ulang persistent views (ticket) supaya tombol tetap hidup setelah restart.
+    bot.add_view(TicketCloseView())
+    panel_ids = {pid for gcfg in cfg.get("guilds", {}).values() for pid in gcfg.get("ticket", {}).get("panels", {}).keys()}
+    for pid in panel_ids:
+        bot.add_view(TicketOpenView(pid))
+
+    if not cleanup_spam_cache.is_running():
+        cleanup_spam_cache.start()
+    if not rotate_status.is_running():
+        rotate_status.start()
     if not premium_expiry_task.is_running():
         premium_expiry_task.start()
     print(f"[{BOT_NAME}] Online — {len(bot.guilds)} guild(s).")
+
+@bot.event
+async def on_command_completion(ctx: commands.Context):
+    """Dipanggil discord.py setiap kali prefix command SUKSES dijalankan.
+    Ini sumber kebenaran untuk statistik 'Commands Runned' di profile."""
+    uid_str  = str(ctx.author.id)
+    cmds_run = cfg.setdefault("commands_run", {})
+    cmds_run[uid_str] = cmds_run.get(uid_str, 0) + 1
+    save_config(cfg)
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
@@ -1051,7 +1147,7 @@ async def on_message(message: discord.Message):
             )
         except discord.Forbidden:
             pass
-        log_id = gc_trap.get("mod_log_channel")
+        log_id = _fallback_log_channel(gc_trap)
         if log_id:
             log_ch = message.guild.get_channel(log_id)
             if log_ch:
@@ -1066,28 +1162,6 @@ async def on_message(message: discord.Message):
                 except Exception:
                     pass
         return
-
-    # ── Ticket message mirroring ke log channel masing-masing ──────────────
-    ticket_rec = gc_trap.get("active_tickets", {}).get(str(message.channel.id))
-    if ticket_rec and ticket_rec.get("log_channel"):
-        log_ch = message.guild.get_channel(ticket_rec["log_channel"])
-        if log_ch and (message.content or message.attachments):
-            mirror = discord.Embed(
-                description=(message.content or "*[lampiran saja]*")[:4000],
-                color=COLOR_PRIMARY,
-                timestamp=message.created_at
-            )
-            mirror.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
-            if message.attachments:
-                mirror.add_field(
-                    name="Attachments",
-                    value="\n".join(a.url for a in message.attachments)[:1024],
-                    inline=False
-                )
-            try:
-                await log_ch.send(embed=mirror)
-            except Exception:
-                pass
 
     # ── XP system ─────────────────────────────────────────────────────────
     gc = guild_cfg(cfg, message.guild.id)
@@ -1166,17 +1240,7 @@ async def on_message(message: discord.Message):
     elif low.startswith("!v ") or low == "!v":
         message.content = "!vx " + message.content[len("!v"):].lstrip()
     elif not message.content.startswith("!vx "):
-        uid_int   = message.author.id
-        gid_int   = message.guild.id
-        np_users  = cfg.get("no_prefix_users",  [])
-        np_guilds = cfg.get("no_prefix_guilds", [])
-        has_np    = (
-            uid_int == bot.owner_id
-            or uid_int in np_users
-            or gid_int in np_guilds
-            or user_has_premium(message.guild, message.author)
-        )
-        if has_np:
+        if user_has_no_prefix(message.guild, message.author):
             text  = message.content.strip()
             first = text.split()[0].lower() if text.split() else ""
             known = {c.name for c in bot.commands}
@@ -1223,7 +1287,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 @bot.event
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    if str(payload.emoji) != "🎉":
+    GIVEAWAY_EMOJI = ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉"
+    if str(payload.emoji) != GIVEAWAY_EMOJI:
         return
     gw = active_giveaways.get(payload.message_id)
     if not gw or gw.get("ended"):
@@ -1627,77 +1692,143 @@ async def pfx_xp(ctx, sub: str = "", *args):
 
 @bot.command(name="ticket")
 async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
-    sub = sub.lower()
-    gc  = guild_cfg(cfg, ctx.guild.id)
+    sub    = sub.lower()
+    gc     = guild_cfg(cfg, ctx.guild.id)
+    panels = gc["ticket"]["panels"]
+
+    def is_manager() -> bool:
+        return ctx.author.id == bot.owner_id or ctx.author.guild_permissions.manage_guild
+
+    def parse_title_desc(body: str, fallback_title: str, fallback_desc: str):
+        if "|" in body:
+            title, desc = body.split("|", 1)
+            title, desc = title.strip(), desc.strip()
+        else:
+            title, desc = body.strip(), ""
+        return (title or fallback_title), (desc or fallback_desc)
 
     if sub == "setup":
-        if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+        if not is_manager():
             return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
-        args = rest.split()
-        if len(args) < 2:
+        parts = rest.split()
+        if len(parts) < 3:
             return await ctx.send(embed=error_embed(
-                "Usage: `ticket setup <category_id> <log_category_id> [role_id] [max]`\n"
-                "*(log_category_id harus berupa Category, tempat log channel tiap ticket akan otomatis dibuat)*"
-            ))
+                "Usage: `ticket setup <panel_id> <category_id> <log_id> [role_id] [max]`\n"
+                "Contoh: `ticket setup support 123456 654321 999999 3`"))
+        panel_id = parts[0].lower()
+        if not re.fullmatch(r"[a-z0-9_-]{1,32}", panel_id):
+            return await ctx.send(embed=error_embed("Panel ID cuma boleh huruf kecil, angka, `-`, `_` (maks 32 karakter)."))
         try:
-            cat_id     = int(args[0])
-            log_cat_id = int(args[1])
-            role_id    = int(args[2]) if len(args) > 2 and args[2].isdigit() else None
-            max_t      = int(args[3]) if len(args) > 3 else 1
+            cat_id  = int(parts[1]); log_id = int(parts[2])
+            role_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else None
+            max_t   = int(parts[4]) if len(parts) > 4 else 1
         except ValueError:
-            return await ctx.send(embed=error_embed("ID harus angka."))
-        cat     = ctx.guild.get_channel(cat_id)
-        log_cat = ctx.guild.get_channel(log_cat_id)
-        if not cat or not isinstance(cat, discord.CategoryChannel):
-            return await ctx.send(embed=error_embed("Ticket category tidak ditemukan / bukan Category."))
-        if not log_cat or not isinstance(log_cat, discord.CategoryChannel):
-            return await ctx.send(embed=error_embed("Log category tidak ditemukan / bukan Category."))
-        gc["ticket"].update({
-            "category":     cat_id,
-            "log_category": log_cat_id,
-            "support_role": role_id,
-            "max_tickets":  max(1, min(5, max_t)),
+            return await ctx.send(embed=error_embed("Category ID / Log ID / Role ID harus angka."))
+        cat    = ctx.guild.get_channel(cat_id)
+        log_ch = ctx.guild.get_channel(log_id)
+        if not isinstance(cat, discord.CategoryChannel):
+            return await ctx.send(embed=error_embed("Category channel tidak ditemukan."))
+        if not log_ch:
+            return await ctx.send(embed=error_embed("Log channel tidak ditemukan."))
+        panel = panels.setdefault(panel_id, {
+            "title": "Support Tickets", "description": "Klik tombol untuk membuka support ticket.",
+            "message_id": None, "channel_id": None
+        })
+        panel.update({
+            "category": cat_id, "log_channel": log_id,
+            "support_role": role_id, "max_tickets": max(1, min(5, max_t))
         })
         save_config(cfg)
-        embed = base_embed("Ticket System Configured", None)
-        embed.add_field(name="Ticket Category", value=cat.name,     inline=True)
-        embed.add_field(name="Log Category",    value=log_cat.name, inline=True)
-        embed.add_field(name="Support Role",    value=f"<@&{role_id}>" if role_id else "None", inline=True)
-        embed.add_field(name="Max Tickets",     value=str(gc["ticket"]["max_tickets"]), inline=True)
-        embed.set_footer(text="Setiap ticket baru otomatis dapat log channel sendiri di dalam Log Category.")
+        embed = base_embed(f"Ticket Panel `{panel_id}` Configured", None)
+        embed.add_field(name="Category",     value=cat.name,                                inline=True)
+        embed.add_field(name="Log Channel",  value=log_ch.mention,                          inline=True)
+        embed.add_field(name="Support Role", value=f"<@&{role_id}>" if role_id else "None",  inline=True)
+        embed.add_field(name="Max Tickets",  value=str(panel["max_tickets"]),                inline=True)
+        embed.set_footer(text=f"Lanjut: ticket panel {panel_id} <title> | <description>")
         await ctx.send(embed=embed)
 
     elif sub == "panel":
-        if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+        if not is_manager():
             return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
-        if not gc["ticket"].get("category"):
-            return await ctx.send(embed=error_embed("Jalankan `ticket setup` dulu."))
-        try:
-            parts = shlex.split(rest) if rest.strip() else []
-        except ValueError:
-            parts = rest.split()
-        title_txt = parts[0] if len(parts) > 0 else "Support Tickets"
-        desc_txt  = parts[1] if len(parts) > 1 else "Klik tombol di bawah untuk membuka support ticket."
-        await ctx.send(embed=base_embed(title_txt, desc_txt), view=TicketPanelView())
+        parts = rest.split(maxsplit=1)
+        if not parts:
+            return await ctx.send(embed=error_embed("Usage: `ticket panel <panel_id> <title> | <description>`"))
+        panel_id = parts[0].lower()
+        panel    = panels.get(panel_id)
+        if not panel or not panel.get("category"):
+            return await ctx.send(embed=error_embed(f"Panel `{panel_id}` belum di-setup. Jalankan `ticket setup` dulu."))
+        title, desc = parse_title_desc(parts[1] if len(parts) > 1 else "", panel["title"], panel["description"])
+        panel["title"], panel["description"] = title, desc
+        msg = await ctx.send(embed=base_embed(title, desc, color=COLOR_PRIMARY), view=TicketOpenView(panel_id))
+        panel["message_id"], panel["channel_id"] = msg.id, msg.channel.id
+        save_config(cfg)
+
+    elif sub == "edit":
+        if not is_manager():
+            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        parts = rest.split(maxsplit=1)
+        if len(parts) < 2:
+            return await ctx.send(embed=error_embed("Usage: `ticket edit <panel_id> <title> | <description>`"))
+        panel_id = parts[0].lower()
+        panel    = panels.get(panel_id)
+        if not panel:
+            return await ctx.send(embed=error_embed(f"Panel `{panel_id}` tidak ditemukan."))
+        title, desc = parse_title_desc(parts[1], panel["title"], panel["description"])
+        panel["title"], panel["description"] = title, desc
+        save_config(cfg)
+        edited = False
+        if panel.get("message_id") and panel.get("channel_id"):
+            ch = ctx.guild.get_channel(panel["channel_id"])
+            if ch:
+                try:
+                    msg = await ch.fetch_message(panel["message_id"])
+                    await msg.edit(embed=base_embed(title, desc, color=COLOR_PRIMARY))
+                    edited = True
+                except Exception:
+                    pass
+        note = "Panel message ikut ter-update." if edited else "Config tersimpan, tapi panel message lama tidak ditemukan/sudah dihapus — kirim ulang dengan `ticket panel`."
+        await ctx.send(embed=success_embed(f"Panel `{panel_id}` diupdate.\n{note}"))
+
+    elif sub == "list":
+        if not panels:
+            return await ctx.send(embed=info_embed("Ticket Panels", "Belum ada panel yang di-setup."))
+        embed = base_embed("Ticket Panels", None)
+        for pid, p in panels.items():
+            cat = ctx.guild.get_channel(p.get("category"))    if p.get("category")    else None
+            log = ctx.guild.get_channel(p.get("log_channel")) if p.get("log_channel") else None
+            embed.add_field(
+                name=f"`{pid}` — {p.get('title', '?')}",
+                value=f"Category: {cat.mention if cat else '—'} · Log: {log.mention if log else '—'} · Max: {p.get('max_tickets', 1)}",
+                inline=False
+            )
+        await ctx.send(embed=embed)
+
+    elif sub == "delete":
+        if not is_manager():
+            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        panel_id = rest.strip().lower()
+        if panel_id not in panels:
+            return await ctx.send(embed=error_embed(f"Panel `{panel_id}` tidak ditemukan."))
+        del panels[panel_id]
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Panel `{panel_id}` dihapus. Ticket yang masih terbuka dari panel ini tidak otomatis ditutup."))
 
     elif sub == "close":
-        rec = gc["active_tickets"].get(str(ctx.channel.id))
-        if not rec:
-            return await ctx.send(embed=error_embed("Channel ini bukan ticket aktif."))
-        if (ctx.author.id != bot.owner_id
-                and not ctx.author.guild_permissions.manage_channels
-                and rec.get("owner") != ctx.author.id):
-            return await ctx.send(embed=error_embed("Kamu tidak bisa menutup ticket ini."))
-        reason_txt = rest.strip() if rest.strip() else "Closed via command."
-        await close_ticket(ctx.guild, ctx.channel, ctx.author, reason_txt)
+        async def _respond(**kw):
+            await ctx.send(**kw)
+        await close_ticket_channel(ctx.guild, ctx.channel, ctx.author, rest.strip(), _respond)
 
     else:
-        await ctx.send(embed=info_embed(
-            "Ticket",
-            '`ticket setup <cat_id> <log_category_id> [role_id] [max]`\n'
-            '`ticket panel "Judul" "Deskripsi"` — deskripsi opsional\n'
-            '`ticket close [reason]`'
-        ))
+        await ctx.send(embed=info_embed("Ticket", (
+            "`ticket setup <panel_id> <cat_id> <log_id> [role_id] [max]`\n"
+            "`ticket panel <panel_id> <title> | <description>`\n"
+            "`ticket edit <panel_id> <title> | <description>`\n"
+            "`ticket list`\n"
+            "`ticket delete <panel_id>`\n"
+            "`ticket close [reason]`\n\n"
+            "Setiap panel punya category, log channel, dan role support sendiri-sendiri — "
+            "jadi tiap jenis ticket bisa dipisah log-nya."
+        )))
 
 # ── GIVEAWAY ─────────────────────────────────────────────────────
 
@@ -1734,8 +1865,9 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
         try: msg = await ctx.channel.fetch_message(mid)
         except discord.NotFound: return await ctx.send(embed=error_embed("Pesan tidak ditemukan."))
         entries = []
+        target_emoji = ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉"
         for reaction in msg.reactions:
-            if str(reaction.emoji) == "🎉":
+            if str(reaction.emoji) == target_emoji or str(reaction.emoji) == "🎉":
                 async for user in reaction.users():
                     if not user.bot: entries.append(user.id)
                 break
@@ -1743,7 +1875,7 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
         count   = max(1, min(count, len(entries)))
         winners = random.sample(list(set(entries)), count)
         ws      = " ".join(f"<@{w}>" for w in winners)
-        embed   = discord.Embed(title="Giveaway Rerolled!", description=f"Pemenang baru: {ws}", color=COLOR_SUCCESS, timestamp=discord.utils.utcnow())
+        embed   = discord.Embed(title=f"{e(ICON_WINNER, '🏆')} Giveaway Rerolled!".strip(), description=f"Pemenang baru: {ws}", color=COLOR_SUCCESS, timestamp=discord.utils.utcnow())
         embed.set_footer(text=BOT_NAME)
         await ctx.send(content=ws, embed=embed)
     elif sub == "start":
@@ -1844,27 +1976,91 @@ async def pfx_antispam(ctx, sub: str = "", *, args: str = ""):
         save_config(cfg)
         await ctx.send(embed=base_embed("Honeypot Aktif", ch.mention + " — siapapun yang kirim pesan di sini langsung di-ban.", color=COLOR_ERROR))
     elif sub == "status":
-        trap   = gc.get("spam_trap_channel")
-        ch     = ctx.guild.get_channel(trap) if trap else None
-        log_id = gc.get("mod_log_channel")
-        log_ch = ctx.guild.get_channel(log_id) if log_id else None
-        embed  = base_embed("Honeypot Status", "Aktif di " + ch.mention if ch else "Tidak aktif.", color=COLOR_ERROR if ch else COLOR_INFO)
-        embed.add_field(name="Log Channel", value=log_ch.mention if log_ch else "Belum diatur", inline=True)
-        await ctx.send(embed=embed)
-    elif sub == "logchannel":
-        if not args:
-            gc["mod_log_channel"] = None
-            save_config(cfg)
-            return await ctx.send(embed=success_embed("Mod log channel dinonaktifkan."))
-        ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else (ctx.guild.get_channel(int(args.strip())) if args.strip().isdigit() else None)
-        if not ch: return await ctx.send(embed=error_embed("Channel tidak ditemukan."))
-        gc["mod_log_channel"] = ch.id
-        save_config(cfg)
-        await ctx.send(embed=success_embed(f"Mod log channel diset ke {ch.mention}."))
+        trap = gc.get("spam_trap_channel")
+        ch   = ctx.guild.get_channel(trap) if trap else None
+        await ctx.send(embed=base_embed("Honeypot Status", "Aktif di " + ch.mention if ch else "Tidak aktif.", color=COLOR_ERROR if ch else COLOR_INFO))
     else:
-        await ctx.send(embed=info_embed("Antispam Honeypot", "`antispam setchannel #channel`\n`antispam setchannel` (nonaktifkan)\n`antispam logchannel #channel`\n`antispam status`"))
+        await ctx.send(embed=info_embed("Antispam Honeypot", "`antispam setchannel #channel`\n`antispam setchannel` (nonaktifkan)\n`antispam status`"))
 
 # ── OWNER COMMANDS ────────────────────────────────────────────────
+
+@bot.command(name="maintenance")
+@is_owner()
+async def pfx_maintenance(ctx, action: str = "", *, reason: str = ""):
+    action = action.lower()
+    m      = cfg.setdefault("maintenance", {"enabled": False, "reason": "", "since": None})
+    if action == "on":
+        m["enabled"] = True
+        m["reason"]  = reason.strip()
+        m["since"]   = discord.utils.utcnow().isoformat()
+        save_config(cfg)
+        try:
+            await bot.change_presence(
+                activity=discord.Activity(type=discord.ActivityType.playing, name="Under Maintenance ⚠️"),
+                status=discord.Status.dnd
+            )
+        except Exception:
+            pass
+        desc = f"**{BOT_NAME}** sekarang dalam mode **maintenance**.\nSemua command ditutup untuk semua orang kecuali owner."
+        if m["reason"]:
+            desc += f"\n\n**Alasan:** {m['reason']}"
+        await ctx.send(embed=warning_embed("Maintenance Mode: ON", desc))
+    elif action == "off":
+        m["enabled"] = False
+        m["reason"]  = ""
+        m["since"]   = None
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"**{BOT_NAME}** sudah normal lagi. Semua command dibuka kembali."))
+    elif action == "status":
+        if m.get("enabled"):
+            since = m.get("since")
+            since_txt = discord.utils.format_dt(datetime.datetime.fromisoformat(since), "R") if since else "?"
+            desc = f"Status: **AKTIF** — sejak {since_txt}"
+            if m.get("reason"):
+                desc += f"\n**Alasan:** {m['reason']}"
+        else:
+            desc = "Status: **Tidak aktif.** Bot berjalan normal."
+        await ctx.send(embed=info_embed("Maintenance Status", desc))
+    else:
+        await ctx.send(embed=info_embed("Maintenance",
+            "`maintenance on [alasan]` — kunci semua command kecuali owner\n"
+            "`maintenance off` — buka lagi\n"
+            "`maintenance status` — cek status sekarang"))
+
+@bot.command(name="premiumlock")
+@is_owner()
+async def pfx_premiumlock(ctx, action: str = "", *, cmd_name: str = ""):
+    action = action.lower()
+    locked = cfg.setdefault("premium_commands", [])
+    cmd_name = cmd_name.strip().lower()
+    if action == "add":
+        if not cmd_name:
+            return await ctx.send(embed=error_embed("Sebutkan nama command. Contoh: `premiumlock add addemoji`"))
+        if cmd_name in OWNER_ONLY_CMDS:
+            return await ctx.send(embed=error_embed("Command owner-only tidak bisa dikunci ke Premium."))
+        if cmd_name not in locked:
+            locked.append(cmd_name)
+            save_config(cfg)
+        await sync_premium_descriptions()
+        await ctx.send(embed=success_embed(f"Command `{cmd_name}` sekarang **Premium only** (prefix & slash)."))
+    elif action == "remove":
+        if cmd_name in locked:
+            locked.remove(cmd_name)
+            save_config(cfg)
+            await sync_premium_descriptions()
+            await ctx.send(embed=success_embed(f"Command `{cmd_name}` dibuka lagi untuk semua orang."))
+        else:
+            await ctx.send(embed=error_embed(f"Command `{cmd_name}` tidak ada di daftar premium lock."))
+    elif action == "list":
+        if not locked:
+            return await ctx.send(embed=info_embed("Premium Locked Commands", "Belum ada command yang dikunci ke Premium."))
+        await ctx.send(embed=info_embed("Premium Locked Commands", "\n".join(f"`{c}`" for c in locked)))
+    else:
+        await ctx.send(embed=info_embed("Premium Lock",
+            "`premiumlock add <command>` — kunci command ke Premium only\n"
+            "`premiumlock remove <command>` — buka lagi command\n"
+            "`premiumlock list` — lihat semua command yang dikunci\n\n"
+            "Nama command pakai nama slash-nya, contoh untuk subcommand: `ticket setup`."))
 
 @bot.command(name="noprefix")
 @is_owner()
@@ -1938,10 +2134,11 @@ async def pfx_botrole(ctx, action: str = "", member: discord.Member = None, role
         bot_roles[str(member.id)] = role
         save_config(cfg)
         info = BOT_ROLE_BADGES[role]
-        embed = discord.Embed(title="Bot Role Assigned", description=f"{member.mention} → **{info['label']}**", color=info["color"], timestamp=discord.utils.utcnow())
+        badge_tag = (info["emoji"] + " ") if info.get("emoji") else ""
+        embed = discord.Embed(title="Bot Role Assigned", description=f"{member.mention} → {badge_tag}**{info['label']}**", color=info["color"], timestamp=discord.utils.utcnow())
         embed.set_thumbnail(url=member.display_avatar.url)
         try:
-            dm = discord.Embed(title="Bot Role Granted!", description=f"Kamu mendapat role **{info['label']}** di {BOT_NAME}!\nCek profil: `profile`", color=info["color"])
+            dm = discord.Embed(title="Bot Role Granted!", description=f"Kamu mendapat role {badge_tag}**{info['label']}** di {BOT_NAME}!\nCek profil: `profile`", color=info["color"])
             await member.send(embed=dm)
         except Exception: pass
         await ctx.send(embed=embed)
@@ -1963,7 +2160,7 @@ async def pfx_grantpremium(ctx, member: discord.Member = None, duration: str = "
         premium_expiry.pop(str(member.id), None)
         save_config(cfg)
         try:
-            await member.send(embed=base_embed("Premium Ended", f"Premium {BOT_NAME} kamu telah berakhir.", color=COLOR_ERROR))
+            await member.send(embed=base_embed("Premium Ended", f"Premium {BOT_NAME} kamu telah berakhir. Akses command premium dan no-prefix ikut dicabut.", color=COLOR_ERROR))
         except Exception: pass
         return await ctx.send(embed=success_embed(f"Premium dicabut dari {member.mention}."))
     expiry_dt = None
@@ -1981,127 +2178,14 @@ async def pfx_grantpremium(ctx, member: discord.Member = None, duration: str = "
     embed = discord.Embed(title="Premium Granted!", description=f"{member.mention} sekarang **Premium**!\nExpires: {dur_display}", color=COLOR_WARNING, timestamp=discord.utils.utcnow())
     embed.set_thumbnail(url=member.display_avatar.url)
     try:
-        dm = discord.Embed(title="Premium Activated!", description=f"Premium {BOT_NAME} aktif!\nExpires: {dur_display}\n\nSemua fitur premium terbuka.", color=COLOR_WARNING)
+        dm = discord.Embed(
+            title="Premium Activated!",
+            description=f"Premium {BOT_NAME} aktif!\nExpires: {dur_display}\n\nSemua command premium terbuka dan **no-prefix otomatis aktif** — cukup ketik nama command tanpa `!vx`.",
+            color=COLOR_WARNING
+        )
         await member.send(embed=dm)
     except Exception: pass
     await ctx.send(embed=embed)
-
-def _apply_premium_marker(name: str, locked: bool) -> None:
-    """Tandai/bersihkan prefix [💎] di description slash command yang di-lock premium."""
-    cmd = bot.tree.get_command(name)
-    if not cmd:
-        return
-    base = ORIGINAL_CMD_DESCRIPTIONS.get(name, cmd.description.removeprefix("[\U0001F48E] "))
-    cmd.description = ("[\U0001F48E] " + base) if locked else base
-
-@bot.command(name="premiumlock")
-@is_owner()
-async def pfx_premiumlock(ctx, action: str = "", *, command_name: str = ""):
-    """Atur command apa saja yang cuma bisa dipakai user Premium."""
-    action = action.lower()
-    locked = cfg.setdefault("premium_commands", [])
-    known_prefix = {c.name for c in bot.commands}
-    known_slash  = {c.name for c in bot.tree.get_commands()}
-
-    if action in ("add", "lock"):
-        name = command_name.strip().lower()
-        if not name:
-            return await ctx.send(embed=error_embed("Sebutkan nama command. Contoh: `premiumlock add rank`"))
-        if name not in known_prefix and name not in known_slash:
-            return await ctx.send(embed=error_embed(f"Command `{name}` tidak ditemukan."))
-        if name in OWNER_ONLY_CMDS:
-            return await ctx.send(embed=error_embed("Command owner-only tidak bisa di-lock premium."))
-        if name in locked:
-            return await ctx.send(embed=error_embed(f"Command `{name}` sudah di-lock."))
-        locked.append(name)
-        save_config(cfg)
-        _apply_premium_marker(name, True)
-        try:
-            await bot.tree.sync()
-        except Exception:
-            pass
-        await ctx.send(embed=success_embed(f"Command `{name}` sekarang **Premium Only**."))
-
-    elif action in ("remove", "unlock"):
-        name = command_name.strip().lower()
-        if name not in locked:
-            return await ctx.send(embed=error_embed(f"Command `{name}` tidak sedang di-lock."))
-        locked.remove(name)
-        save_config(cfg)
-        _apply_premium_marker(name, False)
-        try:
-            await bot.tree.sync()
-        except Exception:
-            pass
-        await ctx.send(embed=success_embed(f"Command `{name}` sudah bisa dipakai semua user lagi."))
-
-    elif action == "list":
-        if not locked:
-            return await ctx.send(embed=info_embed("Premium Locked Commands", "Belum ada command yang di-lock."))
-        await ctx.send(embed=info_embed("Premium Locked Commands", "\n".join(f"`{c}`" for c in locked)))
-
-    else:
-        await ctx.send(embed=info_embed(
-            "Premium Lock",
-            "`premiumlock add <command>` — kunci command untuk premium only\n"
-            "`premiumlock remove <command>` — buka kunci\n"
-            "`premiumlock list` — lihat semua command yang di-lock"
-        ))
-
-@bot.command(name="maintenance")
-@is_owner()
-async def pfx_maintenance(ctx, action: str = "status", *, reason: str = ""):
-    """Kunci seluruh command bot kecuali untuk owner."""
-    action = action.lower()
-    state  = cfg.setdefault("maintenance", {"enabled": False, "reason": ""})
-
-    if action == "on":
-        state["enabled"] = True
-        state["reason"]  = reason or "Sedang ada perbaikan sistem."
-        save_config(cfg)
-        await ctx.send(embed=base_embed(
-            "Maintenance Mode: ON",
-            f"Semua command dikunci kecuali untuk owner.\n**Alasan:** {state['reason']}",
-            color=COLOR_WARNING
-        ))
-    elif action == "off":
-        state["enabled"] = False
-        save_config(cfg)
-        await ctx.send(embed=success_embed("Maintenance mode dimatikan. Semua command sudah normal kembali."))
-    elif action == "status":
-        status_txt = "🟢 OFF" if not state["enabled"] else "🔴 ON"
-        desc = f"Status: **{status_txt}**"
-        if state["enabled"] and state.get("reason"):
-            desc += f"\nAlasan: {state['reason']}"
-        await ctx.send(embed=info_embed("Maintenance Status", desc))
-    else:
-        await ctx.send(embed=info_embed(
-            "Maintenance",
-            "`maintenance on [reason]` · `maintenance off` · `maintenance status`"
-        ))
-
-@bot.command(name="syncsupport")
-@is_owner()
-async def pfx_syncsupport(ctx):
-    """Backfill badge USER untuk semua member yang sudah ada di server support."""
-    support_server_id = int(os.getenv("SUPPORT_SERVER_ID", "0"))
-    if not support_server_id:
-        return await ctx.send(embed=error_embed("`SUPPORT_SERVER_ID` belum di-set di environment variable."))
-    guild = bot.get_guild(support_server_id)
-    if not guild:
-        return await ctx.send(embed=error_embed("Bot tidak berada di server support tersebut (cek `SUPPORT_SERVER_ID`)."))
-    support_members = cfg.setdefault("support_server_members", [])
-    added = 0
-    for m in guild.members:
-        if m.bot:
-            continue
-        if m.id not in support_members:
-            support_members.append(m.id)
-            added += 1
-    save_config(cfg)
-    await ctx.send(embed=success_embed(
-        f"Sync selesai. **{added}** member baru dapat badge **USER**.\nTotal member ber-badge: **{len(support_members)}**."
-    ))
 
 @bot.command(name="blacklist")
 @is_owner()
@@ -2151,10 +2235,7 @@ async def pfx_vxleave(ctx, guild_id: str = ""):
 @bot.command(name="help")
 async def pfx_help(ctx):
     is_owner_user = (ctx.author.id == bot.owner_id)
-    np_users  = cfg.get("no_prefix_users",  [])
-    np_guilds = cfg.get("no_prefix_guilds", [])
-    has_np    = (is_owner_user or ctx.author.id in np_users or (ctx.guild and ctx.guild.id in np_guilds)
-                 or user_has_premium(ctx.guild, ctx.author))
+    has_np        = user_has_no_prefix(ctx.guild, ctx.author)
     embed = discord.Embed(
         title=f"{BOT_NAME} — Command Reference",
         description=(
@@ -2179,25 +2260,25 @@ async def pfx_help(ctx):
     embed.add_field(name=sec(ICON_INFO, "Info"),
         value="`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`", inline=False)
     embed.add_field(name=sec(ICON_TICKET, "Ticket"),
-        value='`ticket setup <cat> <log_cat> [role] [max]` · `ticket panel "Judul" "Deskripsi"` · `ticket close [reason]`', inline=False)
+        value="`ticket setup` · `ticket panel` · `ticket edit` · `ticket list` · `ticket delete` · `ticket close`", inline=False)
     embed.add_field(name=sec(ICON_LEVEL, "Level & XP"),
         value="`rank` · `leaderboard` · `level toggle/setchannel/status` · `xp`", inline=False)
     embed.add_field(name=sec(ICON_GIVEAWAY, "Giveaway"),
         value="`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`", inline=False)
     embed.add_field(name=sec(ICON_ANTISPAM, "Antispam"),
-        value="`antispam setchannel #ch` · `antispam logchannel #ch` · `antispam status`", inline=False)
+        value="`antispam setchannel #ch` · `antispam status`", inline=False)
     embed.add_field(name=sec(ICON_LANGUAGE, "Language"),
         value="`language list` · `language set <code>`", inline=False)
-    embed.add_field(name=sec(ICON_OWNER, "Owner Only"), value=(
-        "`maintenance on/off/status`\n"
-        "`noprefix grant/revoke/list`\n"
-        "`botrole set/remove/list`\n"
-        "`grantpremium @user <durasi>/revoke`\n"
-        "`premiumlock add/remove/list <command>`\n"
-        "`syncsupport`\n"
-        "`blacklist add/remove/list`\n"
-        "`vxleave <guild_id>`"
-    ), inline=False)
+    if is_owner_user:
+        embed.add_field(name=sec(ICON_OWNER, "Owner Only"), value=(
+            "`maintenance on/off/status`\n"
+            "`noprefix grant/revoke/list`\n"
+            "`botrole set/remove/list`\n"
+            "`grantpremium @user <durasi>/revoke`\n"
+            "`premiumlock add/remove/list`\n"
+            "`blacklist add/remove/list`\n"
+            "`vxleave <guild_id>`"
+        ), inline=False)
     embed.set_footer(text=BOT_NAME + " v" + BOT_VERSION + " • " + BOT_TAGLINE)
     await ctx.send(embed=embed)
 
@@ -2304,12 +2385,8 @@ async def slash_ping(i: discord.Interaction):
 
 @bot.tree.command(name="help", description="Lihat semua command VALLENT EXS.")
 async def slash_help(i: discord.Interaction):
-    ctx_like = type("C", (), {"author": i.user, "guild": i.guild})()
     is_owner_user = (i.user.id == bot.owner_id)
-    np_users  = cfg.get("no_prefix_users",  [])
-    np_guilds = cfg.get("no_prefix_guilds", [])
-    has_np    = (is_owner_user or i.user.id in np_users or (i.guild and i.guild.id in np_guilds)
-                 or user_has_premium(i.guild, i.user))
+    has_np        = user_has_no_prefix(i.guild, i.user)
     embed = discord.Embed(
         title=f"{BOT_NAME} — Command Reference",
         description=f"*{BOT_TAGLINE}*\n\nPrefix: **`!vx`** · **`!v`**\n" + ("✨ **No-prefix aktif**\n" if has_np else "") + "\u200b",
@@ -2318,10 +2395,20 @@ async def slash_help(i: discord.Interaction):
     embed.add_field(name="Moderation", value="`kick` · `ban` · `unban` · `timeout` · `untimeout`\n`warn` · `warnings` · `unwarn` · `clearwarnings`\n`purge` · `lock` · `unlock` · `slowmode`", inline=False)
     embed.add_field(name="Role & Voice", value="`addrole` · `removerole` · `move`", inline=False)
     embed.add_field(name="Info", value="`userinfo` · `serverinfo` · `avatar` · `ping` · `profile`", inline=False)
-    embed.add_field(name="Ticket", value='`ticket setup <cat> <log_cat> [role] [max]` · `ticket panel "Judul" "Deskripsi"` · `ticket close [reason]`', inline=False)
+    embed.add_field(name="Ticket", value="`ticket setup` · `ticket panel` · `ticket edit` · `ticket list` · `ticket delete` · `ticket close`", inline=False)
     embed.add_field(name="Level & XP", value="`rank` · `leaderboard` · `level` · `xp`", inline=False)
     embed.add_field(name="Giveaway", value="`giveaway start/end/reroll/list`", inline=False)
     embed.add_field(name="Antispam", value="`antispam setchannel` · `antispam status`", inline=False)
+    if is_owner_user:
+        embed.add_field(name="Owner Only", value=(
+            "`maintenance on/off/status`\n"
+            "`noprefix grant/revoke/list`\n"
+            "`botrole set/remove/list`\n"
+            "`grantpremium @user <durasi>/revoke`\n"
+            "`premiumlock add/remove/list`\n"
+            "`blacklist add/remove/list`\n"
+            "`vxleave <guild_id>`"
+        ), inline=False)
     embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {BOT_TAGLINE}")
     await i.response.send_message(embed=embed, ephemeral=True)
 
@@ -2349,9 +2436,11 @@ async def on_member_join(member: discord.Member):
     embed.set_thumbnail(url=member.display_avatar.url)
     badge_lines = []
     for b in badges:
-        info = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
-        badge_lines.append("\u2022 **" + info["label"] + "**")
-    embed.add_field(name="ALL BADGES", value="\n".join(badge_lines), inline=True)
+        info      = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
+        emoji_str = info.get("emoji", "")
+        prefix    = (emoji_str + " ") if emoji_str else "\u2022 "
+        badge_lines.append(prefix + "**" + info["label"] + "**")
+    embed.add_field(name=f"{e(ICON_BADGES, '✨')} ALL BADGES".strip(), value="\n".join(badge_lines), inline=True)
     embed.add_field(name="Bot Role", value=role.capitalize(), inline=True)
     embed.set_footer(text=BOT_NAME + " \u2022 " + BOT_TAGLINE)
     try:
