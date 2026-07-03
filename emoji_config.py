@@ -22,39 +22,39 @@ Contoh:
 # BADGE EMOJI
 # ══════════════════════════════════════════════════════════════════
 
-BADGE_FOUNDER    = "<:emoji_56:1522402451104464946>"   # Emoji untuk badge FOUNDER
+BADGE_FOUNDER    = "<:emoji_50:1522428696479268994>"   # Emoji untuk badge FOUNDER
 BADGE_DEVELOPER  = "<:emoji_57:1522399082918969444>"   # Emoji untuk badge DEVELOPER
 BADGE_MANAGEMENT = "<:emoji_53:1522398735886319698>"   # Emoji untuk badge MANAGEMENT
 BADGE_STAFF      = "<:emoji_60:1522404179661033604>"   # Emoji untuk badge STAFF
 BADGE_PREMIUM    = "<:emoji_56:1522399040753635428>"   # Emoji untuk badge PREMIUM
 BADGE_NOPREFIX   = "<:emoji_51:1522398604562665573>"   # Emoji untuk badge NO PREFIX
-BADGE_USER       = "<:emoji_51:1522398604562665573>"   # Emoji untuk badge USER
+BADGE_USER       = "<:emoji_55:1522429080023339028>"   # Emoji untuk badge USER
 
 # ══════════════════════════════════════════════════════════════════
 # UI / SECTION EMOJI (untuk help, info, dll)
 # ══════════════════════════════════════════════════════════════════
 
 # Section headers di !vx help
-ICON_MODERATION  = "<:emoji_58:1522404099625324554>"   # Icon untuk section Moderation
-ICON_ROLE        = "<:emoji_60:1522400613160456242>"   # Icon untuk section Role & Voice
+ICON_MODERATION  = "<:emoji_52:1522428807418478783>"   # Icon untuk section Moderation
+ICON_ROLE        = "<:emoji_57:1522429186860519483>"   # Icon untuk section Role & Voice
 ICON_INFO        = "<:emoji_48:1522398507066196059>"   # Icon untuk section Info
 ICON_TICKET      = "<a:emoji_55:1522398979432775700>"   # Icon untuk section Ticket
 ICON_LEVEL       = "<:emoji_57:1522403174550343831>"   # Icon untuk section Level & XP
 ICON_GIVEAWAY    = "<:emoji_61:1522400637646671912>"   # Icon untuk section Giveaway
 ICON_ANTISPAM    = "<:emoji_61:1522404287898976317>"   # Icon untuk section Antispam
 ICON_LANGUAGE    = "<:emoji_59:1522399712563564595>"   # Icon untuk section Language
-ICON_OWNER       = "<:emoji_47:1522398475969499167>"   # Icon untuk section Owner Only
+ICON_OWNER       = "<:emoji_56:1522402451104464946>"   # Icon untuk section Owner Only
 
 # Status / result icons
-ICON_SUCCESS     = "<:emoji_62:1522401257090842744>"   # Icon sukses (checklist, dll)
-ICON_ERROR       = "<:emoji_55:1522401406512922724>"   # Icon error / gagal
-ICON_WARNING     = "<:warn:1522210433933639844>"   # Icon warning / peringatan
+ICON_SUCCESS     = "<:emoji_59:1522429663690100756>"   # Icon sukses (checklist, dll)
+ICON_ERROR       = "<:emoji_60:1522431940492398754>"   # Icon error / gagal
+ICON_WARNING     = "<:emoji_61:1522432288468762704>"   # Icon warning / peringatan
 ICON_LOADING     = "<a:loading:1522215143830847602>"   # Icon loading / proses
 
 # Profile card icons
 ICON_PROFILE     = "<:author:1522209388537053194>"   # Icon di header profile
-ICON_BADGES      = "<:emoji_52:1522398680467111946>"   # Icon di ALL BADGES
-ICON_COMMANDS    = "<:emoji_55:1522411855845527674>"   # Icon di Commands Runned
+ICON_BADGES      = "<:emoji_54:1522407563147219074>"   # Icon di ALL BADGES
+ICON_COMMANDS    = "<:emoji_53:1522428945100705812>"   # Icon di Commands Runned
 ICON_PREMIUM_TAG = "<:emoji_56:1522399040753635428>"   # Icon di keterangan premium
 
 # Ticket icons
