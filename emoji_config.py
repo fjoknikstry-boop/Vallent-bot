@@ -26,7 +26,7 @@ BADGE_FOUNDER    = "<:emoji_50:1522428696479268994>"   # Emoji untuk badge FOUND
 BADGE_DEVELOPER  = "<:emoji_57:1522399082918969444>"   # Emoji untuk badge DEVELOPER
 BADGE_MANAGEMENT = "<:emoji_53:1522398735886319698>"   # Emoji untuk badge MANAGEMENT
 BADGE_STAFF      = "<:emoji_60:1522404179661033604>"   # Emoji untuk badge STAFF
-BADGE_PREMIUM    = "<:emoji_63:1522444610239074397>"   # Emoji untuk badge PREMIUM
+BADGE_PREMIUM    = "<:emoji_63:1522588934498943016>"   # Emoji untuk badge PREMIUM
 BADGE_NOPREFIX   = "<:emoji_51:1522398604562665573>"   # Emoji untuk badge NO PREFIX
 BADGE_USER       = "<:emoji_55:1522429080023339028>"   # Emoji untuk badge USER
 
