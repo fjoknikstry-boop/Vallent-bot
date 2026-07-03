@@ -20,6 +20,7 @@ Features:
 """
 
 import discord
+import aiohttp
 from discord import app_commands
 from discord.ext import commands, tasks
 import json
@@ -45,6 +46,7 @@ from emoji_config import (
     ICON_BOOST,
     e
 )
+import rank_card
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -498,14 +500,14 @@ BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "dev
 BOT_ROLE_BADGES = {
     # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
     "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
-    "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
-    "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
-    "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
-    "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
-    "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
+    "developer":      {"label": "• DEVELOPER",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
+    "management":     {"label": "• MANAGEMENT",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
+    "server_manager": {"label": "• SERVER MANAGER", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
+    "moderator":      {"label": "• MODERATOR",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
+    "staff":          {"label": "• STAFF",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
     "premium":        {"label": "• PREMIUM",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
     "noprefix":       {"label": "• NOPREFIX",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
-    "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
+    "user":           {"label": "• USER",           "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
 def get_support_guild() -> Optional[discord.Guild]:
@@ -1272,16 +1274,30 @@ async def on_message(message: discord.Message):
                 lvl_ch_id = gc.get("level_channel")
                 lvl_ch    = message.guild.get_channel(lvl_ch_id) if lvl_ch_id else message.channel
                 if lvl_ch:
-                    lvl_emb = discord.Embed(
-                        description=f"{message.author.mention} leveled up to **Level {data['level']}**!",
-                        color=COLOR_ERROR
-                    )
-                    lvl_emb.set_author(name="Level Up!", icon_url=message.author.display_avatar.url)
-                    lvl_emb.set_footer(text=BOT_NAME)
                     try:
-                        await lvl_ch.send(embed=lvl_emb, delete_after=30)
-                    except Exception:
-                        pass
+                        avatar_url = str(message.author.display_avatar.with_format("png").with_size(256))
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                                avatar_bytes = await resp.read()
+                        is_prem = user_has_premium(message.guild, message.author)
+                        buf = await asyncio.to_thread(
+                            rank_card.render_levelup_card,
+                            avatar_bytes, message.author.display_name, data["level"], is_prem
+                        )
+                        file = discord.File(buf, filename="levelup.png")
+                        await lvl_ch.send(content=message.author.mention, file=file, delete_after=30)
+                    except Exception as e:
+                        logging.error(f"[{BOT_NAME}] Gagal render level-up card: {e}")
+                        lvl_emb = discord.Embed(
+                            description=f"{message.author.mention} leveled up to **Level {data['level']}**!",
+                            color=COLOR_ERROR
+                        )
+                        lvl_emb.set_author(name="Level Up!", icon_url=message.author.display_avatar.url)
+                        lvl_emb.set_footer(text=BOT_NAME)
+                        try:
+                            await lvl_ch.send(embed=lvl_emb, delete_after=30)
+                        except Exception:
+                            pass
 
     # ── Anti cross-channel spam ────────────────────────────────────────────
     uid         = message.author.id
@@ -1670,40 +1686,32 @@ async def pfx_profile(ctx, member: discord.Member = None):
 
 @bot.command(name="rank")
 async def pfx_rank(ctx, member: discord.Member = None):
-    import aiohttp, io
+    import aiohttp
     target      = member or ctx.author
     gc          = guild_cfg(cfg, ctx.guild.id)
     data        = get_member_xp(gc, str(target.id))
     lvl, cx, nx = xp_progress(data["xp"])
     all_m       = sorted(gc["members_xp"].items(), key=lambda x: x[1].get("xp", 0), reverse=True)
     rank        = next((i+1 for i, (uid, _) in enumerate(all_m) if uid == str(target.id)), 1)
-    pct         = int((cx / max(nx, 1)) * 100)
-    avatar_url  = str(target.display_avatar.with_format("png").with_size(256))
     is_prem     = user_has_premium(ctx.guild, target)
-    bar_color   = "F59E0B" if is_prem else "8B0000"
-    api_url     = (
-        "https://some-random-api.com/canvas/misc/rank-card"
-        f"?username={target.display_name}"
-        f"&avatar={avatar_url}"
-        f"&currentxp={cx}&neededxp={nx}"
-        f"&level={lvl}&rank={rank}"
-        f"&barcolor={bar_color}"
-    )
+    avatar_url  = str(target.display_avatar.with_format("png").with_size(256))
+
     async with ctx.typing():
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status == 200 and "image" in resp.content_type:
-                        img_bytes = await resp.read()
-                        file  = discord.File(io.BytesIO(img_bytes), filename="rank.png")
-                        embed = discord.Embed(color=int(bar_color, 16), timestamp=discord.utils.utcnow())
-                        embed.set_author(name=f"Rank Card — {target.display_name}", icon_url=target.display_avatar.url)
-                        embed.set_image(url="attachment://rank.png")
-                        embed.set_footer(text=f"Total XP: {data['xp']:,} · Messages: {data.get('messages',0):,} · {ctx.guild.name}")
-                        return await ctx.send(file=file, embed=embed)
-        except Exception:
-            pass
-    # Fallback embed
+                async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    avatar_bytes = await resp.read()
+            buf = await asyncio.to_thread(
+                rank_card.render_rank_card,
+                avatar_bytes, target.display_name, lvl, rank, cx, nx,
+                data["xp"], is_prem, data.get("messages", 0)
+            )
+            file = discord.File(buf, filename="rank.png")
+            return await ctx.send(file=file)
+        except Exception as e:
+            logging.error(f"[{BOT_NAME}] Gagal render rank card: {e}")
+    # Fallback embed teks kalau render gambar gagal total
+    pct   = int((cx / max(nx, 1)) * 100)
     bar   = "▰" * int(pct/100*16) + "▱" * (16-int(pct/100*16))
     embed = discord.Embed(
         description=(
@@ -2598,8 +2606,6 @@ async def pfx_ownerhelp(ctx):
 @bot.tree.command(name="rank", description="Lihat rank card XP kamu atau member lain.")
 @app_commands.describe(member="Member yang ingin dilihat ranknya")
 async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = None):
-    ctx_like = type("C", (), {"guild": i.guild, "author": i.user, "channel": i.channel,
-                              "typing": i.channel.typing, "send": i.followup.send})()
     await i.response.defer()
     target      = member or i.user
     gc          = guild_cfg(cfg, i.guild.id)
@@ -2607,28 +2613,25 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
     lvl, cx, nx = xp_progress(data["xp"])
     all_m       = sorted(gc["members_xp"].items(), key=lambda x: x[1].get("xp",0), reverse=True)
     rank        = next((idx+1 for idx,(uid,_) in enumerate(all_m) if uid == str(target.id)), 1)
-    pct         = int((cx / max(nx,1)) * 100)
+    is_prem     = user_has_premium(i.guild, target)
     avatar_url  = str(target.display_avatar.with_format("png").with_size(256))
-    bar_color   = "F59E0B" if user_has_premium(i.guild, target) else "8B0000"
-    import aiohttp, io
-    api_url = (
-        "https://some-random-api.com/canvas/misc/rank-card"
-        f"?username={target.display_name}&avatar={avatar_url}"
-        f"&currentxp={cx}&neededxp={nx}&level={lvl}&rank={rank}&barcolor={bar_color}"
-    )
+
+    import aiohttp
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status == 200 and "image" in resp.content_type:
-                    img_bytes = await resp.read()
-                    file  = discord.File(io.BytesIO(img_bytes), filename="rank.png")
-                    embed = discord.Embed(color=int(bar_color,16), timestamp=discord.utils.utcnow())
-                    embed.set_author(name=f"Rank Card — {target.display_name}", icon_url=target.display_avatar.url)
-                    embed.set_image(url="attachment://rank.png")
-                    embed.set_footer(text=f"Total XP: {data['xp']:,} · Messages: {data.get('messages',0):,}")
-                    return await i.followup.send(file=file, embed=embed)
-    except Exception:
-        pass
+            async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                avatar_bytes = await resp.read()
+        buf = await asyncio.to_thread(
+            rank_card.render_rank_card,
+            avatar_bytes, target.display_name, lvl, rank, cx, nx,
+            data["xp"], is_prem, data.get("messages", 0)
+        )
+        file = discord.File(buf, filename="rank.png")
+        return await i.followup.send(file=file)
+    except Exception as e:
+        logging.error(f"[{BOT_NAME}] Gagal render rank card: {e}")
+
+    pct   = int((cx / max(nx,1)) * 100)
     bar   = "▰"*int(pct/100*16) + "▱"*(16-int(pct/100*16))
     embed = discord.Embed(description=f"**@{target.display_name}**\n\n**Level: {lvl}** | **XP: {cx:,}/{nx:,}** | **Rank: #{rank}**\n\n`{bar}` {pct}%\n\n*Total XP: {data['xp']:,}*", color=COLOR_PRIMARY)
     embed.set_author(name="Rank Card", icon_url=target.display_avatar.url)
