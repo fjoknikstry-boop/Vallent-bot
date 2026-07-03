@@ -51,7 +51,7 @@ from emoji_config import (
 # ══════════════════════════════════════════════════════════════════
 
 BOT_NAME      = "VALLENT EXS"
-BOT_TAGLINE   = "No mercy. No limits. Full control."
+BOT_TAGLINE   = "Nocturne Development."
 BOT_VERSION   = "1.0.0"
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -437,7 +437,7 @@ BOT_ROLE_HIERARCHY = ["staff", "management", "developer", "founder"]
 BOT_ROLE_BADGES = {
     # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
     "founder":    {"label": "• FOUNDER",    "color": 0x8B0000, "emoji": BADGE_FOUNDER},
-    "developer":  {"label": "• DEVELOPER",  "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
+    "developer":  {"label": "• Developer",  "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management": {"label": "• Management", "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "staff":      {"label": "• Staff",      "color": 0xCD5C5C, "emoji": BADGE_STAFF},
     "premium":    {"label": "• PREMIUM",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
@@ -524,7 +524,7 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
         embed.add_field(name=f"{e(ICON_PREMIUM_TAG, '💎')} Premium".strip(), value=prem_value, inline=True)
 
     embed.set_footer(
-        text=BOT_NAME + " \u2022 ID: " + str(uid),
+        text=f"{BOT_NAME} • {BOT_TAGLINE}",
         icon_url=user.display_avatar.url
     )
     return embed
@@ -1498,7 +1498,7 @@ async def pfx_profile(ctx, member: discord.Member = None):
     embed.set_author(name="Profile & Badge Panel", icon_url=target.display_avatar.url)
     # Requested By di footer dengan avatar
     embed.set_footer(
-        text=BOT_NAME + " \u2022 ID: " + str(target.id) + "  |  Requested By " + ctx.author.display_name,
+        text=BOT_NAME + "  |  Requested By " + ctx.author.display_name,
         icon_url=ctx.author.display_avatar.url
     )
     await ctx.send(embed=embed)
@@ -2368,7 +2368,7 @@ async def slash_profile(i: discord.Interaction, member: Optional[discord.Member]
     embed  = build_profile_embed(target)
     embed.set_author(name="Profile & Badge Panel", icon_url=target.display_avatar.url)
     embed.set_footer(
-        text=BOT_NAME + " \u2022 ID: " + str(target.id) + "  |  Requested By " + i.user.display_name,
+        text=BOT_NAME + "  |  Requested By " + i.user.display_name,
         icon_url=i.user.display_avatar.url
     )
     await i.response.send_message(embed=embed)
