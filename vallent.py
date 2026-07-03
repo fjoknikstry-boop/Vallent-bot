@@ -85,6 +85,7 @@ def load_config() -> dict:
             "premium_expiry":    {},
             "no_prefix_users":   [],
             "no_prefix_guilds":  [],
+            "no_prefix_expiry":  {},
             "bot_roles":         {},
             "votes":             {},
             "payment_methods": {
@@ -104,6 +105,7 @@ def load_config() -> dict:
     data.setdefault("premium_expiry",   {})
     data.setdefault("no_prefix_users",  [])
     data.setdefault("no_prefix_guilds", [])
+    data.setdefault("no_prefix_expiry", {})
     data.setdefault("bot_roles",        {})
     data.setdefault("votes",            {})
     data.setdefault("support_server_members", [])  # user IDs yang sudah join support server
@@ -415,15 +417,61 @@ async def check_premium_expiry():
                 pass
 
 def user_has_no_prefix(guild: Optional[discord.Guild], user: discord.abc.User) -> bool:
-    """No-prefix aktif untuk: owner, user yang di-grant manual, guild yang di-grant,
-    atau siapapun yang lagi Premium (Premium otomatis membuka no-prefix)."""
+    """No-prefix aktif untuk: owner, user yang di-grant manual (dengan/tanpa durasi),
+    guild yang di-grant, atau siapapun yang lagi Premium (Premium otomatis membuka no-prefix)."""
     if user.id == bot.owner_id:
         return True
     if user.id in cfg.get("no_prefix_users", []):
+        uid_str    = str(user.id)
+        expiry_str = cfg.get("no_prefix_expiry", {}).get(uid_str)
+        if expiry_str:
+            try:
+                exp = datetime.datetime.fromisoformat(expiry_str)
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=datetime.timezone.utc)
+                if datetime.datetime.now(datetime.timezone.utc) > exp:
+                    cfg["no_prefix_users"] = [u for u in cfg["no_prefix_users"] if u != user.id]
+                    cfg.get("no_prefix_expiry", {}).pop(uid_str, None)
+                    save_config(cfg)
+                    return user_has_premium(guild, user)
+            except Exception:
+                pass
         return True
     if guild and guild.id in cfg.get("no_prefix_guilds", []):
         return True
     return user_has_premium(guild, user)
+
+async def check_no_prefix_expiry():
+    now        = datetime.datetime.now(datetime.timezone.utc)
+    expiry_map = cfg.get("no_prefix_expiry", {})
+    revoked    = []
+    for uid_str, expiry_str in list(expiry_map.items()):
+        try:
+            exp = datetime.datetime.fromisoformat(expiry_str)
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=datetime.timezone.utc)
+            if now > exp:
+                uid = int(uid_str)
+                cfg["no_prefix_users"] = [u for u in cfg.get("no_prefix_users", []) if u != uid]
+                expiry_map.pop(uid_str, None)
+                revoked.append(uid)
+        except Exception:
+            pass
+    if revoked:
+        save_config(cfg)
+        logging.info(f"[No-Prefix] Expired and revoked: {revoked}")
+        for uid in revoked:
+            try:
+                user = bot.get_user(uid) or await bot.fetch_user(uid)
+                await user.send(embed=base_embed(
+                    "No-Prefix Berakhir",
+                    f"Akses no-prefix kamu di **{BOT_NAME}** sudah habis.\n"
+                    "Sekarang command harus pakai prefix `!vx` lagi.\n"
+                    "Hubungi owner kalau mau perpanjang.",
+                    color=COLOR_ERROR
+                ))
+            except Exception:
+                pass
 
 def is_maintenance_on() -> bool:
     return bool(cfg.get("maintenance", {}).get("enabled", False))
@@ -440,7 +488,7 @@ BOT_ROLE_BADGES = {
     "developer":  {"label": "• Developer",  "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management": {"label": "• Management", "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "staff":      {"label": "• Staff",      "color": 0xCD5C5C, "emoji": BADGE_STAFF},
-    "premium":    {"label": "• PREMIUM",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
+    "premium":    {"label": "• Premium",    "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
     "noprefix":   {"label": "• NOPREFIX",  "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
     "user":       {"label": "• User",       "color": 0x6B7280, "emoji": BADGE_USER},
 }
@@ -1016,6 +1064,7 @@ async def end_giveaway(gw: dict):
 @tasks.loop(minutes=10)
 async def premium_expiry_task():
     await check_premium_expiry()
+    await check_no_prefix_expiry()
 
 @tasks.loop(minutes=30)
 async def cleanup_spam_cache():
@@ -2064,12 +2113,28 @@ async def pfx_premiumlock(ctx, action: str = "", *, cmd_name: str = ""):
 
 @bot.command(name="noprefix")
 @is_owner()
-async def pfx_noprefix(ctx, action: str = "", *, target: str = ""):
-    action    = action.lower()
-    np_users  = cfg.setdefault("no_prefix_users",  [])
-    np_guilds = cfg.setdefault("no_prefix_guilds", [])
+async def pfx_noprefix(ctx, action: str = "", *, rest: str = ""):
+    action     = action.lower()
+    np_users   = cfg.setdefault("no_prefix_users",  [])
+    np_guilds  = cfg.setdefault("no_prefix_guilds", [])
+    np_expiry  = cfg.setdefault("no_prefix_expiry", {})
+
     if action == "list":
-        u_lines = [f"<@{uid}> (`{uid}`)" for uid in np_users] or ["*(none)*"]
+        u_lines = []
+        for uid in np_users:
+            exp_str = np_expiry.get(str(uid))
+            if exp_str:
+                try:
+                    exp = datetime.datetime.fromisoformat(exp_str)
+                    if exp.tzinfo is None:
+                        exp = exp.replace(tzinfo=datetime.timezone.utc)
+                    exp_txt = discord.utils.format_dt(exp, "R")
+                except Exception:
+                    exp_txt = "?"
+            else:
+                exp_txt = "Permanent"
+            u_lines.append(f"<@{uid}> (`{uid}`) — {exp_txt}")
+        u_lines = u_lines or ["*(none)*"]
         g_lines = []
         for gid in np_guilds:
             g = bot.get_guild(gid)
@@ -2079,13 +2144,26 @@ async def pfx_noprefix(ctx, action: str = "", *, target: str = ""):
         embed.add_field(name="Users",  value="\n".join(u_lines), inline=False)
         embed.add_field(name="Guilds", value="\n".join(g_lines), inline=False)
         return await ctx.send(embed=embed)
-    if action not in ("grant","revoke"):
-        return await ctx.send(embed=info_embed("No-Prefix",
-            "`noprefix grant @user/guild_id`\n`noprefix revoke @user/guild_id`\n`noprefix list`"))
-    if not target: return await ctx.send(embed=error_embed("Masukkan @user atau guild ID."))
-    uid_match = re.match(r"<@!?(\d+)>|(\d{17,20})", target.strip())
-    if not uid_match: return await ctx.send(embed=error_embed("Target tidak valid."))
+
+    if action not in ("grant", "revoke"):
+        return await ctx.send(embed=info_embed("No-Prefix", (
+            "`noprefix grant @user/guild_id [durasi]`\n"
+            "`noprefix revoke @user/guild_id`\n"
+            "`noprefix list`\n\n"
+            "Durasi cuma berlaku untuk user (bukan guild). Contoh: `7d`, `24h`, `30m`, "
+            "atau kosongkan/`permanent` untuk selamanya."
+        )))
+
+    parts = rest.split(maxsplit=1)
+    if not parts:
+        return await ctx.send(embed=error_embed("Masukkan @user atau guild ID."))
+    target_tok = parts[0]
+    duration   = parts[1].strip().lower() if len(parts) > 1 else ""
+    uid_match  = re.match(r"<@!?(\d+)>|(\d{17,20})", target_tok.strip())
+    if not uid_match:
+        return await ctx.send(embed=error_embed("Target tidak valid."))
     parsed_id = int(uid_match.group(1) or uid_match.group(2))
+
     g = bot.get_guild(parsed_id)
     if g:
         if action == "grant":
@@ -2096,21 +2174,45 @@ async def pfx_noprefix(ctx, action: str = "", *, target: str = ""):
             if parsed_id in np_guilds: np_guilds.remove(parsed_id)
             save_config(cfg)
             await ctx.send(embed=success_embed(f"No-prefix dicabut dari server **{g.name}**."))
-    else:
-        try: user = await bot.fetch_user(parsed_id)
-        except Exception: return await ctx.send(embed=error_embed("User/Guild tidak ditemukan."))
-        if action == "grant":
-            if parsed_id not in np_users: np_users.append(parsed_id)
-            save_config(cfg)
-            try:
-                dm = base_embed("No-Prefix Access Granted!", "Kamu bisa gunain command VALLENT EXS tanpa prefix!\nCukup ketik nama command langsung.", color=COLOR_SUCCESS)
-                await user.send(embed=dm)
-            except Exception: pass
-            await ctx.send(embed=success_embed(f"No-prefix diaktifkan untuk {user.mention}."))
+        return
+
+    try:
+        user = await bot.fetch_user(parsed_id)
+    except Exception:
+        return await ctx.send(embed=error_embed("User/Guild tidak ditemukan."))
+
+    if action == "grant":
+        expiry_dt = None
+        if duration and duration != "permanent":
+            m = re.fullmatch(r"(\d+)(d|h|m)", duration)
+            if not m:
+                return await ctx.send(embed=error_embed("Format durasi: `7d`, `24h`, `30m`, atau `permanent`."))
+            amount = int(m.group(1)); unit = m.group(2)
+            delta  = {"d": datetime.timedelta(days=amount), "h": datetime.timedelta(hours=amount), "m": datetime.timedelta(minutes=amount)}[unit]
+            expiry_dt = datetime.datetime.now(datetime.timezone.utc) + delta
+        if parsed_id not in np_users:
+            np_users.append(parsed_id)
+        if expiry_dt:
+            np_expiry[str(parsed_id)] = expiry_dt.isoformat()
         else:
-            if parsed_id in np_users: np_users.remove(parsed_id)
-            save_config(cfg)
-            await ctx.send(embed=success_embed(f"No-prefix dicabut dari {user.mention}."))
+            np_expiry.pop(str(parsed_id), None)
+        save_config(cfg)
+        dur_display = "Permanent" if not expiry_dt else discord.utils.format_dt(expiry_dt, "R")
+        try:
+            dm = base_embed(
+                "No-Prefix Access Granted!",
+                f"Kamu bisa gunain command {BOT_NAME} tanpa prefix!\nCukup ketik nama command langsung.\nExpires: {dur_display}",
+                color=COLOR_SUCCESS
+            )
+            await user.send(embed=dm)
+        except Exception:
+            pass
+        await ctx.send(embed=success_embed(f"No-prefix diaktifkan untuk {user.mention}.\nExpires: {dur_display}"))
+    else:
+        if parsed_id in np_users: np_users.remove(parsed_id)
+        np_expiry.pop(str(parsed_id), None)
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"No-prefix dicabut dari {user.mention}."))
 
 @bot.command(name="botrole")
 @is_owner()
@@ -2286,7 +2388,7 @@ async def pfx_ownerhelp(ctx):
         timestamp=discord.utils.utcnow()
     )
     embed.add_field(name="Maintenance", value="`maintenance on [alasan]` · `maintenance off` · `maintenance status`", inline=False)
-    embed.add_field(name="No-Prefix", value="`noprefix grant @user` · `noprefix revoke @user` · `noprefix list`", inline=False)
+    embed.add_field(name="No-Prefix", value="`noprefix grant @user [durasi]` · `noprefix revoke @user` · `noprefix list`\nDurasi: `7d` / `24h` / `30m` / kosongkan untuk permanent.", inline=False)
     embed.add_field(name="Bot Role", value="`botrole set @user <role>` · `botrole remove @user` · `botrole list`", inline=False)
     embed.add_field(name="Premium", value="`grantpremium @user <durasi>` · `grantpremium @user revoke`", inline=False)
     embed.add_field(name="Premium Lock", value="`premiumlock add <command>` · `premiumlock remove <command>` · `premiumlock list`", inline=False)
