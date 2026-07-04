@@ -126,6 +126,7 @@ def _init_guild(gc: dict):
     gc.setdefault("main_channel",      None)
     gc.setdefault("announce_channel",  None)
     gc.setdefault("level_channel",     None)
+    gc.setdefault("levelup_message",   "{mention} leveled up to **Level {level}**!")
     gc.setdefault("spam_trap_channel", None)
     gc.setdefault("leveling_enabled",  True)
     gc.setdefault("xp_per_message",    [15, 25])
@@ -1300,6 +1301,14 @@ async def on_message(message: discord.Message):
                 lvl_ch_id = gc.get("level_channel")
                 lvl_ch    = message.guild.get_channel(lvl_ch_id) if lvl_ch_id else message.channel
                 if lvl_ch:
+                    roles_txt = ("🎁 Unlocked: " + " ".join(r.mention for r in granted_roles)) if granted_roles else ""
+                    template  = gc.get("levelup_message") or "{mention} leveled up to **Level {level}**!"
+                    content   = (template
+                                 .replace("{mention}", message.author.mention)
+                                 .replace("{user}",    message.author.display_name)
+                                 .replace("{level}",   str(data["level"]))
+                                 .replace("{server}",  message.guild.name)
+                                 .replace("{roles}",   roles_txt))
                     try:
                         avatar_url = str(message.author.display_avatar.with_format("png").with_size(256))
                         async with aiohttp.ClientSession() as session:
@@ -1312,17 +1321,10 @@ async def on_message(message: discord.Message):
                             avatar_bytes, message.author.display_name, data["level"], is_prem, role_names
                         )
                         file = discord.File(buf, filename="levelup.png")
-                        content = message.author.mention
-                        if granted_roles:
-                            role_mentions = " ".join(r.mention for r in granted_roles)
-                            content += f"\n🎁 Kamu dapat role baru: {role_mentions}"
                         await lvl_ch.send(content=content, file=file)
                     except Exception as e:
                         logging.error(f"[{BOT_NAME}] Gagal render level-up card: {e}")
-                        desc = f"{message.author.mention} leveled up to **Level {data['level']}**!"
-                        if granted_roles:
-                            desc += "\n🎁 Role baru: " + " ".join(r.mention for r in granted_roles)
-                        lvl_emb = discord.Embed(description=desc, color=COLOR_ERROR)
+                        lvl_emb = discord.Embed(description=content, color=COLOR_ERROR)
                         lvl_emb.set_author(name="Level Up!", icon_url=message.author.display_avatar.url)
                         lvl_emb.set_footer(text=BOT_NAME)
                         try:
@@ -1378,7 +1380,10 @@ async def on_message(message: discord.Message):
         if user_has_no_prefix(message.guild, message.author):
             text  = message.content.strip()
             first = text.split()[0].lower() if text.split() else ""
-            known = {c.name for c in bot.commands}
+            known = set()
+            for c in bot.commands:
+                known.add(c.name)
+                known.update(c.aliases)
             if first in known:
                 message.content = "!vx " + text
 
@@ -1779,7 +1784,7 @@ async def pfx_rank(ctx, member: discord.Member = None):
     embed.set_footer(text=BOT_NAME)
     await ctx.send(embed=embed)
 
-@bot.command(name="leaderboard")
+@bot.command(name="leaderboard", aliases=["lb"])
 async def pfx_leaderboard(ctx):
     gc    = guild_cfg(cfg, ctx.guild.id)
     all_d = sorted(gc["members_xp"].items(), key=lambda x: x[1].get("xp", 0), reverse=True)[:10]
@@ -1820,6 +1825,43 @@ async def pfx_level(ctx, sub: str = "", *args):
 
     elif sub == "leaderboard":
         await pfx_leaderboard(ctx)
+
+    elif sub == "message":
+        if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        action = args[0].lower() if args else ""
+        if action == "set":
+            template = " ".join(args[1:]).strip()
+            if not template:
+                return await ctx.send(embed=error_embed(
+                    "Usage: `level message set <teks>`\n\n"
+                    "Placeholder: `{mention}` `{user}` `{level}` `{server}` `{roles}`\n"
+                    "Contoh: `level message set {mention} gila lu nyampe **Level {level}**! 🔥 {roles}`"
+                ))
+            gc["levelup_message"] = template
+            save_config(cfg)
+            preview = (template
+                       .replace("{mention}", ctx.author.mention)
+                       .replace("{user}",    ctx.author.display_name)
+                       .replace("{level}",   "27")
+                       .replace("{server}",  ctx.guild.name)
+                       .replace("{roles}",   "🎁 Unlocked: @Elite"))
+            embed = success_embed(f"Deskripsi level-up diupdate.\n\n**Preview:**\n{preview}")
+            return await ctx.send(embed=embed)
+        elif action == "reset":
+            gc["levelup_message"] = "{mention} leveled up to **Level {level}**!"
+            save_config(cfg)
+            return await ctx.send(embed=success_embed("Deskripsi level-up dikembalikan ke default."))
+        elif action == "show":
+            return await ctx.send(embed=info_embed("Level-Up Message Template", f"```{gc.get('levelup_message','')}```"))
+        else:
+            return await ctx.send(embed=info_embed("Level-Up Message", (
+                "`level message set <teks>` — ganti deskripsi notifikasi level up\n"
+                "`level message show` — lihat template sekarang\n"
+                "`level message reset` — balikin ke default\n\n"
+                "Placeholder yang bisa dipakai: `{mention}` `{user}` `{level}` `{server}` `{roles}`\n"
+                "(`{roles}` otomatis kosong kalau gak ada role reward yang didapat)"
+            )))
 
     elif sub == "toggle":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
@@ -1919,6 +1961,7 @@ async def pfx_level(ctx, sub: str = "", *args):
             "`level setchannel #channel` - set channel notif\n"
             "`level setchannel` - nonaktifkan channel\n"
             "`level role set/remove/list` - kelola role reward per level\n"
+            "`level message set/show/reset` - custom deskripsi notif level up\n"
             "`level status` - lihat konfigurasi\n"
             "`level rank [@user]` - lihat rank\n"
             "`level leaderboard` - top 10"))
@@ -2669,7 +2712,7 @@ async def pfx_help(ctx):
     embed.add_field(name=sec(ICON_TICKET, "Ticket"),
         value="`ticket setup` · `ticket panel` · `ticket edit` · `ticket list` · `ticket delete` · `ticket close`", inline=False)
     embed.add_field(name=sec(ICON_LEVEL, "Level & XP"),
-        value="`rank` · `leaderboard` · `level toggle/setchannel/status` · `xp`", inline=False)
+        value="`rank` · `leaderboard` (alias `lb`) · `level toggle/setchannel/status` · `xp`", inline=False)
     embed.add_field(name=sec(ICON_GIVEAWAY, "Giveaway"),
         value="`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`", inline=False)
     embed.add_field(name=sec(ICON_ANTISPAM, "Antispam"),
@@ -2878,7 +2921,7 @@ async def slash_help(i: discord.Interaction):
     embed.add_field(name="Role & Voice", value="`addrole` · `removerole` · `move`", inline=False)
     embed.add_field(name="Info", value="`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`", inline=False)
     embed.add_field(name="Ticket", value="`ticket setup` · `ticket panel` · `ticket edit` · `ticket list` · `ticket delete` · `ticket close`", inline=False)
-    embed.add_field(name="Level & XP", value="`rank` · `leaderboard` · `level` · `xp`", inline=False)
+    embed.add_field(name="Level & XP", value="`rank` · `leaderboard` (alias `lb`) · `level` · `xp`", inline=False)
     embed.add_field(name="Giveaway", value="`giveaway start/end/reroll/list`", inline=False)
     embed.add_field(name="Antispam", value="`antispam setchannel` · `antispam status`", inline=False)
     embed.add_field(name=f"{e(ICON_BOOST, '🎉')} Server Boost".strip(), value="`/boostconfig` — atur channel & tampilan notifikasi boost", inline=False)
