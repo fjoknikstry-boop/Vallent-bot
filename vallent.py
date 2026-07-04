@@ -575,7 +575,7 @@ BOT_ROLE_BADGES = {
     "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
     "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
     "premium":        {"label": "• Premium",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
-    "noprefix":       {"label": "• NoPrefix",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
+    "noprefix":       {"label": "• No Prefix",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
     "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
@@ -1348,7 +1348,7 @@ async def on_message(message: discord.Message):
                     template  = gc.get("levelup_message") or "{mention} leveled up to **Level {level}**!"
                     content   = (template
                                  .replace("{mention}", message.author.mention)
-                                 .replace("{user}",    message.author.display_name)
+                                 .replace("{user}",    message.author.name)
                                  .replace("{level}",   str(data["level"]))
                                  .replace("{server}",  message.guild.name)
                                  .replace("{roles}",   roles_txt))
@@ -1361,7 +1361,7 @@ async def on_message(message: discord.Message):
                         role_names = [r.name for r in granted_roles] if granted_roles else None
                         buf = await asyncio.to_thread(
                             rank_card.render_levelup_card,
-                            avatar_bytes, message.author.display_name, data["level"], is_prem, role_names
+                            avatar_bytes, message.author.name, data["level"], is_prem, role_names
                         )
                         file = discord.File(buf, filename="levelup.png")
                         await lvl_ch.send(content=content, file=file)
@@ -1768,7 +1768,7 @@ async def _build_leaderboard_entries(guild: discord.Guild, all_d: list) -> list:
     generate leaderboard card gak lemot nunggu 10 request HTTP berurutan."""
     async def fetch_one(idx, uid, data):
         m    = guild.get_member(int(uid))
-        name = m.display_name if m else f"User ({uid[:6]})"
+        name = m.name if m else f"User ({uid[:6]})"
         avatar_url = str((m.display_avatar if m else guild.me.display_avatar).with_format("png").with_size(128))
         avatar_bytes = b""
         try:
@@ -1818,7 +1818,7 @@ async def pfx_rank(ctx, member: discord.Member = None):
                     avatar_bytes = await resp.read()
             buf = await asyncio.to_thread(
                 rank_card.render_rank_card,
-                avatar_bytes, target.display_name, lvl, rank, cx, nx,
+                avatar_bytes, target.name, lvl, rank, cx, nx,
                 data["xp"], is_prem, data.get("messages", 0)
             )
             file = discord.File(buf, filename="rank.png")
@@ -1834,7 +1834,7 @@ async def pfx_rank(ctx, member: discord.Member = None):
     bar   = "▰" * int(pct/100*16) + "▱" * (16-int(pct/100*16))
     embed = discord.Embed(
         description=(
-            f"**@{target.display_name}**\n\n"
+            f"**@{target.name}**\n\n"
             f"**Level: {lvl}** | **XP: {cx:,}/{nx:,}** | **Rank: #{rank}**\n\n"
             f"`{bar}` {pct}%\n\n"
             f"*Total XP: {data['xp']:,} | Messages: {data.get('messages',0):,}*"
@@ -1866,7 +1866,7 @@ async def pfx_leaderboard(ctx):
     lines = []
     for idx, (uid, data) in enumerate(all_d):
         m     = ctx.guild.get_member(int(uid))
-        name  = m.display_name if m else f"User ({uid[:6]})"
+        name  = m.name if m else f"User ({uid[:6]})"
         medal = ["#1","#2","#3"][idx] if idx < 3 else f"#{idx+1}"
         lines.append(f"**{medal} {name}** — Level **{data.get('level',0)}** · {data.get('xp',0):,} XP")
     embed = discord.Embed(title="XP Leaderboard", description="\n".join(lines), color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
@@ -1904,7 +1904,7 @@ async def pfx_level(ctx, sub: str = "", *args):
             save_config(cfg)
             preview = (template
                        .replace("{mention}", ctx.author.mention)
-                       .replace("{user}",    ctx.author.display_name)
+                       .replace("{user}",    ctx.author.name)
                        .replace("{level}",   "27")
                        .replace("{server}",  ctx.guild.name)
                        .replace("{roles}",   "🎁 Unlocked: @Elite"))
@@ -2840,7 +2840,7 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
                 avatar_bytes = await resp.read()
         buf = await asyncio.to_thread(
             rank_card.render_rank_card,
-            avatar_bytes, target.display_name, lvl, rank, cx, nx,
+            avatar_bytes, target.name, lvl, rank, cx, nx,
             data["xp"], is_prem, data.get("messages", 0)
         )
         file = discord.File(buf, filename="rank.png")
@@ -2854,7 +2854,7 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
 
     pct   = int((cx / max(nx,1)) * 100)
     bar   = "▰"*int(pct/100*16) + "▱"*(16-int(pct/100*16))
-    embed = discord.Embed(description=f"**@{target.display_name}**\n\n**Level: {lvl}** | **XP: {cx:,}/{nx:,}** | **Rank: #{rank}**\n\n`{bar}` {pct}%\n\n*Total XP: {data['xp']:,}*", color=COLOR_PRIMARY)
+    embed = discord.Embed(description=f"**@{target.name}**\n\n**Level: {lvl}** | **XP: {cx:,}/{nx:,}** | **Rank: #{rank}**\n\n`{bar}` {pct}%\n\n*Total XP: {data['xp']:,}*", color=COLOR_PRIMARY)
     embed.set_author(name="Rank Card", icon_url=target.display_avatar.url)
     embed.set_thumbnail(url=target.display_avatar.url)
     await i.followup.send(embed=embed)
@@ -2878,7 +2878,7 @@ async def slash_leaderboard(i: discord.Interaction):
     lines = []
     for idx,(uid,data) in enumerate(all_d):
         m     = i.guild.get_member(int(uid))
-        name  = m.display_name if m else f"User ({uid[:6]})"
+        name  = m.name if m else f"User ({uid[:6]})"
         medal = ["#1","#2","#3"][idx] if idx < 3 else f"#{idx+1}"
         lines.append(f"**{medal} {name}** — Level **{data.get('level',0)}** · {data.get('xp',0):,} XP")
     embed = discord.Embed(title="XP Leaderboard", description="\n".join(lines), color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
