@@ -115,6 +115,7 @@ def load_config() -> dict:
     data.setdefault("votes",            {})
     data.setdefault("support_server_members", [])  # user IDs yang sudah join support server
     data.setdefault("commands_run",           {})  # uid → jumlah command dijalankan
+    data.setdefault("xp_boost",                {})  # uid(str) -> {"expiry": iso, "multiplier": float}
     data.setdefault("maintenance", {"enabled": False, "reason": "", "since": None})
     for gid, gc in data.get("guilds", {}).items():
         _init_guild(gc)
@@ -517,6 +518,48 @@ async def check_no_prefix_expiry():
 def is_maintenance_on() -> bool:
     return bool(cfg.get("maintenance", {}).get("enabled", False))
 
+def grant_xp_boost(uid: int, minutes: int = 60, multiplier: float = 1.10):
+    """Kasih boost XP sementara — dipakai sebagai insentif join support server.
+    Berlaku di SEMUA guild (bukan per-guild) karena ini reward personal, bukan
+    setting server."""
+    expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
+    cfg.setdefault("xp_boost", {})[str(uid)] = {"expiry": expiry.isoformat(), "multiplier": multiplier}
+    save_config(cfg)
+
+def get_xp_multiplier(uid: int) -> float:
+    """Return pengali XP aktif untuk user (1.0 kalau gak ada boost / udah expired).
+    Expired entry dibersihkan otomatis (lazy cleanup, sama pola kayak premium)."""
+    boosts  = cfg.setdefault("xp_boost", {})
+    uid_str = str(uid)
+    entry   = boosts.get(uid_str)
+    if not entry:
+        return 1.0
+    try:
+        exp = datetime.datetime.fromisoformat(entry["expiry"])
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=datetime.timezone.utc)
+        if datetime.datetime.now(datetime.timezone.utc) > exp:
+            boosts.pop(uid_str, None)
+            save_config(cfg)
+            return 1.0
+        return float(entry.get("multiplier", 1.0))
+    except Exception:
+        boosts.pop(uid_str, None)
+        return 1.0
+
+def xp_boost_remaining(uid: int) -> Optional[datetime.datetime]:
+    """Return waktu expiry boost yang masih aktif, atau None kalau gak ada."""
+    entry = cfg.get("xp_boost", {}).get(str(uid))
+    if not entry:
+        return None
+    try:
+        exp = datetime.datetime.fromisoformat(entry["expiry"])
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=datetime.timezone.utc)
+        return exp if exp > datetime.datetime.now(datetime.timezone.utc) else None
+    except Exception:
+        return None
+
 # ══════════════════════════════════════════════════════════════════
 # BOT ROLES SYSTEM
 # ══════════════════════════════════════════════════════════════════
@@ -525,14 +568,14 @@ BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "dev
 
 BOT_ROLE_BADGES = {
     # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
-    "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "founder":        {"label": "• Founder",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
     "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
     "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
     "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
     "premium":        {"label": "• Premium",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
-    "noprefix":       {"label": "• NOPREFIX",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
+    "noprefix":       {"label": "• NoPrefix",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
     "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
@@ -1289,7 +1332,7 @@ async def on_message(message: discord.Message):
         cd   = gc.get("xp_cooldown", 60)
         if now - data.get("last_msg_ts", 0) >= cd:
             xp_min, xp_max = gc.get("xp_per_message", [15, 25])
-            gain           = random.randint(xp_min, xp_max)
+            gain           = round(random.randint(xp_min, xp_max) * get_xp_multiplier(message.author.id))
             old_level      = data["level"]
             data["xp"]    += gain
             data["level"]  = level_from_xp(data["xp"])
@@ -1741,6 +1784,21 @@ async def _build_leaderboard_entries(guild: discord.Guild, all_d: list) -> list:
     tasks = [fetch_one(idx, uid, data) for idx, (uid, data) in enumerate(all_d)]
     return await asyncio.gather(*tasks)
 
+def _support_boost_promo(uid: int):
+    """Return (content_text, view) buat promo join support server + XP boost.
+    content_text jadi None kalau SUPPORT_INVITE belum di-set di environment —
+    biar gak nawarin invite yang gak ada."""
+    if not SUPPORT_INVITE:
+        return None, None
+    remaining = xp_boost_remaining(uid)
+    if remaining:
+        content = f"🚀 XP Boost **+10%** kamu masih aktif sampai {discord.utils.format_dt(remaining, 'R')}!"
+    else:
+        content = "🚀 **Join support server** dan dapatkan **+10% XP Boost** selama 60 menit!"
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(label="Join Support Server", style=discord.ButtonStyle.link, url=SUPPORT_INVITE, emoji="🚀"))
+    return content, view
+
 @bot.command(name="rank")
 async def pfx_rank(ctx, member: discord.Member = None):
     import aiohttp
@@ -1764,7 +1822,11 @@ async def pfx_rank(ctx, member: discord.Member = None):
                 data["xp"], is_prem, data.get("messages", 0)
             )
             file = discord.File(buf, filename="rank.png")
-            return await ctx.send(file=file)
+            content, view = _support_boost_promo(ctx.author.id)
+            kwargs = {"file": file}
+            if content: kwargs["content"] = content
+            if view:    kwargs["view"] = view
+            return await ctx.send(**kwargs)
         except Exception as e:
             logging.error(f"[{BOT_NAME}] Gagal render rank card: {e}")
     # Fallback embed teks kalau render gambar gagal total
@@ -2782,7 +2844,11 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
             data["xp"], is_prem, data.get("messages", 0)
         )
         file = discord.File(buf, filename="rank.png")
-        return await i.followup.send(file=file)
+        content, view = _support_boost_promo(i.user.id)
+        kwargs = {"file": file}
+        if content: kwargs["content"] = content
+        if view:    kwargs["view"] = view
+        return await i.followup.send(**kwargs)
     except Exception as e:
         logging.error(f"[{BOT_NAME}] Gagal render rank card: {e}")
 
@@ -2951,11 +3017,17 @@ async def on_member_join(member: discord.Member):
     if uid not in support_members:
         support_members.append(uid)
         save_config(cfg)
+    grant_xp_boost(uid, minutes=60, multiplier=1.10)
     badges = get_user_badges(uid)
     role   = get_bot_role(uid)
     embed  = discord.Embed(
         title="Selamat datang di " + member.guild.name + "!",
-        description="Halo " + member.mention + "!\n\nKamu baru saja mendapatkan badge **USER**!\nKetik `profile` untuk lihat badge kamu.\n\nKetik `help` untuk lihat semua command.",
+        description=(
+            "Halo " + member.mention + "!\n\n"
+            "Kamu baru saja mendapatkan badge **USER**!\n"
+            "🚀 Bonus: **+10% XP Boost** aktif selama **60 menit** di semua server yang pakai " + BOT_NAME + "!\n\n"
+            "Ketik `profile` untuk lihat badge kamu.\n\nKetik `help` untuk lihat semua command."
+        ),
         color=COLOR_PRIMARY,
         timestamp=discord.utils.utcnow()
     )
