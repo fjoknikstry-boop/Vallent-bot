@@ -207,7 +207,7 @@ def render_rank_card(
 # LEVEL-UP CARD — dipakai di notifikasi level up otomatis
 # ══════════════════════════════════════════════════════════════════
 
-def render_levelup_card(avatar_bytes: bytes, username: str, new_level: int, is_premium: bool = False) -> io.BytesIO:
+def render_levelup_card(avatar_bytes: bytes, username: str, new_level: int, is_premium: bool = False, role_names: list | None = None) -> io.BytesIO:
     W, H = 934, 282
     card = _vertical_gradient((W, H), (18, 4, 6), (48, 6, 10)).convert("RGBA")
 
@@ -230,22 +230,32 @@ def render_levelup_card(avatar_bytes: bytes, username: str, new_level: int, is_p
 
     draw = ImageDraw.Draw(card)
     text_x = ax + avatar_ring.width + 50
+    max_w  = W - text_x - 40
 
     f_tag  = _font(F_BOLD, 26)
     f_huge = _font(F_DISPLAY, 84)
     f_name = _font(F_BOLD, 30)
+    f_role = _font(F_BOLD, 22)
 
     draw.text((text_x, 46), "LEVEL UP", font=f_tag, fill=(*CRIMSON, 255))
     draw.text((text_x, 82), f"LEVEL {new_level}", font=f_huge, fill=WHITE)
 
     sub = f"{username} reached a new level!"
-    max_w = W - text_x - 40
     size  = 30
     f_sub = f_name
     while draw.textlength(sub, font=f_sub) > max_w and size > 16:
         size -= 2
         f_sub = _font(F_BOLD, size)
     draw.text((text_x, 190), sub, font=f_sub, fill=MUTED)
+
+    if role_names:
+        role_txt = "🎁 Unlocked: " + ", ".join(role_names)
+        rsize = 22
+        f_r = f_role
+        while draw.textlength(role_txt, font=f_r) > max_w and rsize > 14:
+            rsize -= 2
+            f_r = _font(F_BOLD, rsize)
+        draw.text((text_x, 226), role_txt, font=f_r, fill=GOLD)
 
     _watermark(draw, card.size)
 
@@ -260,3 +270,85 @@ def _watermark(draw: ImageDraw.ImageDraw, size):
     watermark = "VALLENT EXS"
     wm_w = draw.textlength(watermark, font=wm_font)
     draw.text((W - wm_w - 24, H - 32), watermark, font=wm_font, fill=(120, 60, 60))
+
+# ══════════════════════════════════════════════════════════════════
+# LEADERBOARD CARD — dipakai di command `leaderboard` / `/leaderboard`
+# ══════════════════════════════════════════════════════════════════
+
+SILVER = (192, 192, 200)
+BRONZE = (205, 127, 50)
+
+def _truncate(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> str:
+    if draw.textlength(text, font=font) <= max_w:
+        return text
+    while text and draw.textlength(text + "…", font=font) > max_w:
+        text = text[:-1]
+    return text + "…" if text else "…"
+
+def render_leaderboard_card(guild_name: str, entries: list) -> io.BytesIO:
+    """entries: list of dict {rank, avatar_bytes, name, level, xp} — urut dari #1,
+    maksimal ditampilin 10 baris."""
+    entries = entries[:10]
+    W = 760
+    row_h = 68
+    header_h = 96
+    H = header_h + row_h * max(len(entries), 1) + 24
+
+    card = _vertical_gradient((W, H), BG_TOP, BG_BOTTOM).convert("RGBA")
+    draw = ImageDraw.Draw(card)
+    draw.rounded_rectangle([2, 2, W - 3, H - 3], radius=22, outline=(*DARK_RED, 255), width=3)
+
+    f_title = _font(F_DISPLAY, 36)
+    f_sub   = _font(F_REG, 18)
+    f_name  = _font(F_BOLD, 22)
+    f_meta  = _font(F_REG, 16)
+    f_rank  = _font(F_DISPLAY, 26)
+
+    title = _truncate(draw, "XP LEADERBOARD", f_title, W - 60)
+    draw.text((30, 22), title, font=f_title, fill=WHITE)
+    sub = _truncate(draw, guild_name, f_sub, W - 60)
+    draw.text((30, 64), sub, font=f_sub, fill=MUTED)
+
+    if not entries:
+        f_empty = _font(F_REG, 22)
+        draw.text((30, header_h + 10), "Belum ada data XP.", font=f_empty, fill=MUTED)
+
+    rank_colors = {1: GOLD, 2: SILVER, 3: BRONZE}
+    y = header_h
+    name_max_w = W - 90 - 66 - 18 - 140  # sisa ruang setelah avatar & sebelum angka XP
+    for e in entries:
+        rank   = e["rank"]
+        accent = rank_colors.get(rank, CRIMSON)
+        if rank <= 3:
+            draw.rounded_rectangle([16, y + 4, W - 16, y + row_h - 4], radius=14, fill=(*accent, 26))
+
+        rank_str = f"#{rank}"
+        rw = draw.textlength(rank_str, font=f_rank)
+        draw.text((60 - rw / 2, y + row_h / 2 - 16), rank_str, font=f_rank, fill=accent if rank <= 3 else MUTED)
+
+        av = _safe_avatar(e["avatar_bytes"])
+        avatar_d = 48
+        ring_color = (*accent, 255) if rank <= 3 else (*CRIMSON, 180)
+        ring = _circle_avatar(av, avatar_d, ring_color, ring_width=3)
+        ax = 90
+        ay = y + (row_h - ring.height) // 2
+        card.paste(ring, (ax, ay), ring)
+
+        name_x = ax + ring.width + 18
+        name_txt = _truncate(draw, e["name"], f_name, name_max_w)
+        draw.text((name_x, y + 10), name_txt, font=f_name, fill=WHITE)
+        draw.text((name_x, y + 38), f"Level {e['level']}", font=f_meta, fill=MUTED)
+
+        xp_str = f"{e['xp']:,} XP"
+        xp_w = draw.textlength(xp_str, font=f_name)
+        draw.text((W - 30 - xp_w, y + row_h / 2 - 12), xp_str, font=f_name, fill=WHITE)
+
+        y += row_h
+
+    draw = ImageDraw.Draw(card)
+    _watermark(draw, card.size)
+
+    buf = io.BytesIO()
+    card.convert("RGB").save(buf, format="PNG")
+    buf.seek(0)
+    return buf
