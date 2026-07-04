@@ -43,7 +43,7 @@ from emoji_config import (
     ICON_SUCCESS, ICON_ERROR, ICON_WARNING, ICON_LOADING,
     ICON_PROFILE, ICON_BADGES, ICON_COMMANDS, ICON_PREMIUM_TAG,
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
-    ICON_BOOST, ICON_ANTINUKE,
+    ICON_BOOST, ICON_ANTINUKE, ICON_IGNORE,
     e
 )
 import rank_card
@@ -3247,54 +3247,97 @@ async def pfx_vxleave(ctx, guild_id: str = ""):
 
 # ── HELP ─────────────────────────────────────────────────────────
 
-@bot.command(name="help", aliases=["h"])
-async def pfx_help(ctx):
-    has_np = user_has_no_prefix(ctx.guild, ctx.author)
-    embed = discord.Embed(
-        title=f"{BOT_NAME} — Command Reference",
-        description=(
-            f"*{BOT_TAGLINE}*\n\n"
-            f"Prefix: **`!vx`** · **`!v`** (alias)\n"
-            + ("✨ **No-prefix aktif** — ketik command langsung!\n" if has_np else "")
-            + "\u200b"
-        ),
-        color=COLOR_PRIMARY,
-        timestamp=discord.utils.utcnow()
-    )
-    def sec(icon_var, name):
-        return (icon_var + " " if icon_var else "") + name
+# ── HELP MENU — dropdown per kategori biar gak numpuk satu embed ──
 
-    embed.add_field(name=sec(ICON_MODERATION, "Moderation"), value=(
+HELP_CATEGORIES = [
+    ("moderation", "Moderation", ICON_MODERATION, "🛠️", (
         "`kick` · `ban` · `unban` · `timeout` · `untimeout`\n"
         "`warn` · `warnings` · `unwarn` · `clearwarnings`\n"
         "`purge` · `lock` · `unlock` · `slowmode`"
-    ), inline=False)
-    embed.add_field(name=sec(ICON_ROLE, "Role & Voice"),
-        value="`addrole` · `removerole` · `move`", inline=False)
-    embed.add_field(name=sec(ICON_INFO, "Info"),
-        value="`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`", inline=False)
-    embed.add_field(name=sec(ICON_TICKET, "Ticket"),
-        value="`ticket setup` · `ticket panel` · `ticket edit` · `ticket list` · `ticket delete` · `ticket close`", inline=False)
-    embed.add_field(name=sec(ICON_LEVEL, "Level & XP"),
-        value="`rank` · `leaderboard` (alias `lb`) · `level toggle/setchannel/status` · `xp`", inline=False)
-    embed.add_field(name=sec(ICON_GIVEAWAY, "Giveaway"),
-        value="`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`", inline=False)
-    embed.add_field(name=sec(ICON_ANTISPAM, "Antispam"),
-        value="`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`", inline=False)
-    embed.add_field(name=sec(ICON_ANTINUKE, "Anti-Nuke"),
-        value="`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`", inline=False)
-    embed.add_field(name="🔇 Ignore Channel",
-        value="`ignorechannel add/remove/list [#channel]` — bot diem total di channel tertentu", inline=False)
-    embed.add_field(name=sec(ICON_BOOST, "Server Boost"),
-        value="`/boostconfig` (slash only) — atur channel & tampilan notifikasi boost", inline=False)
-    embed.add_field(name=sec(ICON_LANGUAGE, "Language"),
-        value="`language list` · `language set <code>`", inline=False)
-    # Catatan: section Owner Only SENGAJA tidak pernah ditaruh di sini.
-    # !vx help selalu ngirim pesan publik ke channel — kalau owner yang jalanin,
-    # command owner-only bakal ikut kebaca semua orang yang ada di channel itu.
-    # Command owner ada sendiri di `ownerhelp`, yang dikirim lewat DM.
-    embed.set_footer(text=BOT_NAME + " v" + BOT_VERSION + " • " + BOT_TAGLINE)
-    await ctx.send(embed=embed)
+    )),
+    ("role_voice", "Role & Voice", ICON_ROLE, "🎭", "`addrole` · `removerole` · `move`"),
+    ("info", "Info", ICON_INFO, "ℹ️", "`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`"),
+    ("ticket", "Ticket", ICON_TICKET, "🎫", "`ticket setup` · `ticket panel` · `ticket edit` · `ticket list` · `ticket delete` · `ticket close`"),
+    ("level", "Level & XP", ICON_LEVEL, "📈", "`rank` · `leaderboard` (alias `lb`) · `level toggle/setchannel/status` · `xp`"),
+    ("giveaway", "Giveaway", ICON_GIVEAWAY, "🎉", "`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`"),
+    ("antispam", "Antispam", ICON_ANTISPAM, "🛡️", "`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`"),
+    ("antinuke", "Anti-Nuke", ICON_ANTINUKE, "🛡️", "`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`"),
+    ("ignore", "Ignore Channel", ICON_IGNORE, "🔇", "`ignorechannel add/remove/list [#channel]` — bot diem total di channel tertentu"),
+    ("boost", "Server Boost", ICON_BOOST, "🎉", "`/boostconfig` (slash only) — atur channel & tampilan notifikasi boost"),
+    ("language", "Language", ICON_LANGUAGE, "🌐", "`language list` · `language set <code>`"),
+]
+
+OWNER_HELP_CATEGORY = ("owner", "Owner Only", ICON_OWNER, "👑", (
+    "`maintenance on/off/status`\n"
+    "`noprefix grant/revoke/list`\n"
+    "`botrole set/remove/list`\n"
+    "`grantpremium @user <durasi>/revoke`\n"
+    "`premiumlock add/remove/list`\n"
+    "`blacklist add/remove/list`\n"
+    "`vxservers` — lihat semua server bot\n"
+    "`vxleave <guild_id>`"
+))
+
+class HelpView(discord.ui.View):
+    """Dropdown navigasi help — tiap orang yang jalanin `help` dapat View
+    instance sendiri, jadi opsi 'Owner Only' otomatis cuma nongol di dropdown
+    punya owner tanpa perlu DM atau ephemeral khusus."""
+    def __init__(self, invoker_id: int, is_owner_user: bool, has_np: bool):
+        super().__init__(timeout=120)
+        self.invoker_id = invoker_id
+        self.has_np     = has_np
+        self.message: Optional[discord.Message] = None
+        self.categories = list(HELP_CATEGORIES) + ([OWNER_HELP_CATEGORY] if is_owner_user else [])
+
+        options = [discord.SelectOption(label="Overview", value="_home", emoji="🏠", description="Halaman utama")]
+        for key, label, icon_var, fallback, _ in self.categories:
+            options.append(discord.SelectOption(label=label, value=key, emoji=e(icon_var, fallback)))
+        select = discord.ui.Select(placeholder="Pilih kategori command...", options=options)
+        select.callback = self.on_select
+        self.add_item(select)
+
+    def home_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"{BOT_NAME} — Command Reference",
+            description=(
+                f"*{BOT_TAGLINE}*\n\n"
+                f"Prefix: **`!vx`** · **`!v`** (alias)\n"
+                + ("✨ **No-prefix aktif** — ketik command langsung!\n" if self.has_np else "")
+                + "\nPilih kategori di dropdown bawah buat lihat command-nya."
+            ),
+            color=COLOR_PRIMARY,
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {BOT_TAGLINE}")
+        return embed
+
+    def category_embed(self, key: str) -> discord.Embed:
+        _, label, icon_var, fallback, value = next(c for c in self.categories if c[0] == key)
+        embed = discord.Embed(title=f"{e(icon_var, fallback)} {label}".strip(), description=value, color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
+        embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {BOT_TAGLINE}")
+        return embed
+
+    async def on_select(self, interaction: discord.Interaction):
+        if interaction.user.id != self.invoker_id:
+            return await interaction.response.send_message(embed=error_embed("Menu ini bukan buat kamu — jalanin `help` sendiri."), ephemeral=True)
+        value = interaction.data["values"][0]
+        embed = self.home_embed() if value == "_home" else self.category_embed(value)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+
+@bot.command(name="help", aliases=["h"])
+async def pfx_help(ctx):
+    has_np = user_has_no_prefix(ctx.guild, ctx.author)
+    view   = HelpView(ctx.author.id, ctx.author.id == bot.owner_id, has_np)
+    view.message = await ctx.send(embed=view.home_embed(), view=view)
 
 @bot.command(name="ownerhelp", aliases=["oh"])
 @is_owner()
@@ -3488,36 +3531,10 @@ async def slash_ping(i: discord.Interaction):
 
 @bot.tree.command(name="help", description="Lihat semua command VALLENT EXS.")
 async def slash_help(i: discord.Interaction):
-    is_owner_user = (i.user.id == bot.owner_id)
-    has_np        = user_has_no_prefix(i.guild, i.user)
-    embed = discord.Embed(
-        title=f"{BOT_NAME} — Command Reference",
-        description=f"*{BOT_TAGLINE}*\n\nPrefix: **`!vx`** · **`!v`**\n" + ("✨ **No-prefix aktif**\n" if has_np else "") + "\u200b",
-        color=COLOR_PRIMARY, timestamp=discord.utils.utcnow()
-    )
-    embed.add_field(name="Moderation", value="`kick` · `ban` · `unban` · `timeout` · `untimeout`\n`warn` · `warnings` · `unwarn` · `clearwarnings`\n`purge` · `lock` · `unlock` · `slowmode`", inline=False)
-    embed.add_field(name="Role & Voice", value="`addrole` · `removerole` · `move`", inline=False)
-    embed.add_field(name="Info", value="`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`", inline=False)
-    embed.add_field(name="Ticket", value="`ticket setup` · `ticket panel` · `ticket edit` · `ticket list` · `ticket delete` · `ticket close`", inline=False)
-    embed.add_field(name="Level & XP", value="`rank` · `leaderboard` (alias `lb`) · `level` · `xp`", inline=False)
-    embed.add_field(name="Giveaway", value="`giveaway start/end/reroll/list`", inline=False)
-    embed.add_field(name="Antispam", value="`antispam setchannel/logchannel/punishment/threshold/flood/ignore/status`", inline=False)
-    embed.add_field(name=f"{e(ICON_ANTINUKE, '🛡️')} Anti-Nuke".strip(), value="`antinuke enable/disable/logchannel/punishment/whitelist/status`", inline=False)
-    embed.add_field(name="🔇 Ignore Channel", value="`ignorechannel add/remove/list [#channel]`", inline=False)
-    embed.add_field(name=f"{e(ICON_BOOST, '🎉')} Server Boost".strip(), value="`/boostconfig` — atur channel & tampilan notifikasi boost", inline=False)
-    if is_owner_user:
-        embed.add_field(name="Owner Only", value=(
-            "`maintenance on/off/status`\n"
-            "`noprefix grant/revoke/list`\n"
-            "`botrole set/remove/list`\n"
-            "`grantpremium @user <durasi>/revoke`\n"
-            "`premiumlock add/remove/list`\n"
-            "`blacklist add/remove/list`\n"
-            "`vxservers` — lihat semua server bot\n"
-            "`vxleave <guild_id>`"
-        ), inline=False)
-    embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {BOT_TAGLINE}")
-    await i.response.send_message(embed=embed, ephemeral=True)
+    has_np = user_has_no_prefix(i.guild, i.user)
+    view   = HelpView(i.user.id, i.user.id == bot.owner_id, has_np)
+    await i.response.send_message(embed=view.home_embed(), view=view, ephemeral=True)
+    view.message = await i.original_response()
 
 
 
