@@ -586,7 +586,7 @@ BOT_ROLE_BADGES = {
     "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
     "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
     "premium":        {"label": "• Premium",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
-    "noprefix":       {"label": "• NO PREFIX",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
+    "noprefix":       {"label": "• No Prefix",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
     "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
@@ -725,7 +725,7 @@ def _spam_fingerprint(message: discord.Message) -> str:
 # OWNER / PERMISSION HELPERS
 # ══════════════════════════════════════════════════════════════════
 
-OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave", "ownerhelp"}
+OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave", "vxservers", "vxguilds", "ownerhelp"}
 
 def is_owner():
     async def predicate(ctx: commands.Context) -> bool:
@@ -2895,17 +2895,97 @@ async def pfx_blacklist(ctx, action: str = "", guild_id: str = ""):
     else:
         await ctx.send(embed=info_embed("Blacklist", "`blacklist add <guild_id>`\n`blacklist remove <guild_id>`\n`blacklist list`"))
 
+class ServerListView(discord.ui.View):
+    """List semua server yang dipakein bot, lengkap dengan info penting
+    (member count, owner, kapan bot join) — biar owner tau persis server
+    mana yang mau di-leave sebelum jalanin vxleave."""
+    PER_PAGE = 8
+
+    def __init__(self, guilds: list, owner_id: int):
+        super().__init__(timeout=120)
+        self.guilds   = guilds
+        self.owner_id = owner_id
+        self.page     = 0
+
+    @property
+    def total_pages(self) -> int:
+        return max(1, (len(self.guilds) - 1) // self.PER_PAGE + 1)
+
+    def build_embed(self) -> discord.Embed:
+        start = self.page * self.PER_PAGE
+        chunk = self.guilds[start:start + self.PER_PAGE]
+        embed = base_embed(f"Server List — {len(self.guilds)} total", None)
+        for g in chunk:
+            joined_at = g.me.joined_at if g.me else None
+            joined_txt = discord.utils.format_dt(joined_at, "R") if joined_at else "?"
+            owner_txt  = f"{g.owner} (`{g.owner_id}`)" if g.owner else f"`{g.owner_id}`"
+            embed.add_field(
+                name=g.name,
+                value=(
+                    f"ID: `{g.id}`\n"
+                    f"Members: **{g.member_count:,}** · Owner: {owner_txt}\n"
+                    f"Bot joined: {joined_txt}"
+                ),
+                inline=False
+            )
+        embed.set_footer(text=f"Page {self.page + 1}/{self.total_pages} • `vxleave <guild_id>` buat keluar dari server")
+        return embed
+
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(embed=error_embed("Cuma owner yang bisa navigasi ini."), ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_page(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        if not await self._guard(interaction): return
+        self.page = max(0, self.page - 1)
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        if not await self._guard(interaction): return
+        self.page = min(self.total_pages - 1, self.page + 1)
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+@bot.command(name="vxservers", aliases=["vxguilds"])
+@is_owner()
+async def pfx_vxservers(ctx, sort: str = "members"):
+    guilds = list(bot.guilds)
+    if sort.lower() in ("name", "alpha"):
+        guilds.sort(key=lambda g: g.name.lower())
+    else:
+        guilds.sort(key=lambda g: g.member_count or 0, reverse=True)
+    if not guilds:
+        return await ctx.send(embed=info_embed("Server List", "Bot belum join server manapun."))
+    view = ServerListView(guilds, bot.owner_id)
+    await ctx.send(embed=view.build_embed(), view=view)
+
 @bot.command(name="vxleave")
 @is_owner()
 async def pfx_vxleave(ctx, guild_id: str = ""):
     if not guild_id:
-        await ctx.send(embed=info_embed("Leave Guild", "`vxleave <guild_id>`"))
-        return
-    try: gid = int(guild_id)
-    except ValueError: return await ctx.send(embed=error_embed("Guild ID harus angka."))
+        guilds = sorted(bot.guilds, key=lambda g: g.member_count or 0, reverse=True)
+        if not guilds:
+            return await ctx.send(embed=info_embed("Leave Guild", "Bot belum join server manapun."))
+        view = ServerListView(guilds, bot.owner_id)
+        embed = view.build_embed()
+        embed.description = "Pilih server dari daftar ini, terus jalanin `vxleave <guild_id>`."
+        return await ctx.send(embed=embed, view=view)
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        return await ctx.send(embed=error_embed("Guild ID harus angka. Cek `vxservers` buat lihat daftar & ID-nya."))
     g = bot.get_guild(gid)
-    if not g: return await ctx.send(embed=error_embed("Bot tidak ada di guild tersebut."))
-    await ctx.send(embed=success_embed(f"Leaving **{g.name}**..."))
+    if not g:
+        return await ctx.send(embed=error_embed("Bot tidak ada di guild tersebut. Cek `vxservers` buat lihat daftar server."))
+    owner_txt = f"{g.owner} (`{g.owner_id}`)" if g.owner else f"`{g.owner_id}`"
+    embed = base_embed(f"Leaving {g.name}...", None, color=COLOR_ERROR)
+    embed.add_field(name="Guild ID", value=f"`{g.id}`", inline=True)
+    embed.add_field(name="Members", value=f"{g.member_count:,}", inline=True)
+    embed.add_field(name="Owner", value=owner_txt, inline=True)
+    await ctx.send(embed=embed)
     await g.leave()
 
 # ── HELP ─────────────────────────────────────────────────────────
@@ -2973,7 +3053,7 @@ async def pfx_ownerhelp(ctx):
     embed.add_field(name="Premium", value="`grantpremium @user <durasi>` · `grantpremium @user revoke`", inline=False)
     embed.add_field(name="Premium Lock", value="`premiumlock add <command>` · `premiumlock remove <command>` · `premiumlock list`", inline=False)
     embed.add_field(name="Blacklist", value="`blacklist add <id>` · `blacklist remove <id>` · `blacklist list`", inline=False)
-    embed.add_field(name="Other", value="`vxleave <guild_id>`", inline=False)
+    embed.add_field(name="Other", value="`vxservers` — lihat semua server bot\n`vxleave <guild_id>`", inline=False)
     embed.set_footer(text=BOT_NAME + " v" + BOT_VERSION + " • Owner Only")
 
     try:
@@ -3173,6 +3253,7 @@ async def slash_help(i: discord.Interaction):
             "`grantpremium @user <durasi>/revoke`\n"
             "`premiumlock add/remove/list`\n"
             "`blacklist add/remove/list`\n"
+            "`vxservers` — lihat semua server bot\n"
             "`vxleave <guild_id>`"
         ), inline=False)
     embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {BOT_TAGLINE}")
