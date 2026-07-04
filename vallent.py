@@ -129,7 +129,31 @@ def _init_guild(gc: dict):
     gc.setdefault("announce_channel",  None)
     gc.setdefault("level_channel",     None)
     gc.setdefault("levelup_message",   "{mention} leveled up to **Level {level}**!")
-    gc.setdefault("spam_trap_channel", None)
+    gc.setdefault("antispam", {
+        "trap_channel": None,
+        "log_channel":  None,
+        "ignore_users": [],
+        "ignore_roles": [],
+        "threshold":    SPAM_THRESHOLD,
+        "window":       SPAM_WINDOW,
+        "flood_count":  5,
+        "flood_window": 4,
+        "punishment":   "ban",
+    })
+    gc["antispam"].setdefault("trap_channel", None)
+    gc["antispam"].setdefault("log_channel",  None)
+    gc["antispam"].setdefault("ignore_users", [])
+    gc["antispam"].setdefault("ignore_roles", [])
+    gc["antispam"].setdefault("threshold",    SPAM_THRESHOLD)
+    gc["antispam"].setdefault("window",       SPAM_WINDOW)
+    gc["antispam"].setdefault("flood_count",  5)
+    gc["antispam"].setdefault("flood_window", 4)
+    gc["antispam"].setdefault("punishment",   "ban")
+    # Migrasi dari key lama spam_trap_channel (sebelum ada dict antispam terpusat)
+    if "spam_trap_channel" in gc:
+        legacy_trap = gc.pop("spam_trap_channel")
+        if legacy_trap and not gc["antispam"]["trap_channel"]:
+            gc["antispam"]["trap_channel"] = legacy_trap
     gc.setdefault("leveling_enabled",  True)
     gc.setdefault("xp_per_message",    [15, 25])
     gc.setdefault("xp_cooldown",       60)
@@ -148,6 +172,7 @@ def _init_guild(gc: dict):
     gc["boost"].setdefault("description", "{mention} just boosted **{server}**! Thanks for the support 💜")
     gc.setdefault("active_tickets",    {})   # uid(str) -> [{"channel_id","panel_id","opened_at"}, ...]
     gc.setdefault("mod_log_channel",   None)
+    gc.setdefault("ignored_channels",  [])   # channel ID -> bot diem total (no command, no XP)
     gc.setdefault("antinuke", {
         "enabled":     False,
         "log_channel": None,
@@ -579,7 +604,7 @@ BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "dev
 
 BOT_ROLE_BADGES = {
     # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
-    "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "founder":        {"label": "• Founder",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
     "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
@@ -703,8 +728,9 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
 # ANTI SPAM — Cross-channel fingerprint tracker
 # ══════════════════════════════════════════════════════════════════
 
-spam_tracker:       dict[int, dict[str, dict]] = defaultdict(dict)
-spam_cleanup_times: dict[int, float]           = {}
+spam_tracker:       dict[tuple, dict[str, dict]] = defaultdict(dict)  # (guild_id, uid) -> fingerprint -> entry
+spam_cleanup_times: dict[tuple, float]           = {}
+flood_tracker:      dict[tuple, list]             = defaultdict(list)  # (guild_id, uid) -> [timestamps]
 
 def _spam_fingerprint(message: discord.Message) -> str:
     parts: list[str] = []
@@ -720,6 +746,59 @@ def _spam_fingerprint(message: discord.Message) -> str:
         if emb.url:
             parts.append(f"url:{emb.url.lower().split('?')[0].rstrip('/')}")
     return "|".join(sorted(set(parts))) or "empty"
+
+def _antispam_is_ignored(member: discord.Member, ac: dict) -> bool:
+    """True kalau member ini harus di-skip dari semua deteksi antispam —
+    owner bot, manage_guild (staff/admin), atau masuk ignore list manual."""
+    if member.id == bot.owner_id:
+        return True
+    if member.guild_permissions.manage_guild:
+        return True
+    if member.id in ac.get("ignore_users", []):
+        return True
+    role_ids = {r.id for r in member.roles}
+    if role_ids & set(ac.get("ignore_roles", [])):
+        return True
+    return False
+
+async def _antispam_punish(guild: discord.Guild, member: discord.Member, punishment: str, reason: str) -> str:
+    """Eksekusi hukuman antispam, return string ringkas buat log."""
+    try:
+        if punishment == "kick":
+            await guild.kick(member, reason=reason)
+            return "**KICKED**"
+        elif punishment == "timeout":
+            await member.timeout(datetime.timedelta(hours=1), reason=reason)
+            return "**TIMEOUT** (1 jam)"
+        else:  # ban — default, paling tegas buat spam bot/raid
+            await guild.ban(member, reason=reason, delete_message_seconds=86400)
+            return "**BANNED**"
+    except discord.Forbidden:
+        return "⚠️ GAGAL — bot gak punya izin/role bot lebih rendah dari target"
+    except Exception as e:
+        logging.error(f"[{BOT_NAME}] Gagal eksekusi punishment antispam: {e}")
+        return f"⚠️ GAGAL — {e}"
+
+async def _antispam_log(guild: discord.Guild, gc: dict, member: discord.Member, kind: str, detail: str, result: str):
+    """Kirim laporan ke log channel antispam (kalau di-set) — dipakai bareng
+    oleh honeypot, cross-channel spam, dan flood detector biar konsisten."""
+    ac     = gc.get("antispam", {})
+    log_id = ac.get("log_channel") or _fallback_log_channel(gc)
+    if not log_id:
+        return
+    log_ch = guild.get_channel(log_id)
+    if not log_ch:
+        return
+    emb = base_embed(f"Antispam: {kind}", None, color=COLOR_ERROR)
+    emb.add_field(name="User",     value=f"{member.mention} (`{member.id}`)", inline=True)
+    emb.add_field(name="Tindakan", value=result, inline=True)
+    emb.add_field(name="Detail",   value=detail, inline=False)
+    emb.set_thumbnail(url=member.display_avatar.url)
+    emb.set_footer(text=BOT_NAME)
+    try:
+        await log_ch.send(embed=emb)
+    except Exception:
+        pass
 
 # ══════════════════════════════════════════════════════════════════
 # OWNER / PERMISSION HELPERS
@@ -909,7 +988,10 @@ async def do_addemoji(guild, emoji_or_url: str, name: str):
 
 def _fallback_log_channel(gc: dict) -> Optional[int]:
     """Dipakai honeypot/log umum kalau mod_log_channel belum di-set —
-    pinjam log channel dari panel ticket pertama yang punya satu."""
+    pinjam log channel dari antispam config, lalu ticket panel pertama
+    yang punya satu."""
+    if gc.get("antispam", {}).get("log_channel"):
+        return gc["antispam"]["log_channel"]
     if gc.get("mod_log_channel"):
         return gc["mod_log_channel"]
     for p in gc["ticket"]["panels"].values():
@@ -1189,11 +1271,14 @@ async def premium_expiry_task():
 
 @tasks.loop(minutes=30)
 async def cleanup_spam_cache():
-    now     = discord.utils.utcnow().timestamp()
-    to_del  = [uid for uid, t in spam_cleanup_times.items() if now - t > 120]
-    for uid in to_del:
-        spam_tracker.pop(uid, None)
-        spam_cleanup_times.pop(uid, None)
+    now    = discord.utils.utcnow().timestamp()
+    to_del = [key for key, t in spam_cleanup_times.items() if now - t > 120]
+    for key in to_del:
+        spam_tracker.pop(key, None)
+        spam_cleanup_times.pop(key, None)
+    stale_flood = [key for key, ts in flood_tracker.items() if not ts or now - ts[-1] > 120]
+    for key in stale_flood:
+        flood_tracker.pop(key, None)
 
 @tasks.loop(minutes=5)
 async def rotate_status():
@@ -1359,29 +1444,34 @@ async def on_message(message: discord.Message):
     if not message.guild:
         return
 
+    # ── Ignored channel — bot diem total, gak proses apapun di sini ────────
+    gc_ignore = guild_cfg(cfg, message.guild.id)
+    if message.channel.id in gc_ignore.get("ignored_channels", []):
+        return
+
     # ── Honeypot channel check ────────────────────────────────────────────
     gc_trap  = guild_cfg(cfg, message.guild.id)
-    trap_ch  = gc_trap.get("spam_trap_channel")
+    ac_trap  = gc_trap.get("antispam", {})
+    trap_ch  = ac_trap.get("trap_channel")
     if trap_ch and message.channel.id == trap_ch:
+        if isinstance(message.author, discord.Member) and _antispam_is_ignored(message.author, ac_trap):
+            return
         try:
             await message.delete()
         except Exception:
             pass
-        try:
-            await message.guild.ban(
-                message.author,
-                reason=f"[{BOT_NAME}] Sent message in honeypot channel.",
-                delete_message_days=1
-            )
-        except discord.Forbidden:
-            pass
-        log_id = _fallback_log_channel(gc_trap)
+        result = await _antispam_punish(
+            message.guild, message.author, ac_trap.get("punishment", "ban"),
+            f"[{BOT_NAME}] Sent message in honeypot channel."
+        )
+        log_id = ac_trap.get("log_channel") or _fallback_log_channel(gc_trap)
         if log_id:
             log_ch = message.guild.get_channel(log_id)
             if log_ch:
-                emb = base_embed("Honeypot — Auto Banned", None, color=COLOR_ERROR)
-                emb.add_field(name="User",    value=f"{message.author.mention} (`{message.author.id}`)", inline=True)
-                emb.add_field(name="Channel", value=f"<#{trap_ch}>", inline=True)
+                emb = base_embed("Honeypot Triggered", None, color=COLOR_ERROR)
+                emb.add_field(name="User",      value=f"{message.author.mention} (`{message.author.id}`)", inline=True)
+                emb.add_field(name="Channel",   value=f"<#{trap_ch}>", inline=True)
+                emb.add_field(name="Tindakan",  value=result, inline=True)
                 snippet = (message.content or "")[:200]
                 if snippet:
                     emb.add_field(name="Content", value=f"```{snippet}```", inline=False)
@@ -1444,43 +1534,60 @@ async def on_message(message: discord.Message):
                         except Exception:
                             pass
 
-    # ── Anti cross-channel spam ────────────────────────────────────────────
-    uid         = message.author.id
-    fingerprint = _spam_fingerprint(message)
-    if fingerprint == "empty":
-        await bot.process_commands(message)
-        return
-    now_ts = discord.utils.utcnow().timestamp()
-    spam_cleanup_times[uid] = now_ts
-    tracker = spam_tracker[uid]
-    if fingerprint not in tracker:
-        tracker[fingerprint] = {"channels": set(), "messages": [], "first_seen": now_ts}
-    entry = tracker[fingerprint]
-    if now_ts - entry["first_seen"] > SPAM_WINDOW:
-        tracker[fingerprint] = {"channels": {message.channel.id}, "messages": [(message.channel.id, message.id)], "first_seen": now_ts}
-        entry = tracker[fingerprint]
-    else:
-        entry["channels"].add(message.channel.id)
-        entry["messages"].append((message.channel.id, message.id))
-    if len(entry["channels"]) >= SPAM_THRESHOLD:
-        del tracker[fingerprint]
-        for ch_id, msg_id in entry["messages"]:
-            try:
-                ch  = message.guild.get_channel(ch_id)
-                msg = await ch.fetch_message(msg_id) if ch else None
-                if msg:
-                    await msg.delete()
-            except Exception:
-                pass
-        try:
-            await message.guild.ban(
-                message.author,
-                reason=f"[{BOT_NAME}] Cross-channel spam detected.",
-                delete_message_days=1
-            )
-        except discord.Forbidden:
-            pass
-        return
+    # ── Anti cross-channel spam + flood ─────────────────────────────────────
+    ac = gc.get("antispam", {})
+    if isinstance(message.author, discord.Member) and not _antispam_is_ignored(message.author, ac):
+        uid    = message.author.id
+        gid    = message.guild.id
+        key    = (gid, uid)
+        now_ts = discord.utils.utcnow().timestamp()
+
+        # -- Flood: banyak pesan beruntun di channel yang sama dalam waktu singkat
+        flood_count  = ac.get("flood_count", 5)
+        flood_window = ac.get("flood_window", 4)
+        fl = flood_tracker[key]
+        fl.append(now_ts)
+        while fl and now_ts - fl[0] > flood_window:
+            fl.pop(0)
+        if len(fl) >= flood_count:
+            flood_tracker.pop(key, None)
+            result = await _antispam_punish(message.guild, message.author, ac.get("punishment", "ban"),
+                                             f"[{BOT_NAME}] Message flood detected ({flood_count}+ pesan dalam {flood_window}s).")
+            await _antispam_log(message.guild, gc, message.author, "Message Flood",
+                                 f"{flood_count}+ pesan dalam {flood_window} detik di {message.channel.mention}", result)
+            return
+
+        # -- Cross-channel: pesan/link/attachment identik disebar ke banyak channel berbeda
+        fingerprint = _spam_fingerprint(message)
+        if fingerprint != "empty":
+            threshold = ac.get("threshold", SPAM_THRESHOLD)
+            window    = ac.get("window", SPAM_WINDOW)
+            spam_cleanup_times[key] = now_ts
+            tracker = spam_tracker[key]
+            if fingerprint not in tracker:
+                tracker[fingerprint] = {"channels": set(), "messages": [], "first_seen": now_ts}
+            entry = tracker[fingerprint]
+            if now_ts - entry["first_seen"] > window:
+                tracker[fingerprint] = {"channels": {message.channel.id}, "messages": [(message.channel.id, message.id)], "first_seen": now_ts}
+                entry = tracker[fingerprint]
+            else:
+                entry["channels"].add(message.channel.id)
+                entry["messages"].append((message.channel.id, message.id))
+            if len(entry["channels"]) >= threshold:
+                del tracker[fingerprint]
+                for ch_id, msg_id in entry["messages"]:
+                    try:
+                        ch  = message.guild.get_channel(ch_id)
+                        msg = await ch.fetch_message(msg_id) if ch else None
+                        if msg:
+                            await msg.delete()
+                    except Exception:
+                        pass
+                result = await _antispam_punish(message.guild, message.author, ac.get("punishment", "ban"),
+                                                 f"[{BOT_NAME}] Cross-channel spam detected ({threshold}+ channel dalam {window}s).")
+                await _antispam_log(message.guild, gc, message.author, "Cross-Channel Spam",
+                                     f"Pesan/link yang sama muncul di {len(entry['channels'])} channel dalam {window} detik.", result)
+                return
 
     # ── Prefix routing + no-prefix ────────────────────────────────────────
     low = message.content.lower().strip()
@@ -1627,15 +1734,15 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 # PREFIX COMMANDS — MODERATION
 # ══════════════════════════════════════════════════════════════════
 
-@bot.command(name="kick")
+@bot.command(name="kick", aliases=["k"])
 async def pfx_kick(ctx, member: discord.Member, *, reason: str = "No reason provided."):
     await do_kick(ctx.guild, ctx.author, member, reason, ctx.send)
 
-@bot.command(name="ban")
+@bot.command(name="ban", aliases=["b"])
 async def pfx_ban(ctx, member: discord.Member, *, reason: str = "No reason provided."):
     await do_ban(ctx.guild, ctx.author, member, reason, ctx.send)
 
-@bot.command(name="unban")
+@bot.command(name="unban", aliases=["ub"])
 async def pfx_unban(ctx, user_id: str):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.ban_members:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
@@ -1648,11 +1755,11 @@ async def pfx_unban(ctx, user_id: str):
     except discord.Forbidden:
         await ctx.send(embed=error_embed("Bot tidak punya izin."))
 
-@bot.command(name="timeout")
+@bot.command(name="timeout", aliases=["to", "mute"])
 async def pfx_timeout(ctx, member: discord.Member, minutes: int, *, reason: str = "No reason provided."):
     await do_timeout(ctx.guild, ctx.author, member, minutes, reason, ctx.send)
 
-@bot.command(name="untimeout")
+@bot.command(name="untimeout", aliases=["unmute", "unto"])
 async def pfx_untimeout(ctx, member: discord.Member):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.moderate_members:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
@@ -1662,11 +1769,11 @@ async def pfx_untimeout(ctx, member: discord.Member):
     except discord.Forbidden:
         await ctx.send(embed=error_embed("Bot tidak punya izin."))
 
-@bot.command(name="warn")
+@bot.command(name="warn", aliases=["w"])
 async def pfx_warn(ctx, member: discord.Member, *, reason: str = "No reason provided."):
     await do_warn(ctx.guild, ctx.author, member, reason, ctx.send)
 
-@bot.command(name="warnings")
+@bot.command(name="warnings", aliases=["warns"])
 async def pfx_warnings(ctx, member: discord.Member = None):
     target = member or ctx.author
     gc     = guild_cfg(cfg, ctx.guild.id)
@@ -1682,7 +1789,7 @@ async def pfx_warnings(ctx, member: discord.Member = None):
     embed.set_footer(text=f"Total: {len(warns)} warning(s) • {BOT_NAME}")
     await ctx.send(embed=embed)
 
-@bot.command(name="unwarn")
+@bot.command(name="unwarn", aliases=["uw"])
 async def pfx_unwarn(ctx, member: discord.Member, number: int):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_messages:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
@@ -1696,7 +1803,7 @@ async def pfx_unwarn(ctx, member: discord.Member, number: int):
     save_config(cfg)
     await ctx.send(embed=success_embed(f"Warning #{number} `{removed.get('reason','?')}` dihapus dari {member.mention}."))
 
-@bot.command(name="clearwarnings")
+@bot.command(name="clearwarnings", aliases=["cw", "clearwarns"])
 async def pfx_clearwarnings(ctx, member: discord.Member):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_messages:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
@@ -1705,7 +1812,7 @@ async def pfx_clearwarnings(ctx, member: discord.Member):
     save_config(cfg)
     await ctx.send(embed=success_embed(f"Semua warning {member.mention} dihapus."))
 
-@bot.command(name="purge")
+@bot.command(name="purge", aliases=["clear", "prune"])
 async def pfx_purge(ctx, amount: int = 10):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_messages:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")), delete_after=5)
@@ -1718,7 +1825,7 @@ async def pfx_purge(ctx, amount: int = 10):
     except Exception:
         pass
 
-@bot.command(name="lock")
+@bot.command(name="lock", aliases=["lockdown"])
 async def pfx_lock(ctx, channel: discord.TextChannel = None):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_channels:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
@@ -1731,7 +1838,7 @@ async def pfx_lock(ctx, channel: discord.TextChannel = None):
     except discord.Forbidden:
         await ctx.send(embed=error_embed("Bot tidak punya izin."))
 
-@bot.command(name="unlock")
+@bot.command(name="unlock", aliases=["unlockdown"])
 async def pfx_unlock(ctx, channel: discord.TextChannel = None):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_channels:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
@@ -1744,7 +1851,7 @@ async def pfx_unlock(ctx, channel: discord.TextChannel = None):
     except discord.Forbidden:
         await ctx.send(embed=error_embed("Bot tidak punya izin."))
 
-@bot.command(name="slowmode")
+@bot.command(name="slowmode", aliases=["sm"])
 async def pfx_slowmode(ctx, seconds: int = 0, channel: discord.TextChannel = None):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_channels:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
@@ -1759,25 +1866,25 @@ async def pfx_slowmode(ctx, seconds: int = 0, channel: discord.TextChannel = Non
 
 # ── ROLE & VOICE ──────────────────────────────────────────────────
 
-@bot.command(name="addrole")
+@bot.command(name="addrole", aliases=["ar"])
 async def pfx_addrole(ctx, member: discord.Member, role: discord.Role):
     await do_addrole(ctx.guild, ctx.author, member, role, ctx.send)
 
-@bot.command(name="removerole")
+@bot.command(name="removerole", aliases=["rr"])
 async def pfx_removerole(ctx, member: discord.Member, role: discord.Role):
     await do_removerole(ctx.guild, ctx.author, member, role, ctx.send)
 
-@bot.command(name="move")
+@bot.command(name="move", aliases=["mv"])
 async def pfx_move(ctx, member: discord.Member, channel: discord.VoiceChannel):
     await do_move(ctx.guild, ctx.author, member, channel, ctx.send)
 
 # ── INFO ──────────────────────────────────────────────────────────
 
-@bot.command(name="userinfo")
+@bot.command(name="userinfo", aliases=["ui", "whois"])
 async def pfx_userinfo(ctx, member: discord.Member = None):
     await do_userinfo(ctx.guild, member or ctx.author, ctx.send)
 
-@bot.command(name="serverinfo")
+@bot.command(name="serverinfo", aliases=["si"])
 async def pfx_serverinfo(ctx):
     g = ctx.guild
     embed = discord.Embed(title=g.name, description=g.description or "", color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
@@ -1795,15 +1902,15 @@ async def pfx_serverinfo(ctx):
     embed.set_footer(text=f"{BOT_NAME} • ID: {g.id}")
     await ctx.send(embed=embed)
 
-@bot.command(name="avatar")
+@bot.command(name="avatar", aliases=["av", "pfp"])
 async def pfx_avatar(ctx, member: discord.Member = None):
     await do_avatar(member or ctx.author, ctx.send)
 
-@bot.command(name="ping")
+@bot.command(name="ping", aliases=["pong", "latency"])
 async def pfx_ping(ctx):
     await do_ping(ctx.send)
 
-@bot.command(name="addemoji")
+@bot.command(name="addemoji", aliases=["ae"])
 async def pfx_addemoji(ctx, emoji_or_url: str = "", *, name: str = ""):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_emojis:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
@@ -1818,7 +1925,7 @@ async def pfx_addemoji(ctx, emoji_or_url: str = "", *, name: str = ""):
 
 # ── PROFILE ───────────────────────────────────────────────────────
 
-@bot.command(name="profile")
+@bot.command(name="profile", aliases=["p", "pf"])
 async def pfx_profile(ctx, member: discord.Member = None):
     target = member or ctx.author
     embed  = build_profile_embed(target)
@@ -1869,7 +1976,7 @@ def _support_boost_promo(uid: int):
     view.add_item(discord.ui.Button(label="Join Support Server", style=discord.ButtonStyle.link, url=SUPPORT_INVITE))
     return content, view
 
-@bot.command(name="rank")
+@bot.command(name="rank", aliases=["r"])
 async def pfx_rank(ctx, member: discord.Member = None):
     import aiohttp
     target      = member or ctx.author
@@ -1949,7 +2056,7 @@ async def pfx_leaderboard(ctx):
     embed.set_footer(text=f"{BOT_NAME} · {ctx.guild.name}")
     await ctx.send(embed=embed)
 
-@bot.command(name="level")
+@bot.command(name="level", aliases=["lvl"])
 async def pfx_level(ctx, sub: str = "", *args):
     sub = sub.lower()
     gc  = guild_cfg(cfg, ctx.guild.id)
@@ -2103,7 +2210,7 @@ async def pfx_level(ctx, sub: str = "", *args):
             "`level status` - lihat konfigurasi\n"
             "`level rank [@user]` - lihat rank\n"
             "`level leaderboard` - top 10"))
-@bot.command(name="xp")
+@bot.command(name="xp", aliases=["exp"])
 async def pfx_xp(ctx, sub: str = "", *args):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
@@ -2154,7 +2261,7 @@ async def pfx_xp(ctx, sub: str = "", *args):
 
 # ── TICKET ────────────────────────────────────────────────────────
 
-@bot.command(name="ticket")
+@bot.command(name="ticket", aliases=["tix"])
 async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
     sub    = sub.lower()
     gc     = guild_cfg(cfg, ctx.guild.id)
@@ -2296,7 +2403,7 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
 
 # ── GIVEAWAY ─────────────────────────────────────────────────────
 
-@bot.command(name="giveaway")
+@bot.command(name="giveaway", aliases=["gw"])
 async def pfx_giveaway(ctx, sub: str = "", *args):
     sub = sub.lower()
     if sub == "list":
@@ -2406,7 +2513,7 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
 
 # ── LANGUAGE ─────────────────────────────────────────────────────
 
-@bot.command(name="language")
+@bot.command(name="language", aliases=["lang"])
 async def pfx_language(ctx, action: str = "list", lang: str = ""):
     if action.lower() == "set":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
@@ -2423,32 +2530,182 @@ async def pfx_language(ctx, action: str = "list", lang: str = ""):
 
 # ── ANTISPAM HONEYPOT ─────────────────────────────────────────────
 
-@bot.command(name="antispam")
-async def pfx_antispam(ctx, sub: str = "", *, args: str = ""):
+@bot.command(name="ignorechannel", aliases=["ignorech", "ic"])
+async def pfx_ignorechannel(ctx, action: str = "", *, rest: str = ""):
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+    gc     = guild_cfg(cfg, ctx.guild.id)
+    ignored = gc.setdefault("ignored_channels", [])
+    action  = action.lower()
+
+    def resolve_channel():
+        if ctx.message.channel_mentions:
+            return ctx.message.channel_mentions[0]
+        target = rest.strip()
+        if target.isdigit():
+            return ctx.guild.get_channel(int(target))
+        return ctx.channel if not target else None
+
+    if action == "add":
+        ch = resolve_channel()
+        if not ch: return await ctx.send(embed=error_embed("Channel tidak ditemukan. Mention channel-nya atau kasih ID."))
+        if ch.id not in ignored:
+            ignored.append(ch.id)
+            save_config(cfg)
+        warn = ""
+        if ch.id == ctx.channel.id:
+            warn = f"\n\n⚠️ Ini channel yang lagi lu pakai sekarang — command apapun di sini gak akan direspon lagi mulai sekarang, **termasuk** `ignorechannel remove`. Kalau mau aktifin lagi, jalanin dari channel lain: `ignorechannel remove #{ch.name}`."
+        await ctx.send(embed=success_embed(f"Bot sekarang diem total di {ch.mention} — gak proses command, gak gain XP, gak respon apapun.{warn}"))
+
+    elif action == "remove":
+        ch = resolve_channel()
+        if not ch: return await ctx.send(embed=error_embed("Channel tidak ditemukan. Mention channel-nya atau kasih ID."))
+        if ch.id in ignored:
+            ignored.remove(ch.id)
+            save_config(cfg)
+            await ctx.send(embed=success_embed(f"Bot balik aktif normal di {ch.mention}."))
+        else:
+            await ctx.send(embed=error_embed(f"{ch.mention} emang belum di-ignore."))
+
+    elif action == "list":
+        lines = []
+        for cid in ignored:
+            ch = ctx.guild.get_channel(cid)
+            lines.append(ch.mention if ch else f"`{cid}` (channel udah gak ada)")
+        await ctx.send(embed=info_embed("Ignored Channels", "\n".join(lines) or "*(kosong — bot aktif di semua channel)*"))
+
+    else:
+        await ctx.send(embed=info_embed("Ignore Channel", (
+            "`ignorechannel add [#channel]` — bot diem total di channel ini (default: channel sekarang)\n"
+            "`ignorechannel remove [#channel]` — aktifin lagi\n"
+            "`ignorechannel list` — lihat semua channel yang di-ignore\n\n"
+            "Beda sama `antispam ignore` — itu buat skip ORANG dari deteksi spam, "
+            "ini buat bikin bot gak respon sama sekali di CHANNEL tertentu."
+        )))
+
+@bot.command(name="antispam", aliases=["as"])
+async def pfx_antispam(ctx, sub: str = "", *, rest: str = ""):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
         return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
     gc  = guild_cfg(cfg, ctx.guild.id)
+    ac  = gc.setdefault("antispam", {})
     sub = sub.lower()
+
     if sub == "setchannel":
-        if not args:
-            gc["spam_trap_channel"] = None
+        if not rest.strip():
+            ac["trap_channel"] = None
             save_config(cfg)
             return await ctx.send(embed=success_embed("Honeypot channel dinonaktifkan."))
-        ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else (ctx.guild.get_channel(int(args.strip())) if args.strip().isdigit() else None)
+        ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else (ctx.guild.get_channel(int(rest.strip())) if rest.strip().isdigit() else None)
         if not ch: return await ctx.send(embed=error_embed("Channel tidak ditemukan."))
-        gc["spam_trap_channel"] = ch.id
+        ac["trap_channel"] = ch.id
         save_config(cfg)
-        await ctx.send(embed=base_embed("Honeypot Aktif", ch.mention + " — siapapun yang kirim pesan di sini langsung di-ban.", color=COLOR_ERROR))
+        await ctx.send(embed=base_embed("Honeypot Aktif", ch.mention + " — siapapun yang kirim pesan di sini langsung kena tindakan.", color=COLOR_ERROR))
+
+    elif sub == "logchannel":
+        if not rest.strip():
+            ac["log_channel"] = None
+            save_config(cfg)
+            return await ctx.send(embed=success_embed("Log channel antispam dikosongkan."))
+        ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else (ctx.guild.get_channel(int(rest.strip())) if rest.strip().isdigit() else None)
+        if not ch: return await ctx.send(embed=error_embed("Channel tidak ditemukan."))
+        ac["log_channel"] = ch.id
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Laporan antispam (honeypot, cross-channel spam, flood) bakal dikirim ke {ch.mention}."))
+
+    elif sub == "punishment":
+        choice = rest.strip().lower()
+        if choice not in ("ban", "kick", "timeout"):
+            return await ctx.send(embed=error_embed("Pilihan: `ban`, `kick`, atau `timeout`."))
+        ac["punishment"] = choice
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Tindakan antispam di-set ke **{choice}**."))
+
+    elif sub == "threshold":
+        parts = rest.split()
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            return await ctx.send(embed=error_embed(
+                f"Usage: `antispam threshold <jumlah_channel> <detik>`\nSekarang: **{ac.get('threshold', SPAM_THRESHOLD)} channel / {ac.get('window', SPAM_WINDOW)}s**"))
+        ac["threshold"], ac["window"] = int(parts[0]), int(parts[1])
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Cross-channel spam sekarang trigger kalau pesan/link yang sama muncul di **{ac['threshold']} channel** dalam **{ac['window']} detik**."))
+
+    elif sub == "flood":
+        parts = rest.split()
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            return await ctx.send(embed=error_embed(
+                f"Usage: `antispam flood <jumlah_pesan> <detik>`\nSekarang: **{ac.get('flood_count', 5)} pesan / {ac.get('flood_window', 4)}s**"))
+        ac["flood_count"], ac["flood_window"] = int(parts[0]), int(parts[1])
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Flood detection sekarang trigger kalau ada **{ac['flood_count']} pesan** dalam **{ac['flood_window']} detik** di channel yang sama."))
+
+    elif sub == "ignore":
+        parts  = rest.split(maxsplit=1)
+        action = parts[0].lower() if parts else ""
+        target_str = parts[1] if len(parts) > 1 else ""
+        users = ac.setdefault("ignore_users", [])
+        roles = ac.setdefault("ignore_roles", [])
+        if action == "add":
+            if ctx.message.mentions:
+                u = ctx.message.mentions[0]
+                if u.id not in users: users.append(u.id)
+                save_config(cfg)
+                return await ctx.send(embed=success_embed(f"{u.mention} di-skip dari semua deteksi antispam."))
+            if ctx.message.role_mentions:
+                r = ctx.message.role_mentions[0]
+                if r.id not in roles: roles.append(r.id)
+                save_config(cfg)
+                return await ctx.send(embed=success_embed(f"Role {r.mention} di-skip dari semua deteksi antispam."))
+            return await ctx.send(embed=error_embed("Mention user atau role yang mau di-ignore."))
+        elif action == "remove":
+            if ctx.message.mentions:
+                u = ctx.message.mentions[0]
+                if u.id in users: users.remove(u.id)
+                save_config(cfg)
+                return await ctx.send(embed=success_embed(f"{u.mention} dihapus dari ignore list."))
+            if ctx.message.role_mentions:
+                r = ctx.message.role_mentions[0]
+                if r.id in roles: roles.remove(r.id)
+                save_config(cfg)
+                return await ctx.send(embed=success_embed(f"Role {r.mention} dihapus dari ignore list."))
+            return await ctx.send(embed=error_embed("Mention user atau role yang mau dihapus dari ignore list."))
+        elif action == "list":
+            u_lines = [f"<@{uid}>" for uid in users] or ["*(kosong)*"]
+            r_lines = [f"<@&{rid}>" for rid in roles] or ["*(kosong)*"]
+            embed = base_embed("Antispam Ignore List", None)
+            embed.add_field(name="Users", value="\n".join(u_lines), inline=False)
+            embed.add_field(name="Roles", value="\n".join(r_lines), inline=False)
+            embed.set_footer(text="Owner bot & siapapun dengan izin Manage Server otomatis di-skip juga.")
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send(embed=info_embed("Antispam Ignore", "`antispam ignore add @user/@role`\n`antispam ignore remove @user/@role`\n`antispam ignore list`"))
+
     elif sub == "status":
-        trap = gc.get("spam_trap_channel")
-        ch   = ctx.guild.get_channel(trap) if trap else None
-        await ctx.send(embed=base_embed("Honeypot Status", "Aktif di " + ch.mention if ch else "Tidak aktif.", color=COLOR_ERROR if ch else COLOR_INFO))
+        trap_ch = ctx.guild.get_channel(ac.get("trap_channel")) if ac.get("trap_channel") else None
+        log_ch  = ctx.guild.get_channel(ac.get("log_channel"))  if ac.get("log_channel")  else None
+        embed = base_embed("Antispam Status", None, color=COLOR_ERROR if trap_ch else COLOR_INFO)
+        embed.add_field(name="Honeypot Channel", value=trap_ch.mention if trap_ch else "*(tidak aktif)*", inline=True)
+        embed.add_field(name="Log Channel", value=log_ch.mention if log_ch else "*(belum di-set)*", inline=True)
+        embed.add_field(name="Tindakan", value=f"`{ac.get('punishment', 'ban')}`", inline=True)
+        embed.add_field(name="Cross-Channel Threshold", value=f"{ac.get('threshold', SPAM_THRESHOLD)} channel / {ac.get('window', SPAM_WINDOW)}s", inline=True)
+        embed.add_field(name="Flood Threshold", value=f"{ac.get('flood_count', 5)} pesan / {ac.get('flood_window', 4)}s", inline=True)
+        embed.add_field(name="Ignore List", value=f"{len(ac.get('ignore_users', []))} user, {len(ac.get('ignore_roles', []))} role", inline=True)
+        await ctx.send(embed=embed)
+
     else:
-        await ctx.send(embed=info_embed("Antispam Honeypot", "`antispam setchannel #channel`\n`antispam setchannel` (nonaktifkan)\n`antispam status`"))
+        await ctx.send(embed=info_embed("Antispam", (
+            "`antispam setchannel #channel` — honeypot trap (nonaktifkan tanpa argumen)\n"
+            "`antispam logchannel #channel` — kemana laporan dikirim\n"
+            "`antispam punishment ban/kick/timeout` — tindakan ke pelaku\n"
+            "`antispam threshold <channel> <detik>` — sensitivitas cross-channel spam\n"
+            "`antispam flood <pesan> <detik>` — sensitivitas message flood\n"
+            "`antispam ignore add/remove/list @user/@role` — skip dari deteksi\n"
+            "`antispam status` — lihat semua konfigurasi sekarang"
+        )))
 
 # ── ANTI-NUKE ────────────────────────────────────────────────────
 
-@bot.command(name="antinuke")
+@bot.command(name="antinuke", aliases=["an"])
 async def pfx_antinuke(ctx, sub: str = "", *, rest: str = ""):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.administrator:
         return await ctx.send(embed=error_embed("Cuma Administrator atau owner yang bisa atur anti-nuke."))
@@ -2537,7 +2794,7 @@ async def pfx_antinuke(ctx, sub: str = "", *, rest: str = ""):
 
 # ── OWNER COMMANDS ────────────────────────────────────────────────
 
-@bot.command(name="maintenance")
+@bot.command(name="maintenance", aliases=["mnt"])
 @is_owner()
 async def pfx_maintenance(ctx, action: str = "", *, reason: str = ""):
     action = action.lower()
@@ -2580,7 +2837,7 @@ async def pfx_maintenance(ctx, action: str = "", *, reason: str = ""):
             "`maintenance off` — buka lagi\n"
             "`maintenance status` — cek status sekarang"))
 
-@bot.command(name="premiumlock")
+@bot.command(name="premiumlock", aliases=["plock"])
 @is_owner()
 async def pfx_premiumlock(ctx, action: str = "", *, cmd_name: str = ""):
     action = action.lower()
@@ -2615,7 +2872,7 @@ async def pfx_premiumlock(ctx, action: str = "", *, cmd_name: str = ""):
             "`premiumlock list` — lihat semua command yang dikunci\n\n"
             "Nama command pakai nama slash-nya, contoh untuk subcommand: `ticket setup`."))
 
-@bot.command(name="noprefix")
+@bot.command(name="noprefix", aliases=["np"])
 @is_owner()
 async def pfx_noprefix(ctx, action: str = "", *, rest: str = ""):
     action     = action.lower()
@@ -2718,7 +2975,7 @@ async def pfx_noprefix(ctx, action: str = "", *, rest: str = ""):
         save_config(cfg)
         await ctx.send(embed=success_embed(f"No-prefix dicabut dari {user.mention}."))
 
-@bot.command(name="botrole")
+@bot.command(name="botrole", aliases=["br"])
 @is_owner()
 async def pfx_botrole(ctx, action: str = "", *args):
     action    = action.lower()
@@ -2826,7 +3083,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
         save_config(cfg)
         await ctx.send(embed=success_embed(f"Bot role manual **{removed.capitalize()}** dihapus dari {member.mention}."))
 
-@bot.command(name="grantpremium")
+@bot.command(name="grantpremium", aliases=["gp"])
 @is_owner()
 async def pfx_grantpremium(ctx, member: discord.Member = None, duration: str = ""):
     if not member:
@@ -2865,7 +3122,7 @@ async def pfx_grantpremium(ctx, member: discord.Member = None, duration: str = "
     except Exception: pass
     await ctx.send(embed=embed)
 
-@bot.command(name="blacklist")
+@bot.command(name="blacklist", aliases=["bl"])
 @is_owner()
 async def pfx_blacklist(ctx, action: str = "", guild_id: str = ""):
     bl = cfg.setdefault("blacklisted_guilds", [])
@@ -2962,7 +3219,7 @@ async def pfx_vxservers(ctx, sort: str = "members"):
     view = ServerListView(guilds, bot.owner_id)
     await ctx.send(embed=view.build_embed(), view=view)
 
-@bot.command(name="vxleave")
+@bot.command(name="vxleave", aliases=["leave"])
 @is_owner()
 async def pfx_vxleave(ctx, guild_id: str = ""):
     if not guild_id:
@@ -2990,7 +3247,7 @@ async def pfx_vxleave(ctx, guild_id: str = ""):
 
 # ── HELP ─────────────────────────────────────────────────────────
 
-@bot.command(name="help")
+@bot.command(name="help", aliases=["h"])
 async def pfx_help(ctx):
     has_np = user_has_no_prefix(ctx.guild, ctx.author)
     embed = discord.Embed(
@@ -3023,9 +3280,11 @@ async def pfx_help(ctx):
     embed.add_field(name=sec(ICON_GIVEAWAY, "Giveaway"),
         value="`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`", inline=False)
     embed.add_field(name=sec(ICON_ANTISPAM, "Antispam"),
-        value="`antispam setchannel #ch` · `antispam status`", inline=False)
+        value="`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`", inline=False)
     embed.add_field(name=sec(ICON_ANTINUKE, "Anti-Nuke"),
         value="`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`", inline=False)
+    embed.add_field(name="🔇 Ignore Channel",
+        value="`ignorechannel add/remove/list [#channel]` — bot diem total di channel tertentu", inline=False)
     embed.add_field(name=sec(ICON_BOOST, "Server Boost"),
         value="`/boostconfig` (slash only) — atur channel & tampilan notifikasi boost", inline=False)
     embed.add_field(name=sec(ICON_LANGUAGE, "Language"),
@@ -3037,7 +3296,7 @@ async def pfx_help(ctx):
     embed.set_footer(text=BOT_NAME + " v" + BOT_VERSION + " • " + BOT_TAGLINE)
     await ctx.send(embed=embed)
 
-@bot.command(name="ownerhelp")
+@bot.command(name="ownerhelp", aliases=["oh"])
 @is_owner()
 async def pfx_ownerhelp(ctx):
     """Reference command owner-only — selalu dikirim lewat DM biar gak kebaca orang lain di channel."""
@@ -3242,8 +3501,9 @@ async def slash_help(i: discord.Interaction):
     embed.add_field(name="Ticket", value="`ticket setup` · `ticket panel` · `ticket edit` · `ticket list` · `ticket delete` · `ticket close`", inline=False)
     embed.add_field(name="Level & XP", value="`rank` · `leaderboard` (alias `lb`) · `level` · `xp`", inline=False)
     embed.add_field(name="Giveaway", value="`giveaway start/end/reroll/list`", inline=False)
-    embed.add_field(name="Antispam", value="`antispam setchannel` · `antispam status`", inline=False)
+    embed.add_field(name="Antispam", value="`antispam setchannel/logchannel/punishment/threshold/flood/ignore/status`", inline=False)
     embed.add_field(name=f"{e(ICON_ANTINUKE, '🛡️')} Anti-Nuke".strip(), value="`antinuke enable/disable/logchannel/punishment/whitelist/status`", inline=False)
+    embed.add_field(name="🔇 Ignore Channel", value="`ignorechannel add/remove/list [#channel]`", inline=False)
     embed.add_field(name=f"{e(ICON_BOOST, '🎉')} Server Boost".strip(), value="`/boostconfig` — atur channel & tampilan notifikasi boost", inline=False)
     if is_owner_user:
         embed.add_field(name="Owner Only", value=(
