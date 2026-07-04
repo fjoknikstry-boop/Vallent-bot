@@ -9,6 +9,16 @@ Font di-bundle sendiri di assets/fonts/ (lisensi SIL OFL, boleh
 didistribusikan ulang) biar tampilannya konsisten di mesin manapun bot
 di-deploy (Railway, VPS, lokal, dll) — gak tergantung font apa yang
 kebetulan ke-install di OS host.
+
+FONT FALLBACK CHAIN — kenapa ini penting:
+Font utama (BigShoulders / Outfit) itu font Latin biasa, banyak karakter
+yang gak ke-cover (Cyrillic, Yunani, Arab, Thai, emoji, dll) — kalau
+dipaksa render bakal jadi kotak "tofu" putih. Username Discord bisa
+berisi HAMPIR APAPUN, jadi setiap karakter dicek satu-satu: kalau font
+utama gak punya glyph-nya, otomatis lempar ke font fallback yang cocok
+(NotoSans utk Cyrillic/Yunani/Vietnam, NotoSansArabic, NotoSansThai,
+NotoEmoji utk emoji). Kalau semua fallback juga gak punya, baru barulah
+dibiarkan tofu (kasus sangat jarang — misal aksara langka).
 """
 
 import io
@@ -30,12 +40,23 @@ F_DISPLAY = os.path.join(_FONT_DIR, "BigShoulders-Bold.ttf")
 F_BOLD    = os.path.join(_FONT_DIR, "Outfit-Bold.ttf")
 F_REG     = os.path.join(_FONT_DIR, "Outfit-Regular.ttf")
 
-_font_cache: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
+# Font fallback, urut dari yang paling mungkin kepakai. Semua ini variable
+# font satu file yang nyimpen banyak ketebalan (axis "wght"), jadi kita
+# tinggal set beratnya on-the-fly gak perlu file terpisah per bold/regular.
+_FALLBACK_FONTS = [
+    os.path.join(_FONT_DIR, "NotoSans-Var.ttf"),        # Latin extended, Cyrillic, Yunani, Vietnam, dst
+    os.path.join(_FONT_DIR, "NotoSansArabic-Var.ttf"),  # Arab
+    os.path.join(_FONT_DIR, "NotoSansThai-Var.ttf"),    # Thai
+    os.path.join(_FONT_DIR, "NotoEmoji-Var.ttf"),       # Emoji (monokrom outline, bukan colored)
+]
+
+_font_cache: dict = {}
+_cmap_cache: dict = {}
 
 def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
-    """Load font dengan cache + fallback ke default PIL font kalau file-nya
-    gak ketemu (misal folder assets/ kelewat pas deploy) — biar card tetap
-    kegenerate (walau kurang cantik) daripada bikin command crash total."""
+    """Load font dasar (Latin) dengan cache + fallback ke default PIL font
+    kalau file-nya gak ketemu — biar card tetap kegenerate (walau kurang
+    cantik) daripada bikin command crash total."""
     key = (path, size)
     if key not in _font_cache:
         try:
@@ -44,6 +65,75 @@ def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
             log.warning(f"Font gagal dimuat ({path}): {e} — pakai fallback default.")
             _font_cache[key] = ImageFont.load_default(size=size)
     return _font_cache[key]
+
+def _get_cmap(path: str) -> set:
+    """Daftar codepoint yang beneran punya glyph di font tersebut — dicek
+    sekali per font lalu di-cache, karena baca cmap itu operasi yang agak
+    berat kalau diulang tiap karakter."""
+    if path not in _cmap_cache:
+        try:
+            from fontTools.ttLib import TTFont as _TTFont
+            _cmap_cache[path] = set(_TTFont(path, fontNumber=0).getBestCmap().keys())
+        except Exception as e:
+            log.warning(f"Gagal baca cmap {path}: {e}")
+            _cmap_cache[path] = set()
+    return _cmap_cache[path]
+
+def _load_variable(path: str, size: int, weight: int) -> ImageFont.FreeTypeFont:
+    """Load font fallback (variable font) di berat tertentu, dengan cache."""
+    key = (path, size, weight)
+    if key not in _font_cache:
+        try:
+            f = ImageFont.truetype(path, size)
+            try:
+                f.set_variation_by_axes([weight] if len(f.get_variation_axes()) == 1 else [weight, 100])
+            except Exception:
+                pass
+            _font_cache[key] = f
+        except Exception as e:
+            log.warning(f"Font fallback gagal dimuat ({path}): {e}")
+            _font_cache[key] = ImageFont.load_default(size=size)
+    return _font_cache[key]
+
+def _resolve_font(ch: str, primary_path: str, size: int, bold: bool):
+    """Cari font pertama (utama, lalu fallback berurutan) yang punya glyph
+    buat karakter ini. Kalau gak ada satupun yang cocok, tetap kembalikan
+    font utama (best effort — tofu box, tapi command gak crash)."""
+    if ch.isspace() or ord(ch) in _get_cmap(primary_path):
+        return _font(primary_path, size)
+    weight = 700 if bold else 400
+    for fb_path in _FALLBACK_FONTS:
+        if os.path.exists(fb_path) and ord(ch) in _get_cmap(fb_path):
+            return _load_variable(fb_path, size, weight)
+    return _font(primary_path, size)
+
+def _runs(text: str, primary_path: str, size: int, bold: bool = True):
+    """Pecah teks jadi potongan-potongan (substring, font) — tiap potongan
+    pakai satu font yang sama, biar hemat draw call dan render-nya rapi."""
+    runs, cur_font, cur_text = [], None, ""
+    for ch in text:
+        f = _resolve_font(ch, primary_path, size, bold)
+        if f is cur_font:
+            cur_text += ch
+        else:
+            if cur_text:
+                runs.append((cur_text, cur_font))
+            cur_font, cur_text = f, ch
+    if cur_text:
+        runs.append((cur_text, cur_font))
+    return runs
+
+def draw_text(draw: ImageDraw.ImageDraw, xy, text: str, primary_path: str, size: int, fill, bold: bool = True) -> None:
+    """Ganti draw.text() biasa — otomatis lempar tiap karakter yang gak
+    ke-cover font utama ke font fallback yang punya glyph-nya."""
+    x, y = xy
+    for t, f in _runs(text, primary_path, size, bold):
+        draw.text((x, y), t, font=f, fill=fill)
+        x += draw.textlength(t, font=f)
+
+def text_width(draw: ImageDraw.ImageDraw, text: str, primary_path: str, size: int, bold: bool = True) -> float:
+    """Ganti draw.textlength() biasa — ngukur lebar teks yang mixed-font."""
+    return sum(draw.textlength(t, font=f) for t, f in _runs(text, primary_path, size, bold))
 
 # ══════════════════════════════════════════════════════════════════
 # PALETTE — samain sama COLOR_* di vallent.py
@@ -106,6 +196,11 @@ def _circle_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_widt
     ring.paste(out, (ring_width, ring_width), out)
     return ring
 
+def _draw_diamond(draw: ImageDraw.ImageDraw, cx: float, cy: float, r: float, color) -> None:
+    """Ikon diamond digambar langsung (bukan karakter font) — dipakai buat
+    tag PREMIUM MEMBER supaya gak pernah jadi kotak tofu apapun font-nya."""
+    draw.polygon([(cx, cy - r), (cx + r * 0.72, cy), (cx, cy + r), (cx - r * 0.72, cy)], fill=color)
+
 def _draw_progress_bar(card_img: Image.Image, x, y, w, h, pct, track_color, fill_left, fill_right):
     draw = ImageDraw.Draw(card_img)
     draw.rounded_rectangle([x, y, x + w, y + h], radius=h // 2, fill=track_color)
@@ -155,7 +250,6 @@ def render_rank_card(
     draw = ImageDraw.Draw(card)
     text_x = ax + avatar_ring.width + 36
 
-    f_name  = _font(F_DISPLAY, 52)
     f_small = _font(F_BOLD, 24)
     f_tiny  = _font(F_REG, 20)
     f_xp    = _font(F_BOLD, 22)
@@ -164,14 +258,14 @@ def render_rank_card(
     uname  = username.upper()
     max_w  = W - text_x - 56
     size   = 52
-    while draw.textlength(uname, font=f_name) > max_w and size > 26:
-        size  -= 2
-        f_name = _font(F_DISPLAY, size)
-    draw.text((text_x, name_y), uname, font=f_name, fill=WHITE)
+    while text_width(draw, uname, F_DISPLAY, size) > max_w and size > 26:
+        size -= 2
+    draw_text(draw, (text_x, name_y), uname, F_DISPLAY, size, WHITE)
 
     sub_y = name_y + 60
     if is_premium:
-        draw.text((text_x, sub_y), "🜲 PREMIUM MEMBER", font=f_small, fill=GOLD)
+        _draw_diamond(draw, text_x + 8, sub_y + 15, 9, GOLD)
+        draw.text((text_x + 24, sub_y), "PREMIUM MEMBER", font=f_small, fill=GOLD)
         sub_y += 30
 
     rl_y = sub_y + 4
@@ -234,28 +328,22 @@ def render_levelup_card(avatar_bytes: bytes, username: str, new_level: int, is_p
 
     f_tag  = _font(F_BOLD, 26)
     f_huge = _font(F_DISPLAY, 84)
-    f_name = _font(F_BOLD, 30)
-    f_role = _font(F_BOLD, 22)
 
     draw.text((text_x, 46), "LEVEL UP", font=f_tag, fill=(*CRIMSON, 255))
     draw.text((text_x, 82), f"LEVEL {new_level}", font=f_huge, fill=WHITE)
 
-    sub = f"{username} reached a new level!"
-    size  = 30
-    f_sub = f_name
-    while draw.textlength(sub, font=f_sub) > max_w and size > 16:
+    sub  = f"{username} reached a new level!"
+    size = 30
+    while text_width(draw, sub, F_BOLD, size) > max_w and size > 16:
         size -= 2
-        f_sub = _font(F_BOLD, size)
-    draw.text((text_x, 190), sub, font=f_sub, fill=MUTED)
+    draw_text(draw, (text_x, 190), sub, F_BOLD, size, MUTED)
 
     if role_names:
-        role_txt = "🎁 Unlocked: " + ", ".join(role_names)
+        role_txt = "\U0001F381 Unlocked: " + ", ".join(role_names)  # 🎁
         rsize = 22
-        f_r = f_role
-        while draw.textlength(role_txt, font=f_r) > max_w and rsize > 14:
+        while text_width(draw, role_txt, F_BOLD, rsize) > max_w and rsize > 14:
             rsize -= 2
-            f_r = _font(F_BOLD, rsize)
-        draw.text((text_x, 226), role_txt, font=f_r, fill=GOLD)
+        draw_text(draw, (text_x, 226), role_txt, F_BOLD, rsize, GOLD)
 
     _watermark(draw, card.size)
 
@@ -278,10 +366,10 @@ def _watermark(draw: ImageDraw.ImageDraw, size):
 SILVER = (192, 192, 200)
 BRONZE = (205, 127, 50)
 
-def _truncate(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> str:
-    if draw.textlength(text, font=font) <= max_w:
+def _truncate(draw: ImageDraw.ImageDraw, text: str, path: str, size: int, max_w: int) -> str:
+    if text_width(draw, text, path, size) <= max_w:
         return text
-    while text and draw.textlength(text + "…", font=font) > max_w:
+    while text and text_width(draw, text + "…", path, size) > max_w:
         text = text[:-1]
     return text + "…" if text else "…"
 
@@ -298,16 +386,13 @@ def render_leaderboard_card(guild_name: str, entries: list) -> io.BytesIO:
     draw = ImageDraw.Draw(card)
     draw.rounded_rectangle([2, 2, W - 3, H - 3], radius=22, outline=(*DARK_RED, 255), width=3)
 
-    f_title = _font(F_DISPLAY, 36)
-    f_sub   = _font(F_REG, 18)
-    f_name  = _font(F_BOLD, 22)
     f_meta  = _font(F_REG, 16)
     f_rank  = _font(F_DISPLAY, 26)
 
-    title = _truncate(draw, "XP LEADERBOARD", f_title, W - 60)
-    draw.text((30, 22), title, font=f_title, fill=WHITE)
-    sub = _truncate(draw, guild_name, f_sub, W - 60)
-    draw.text((30, 64), sub, font=f_sub, fill=MUTED)
+    title = _truncate(draw, "XP LEADERBOARD", F_DISPLAY, 36, W - 60)
+    draw_text(draw, (30, 22), title, F_DISPLAY, 36, WHITE)
+    sub = _truncate(draw, guild_name, F_REG, 18, W - 60)
+    draw_text(draw, (30, 64), sub, F_REG, 18, MUTED, bold=False)
 
     if not entries:
         f_empty = _font(F_REG, 22)
@@ -335,13 +420,13 @@ def render_leaderboard_card(guild_name: str, entries: list) -> io.BytesIO:
         card.paste(ring, (ax, ay), ring)
 
         name_x = ax + ring.width + 18
-        name_txt = _truncate(draw, e["name"], f_name, name_max_w)
-        draw.text((name_x, y + 10), name_txt, font=f_name, fill=WHITE)
+        name_txt = _truncate(draw, e["name"], F_BOLD, 22, name_max_w)
+        draw_text(draw, (name_x, y + 10), name_txt, F_BOLD, 22, WHITE)
         draw.text((name_x, y + 38), f"Level {e['level']}", font=f_meta, fill=MUTED)
 
         xp_str = f"{e['xp']:,} XP"
-        xp_w = draw.textlength(xp_str, font=f_name)
-        draw.text((W - 30 - xp_w, y + row_h / 2 - 12), xp_str, font=f_name, fill=WHITE)
+        xp_w = text_width(draw, xp_str, F_BOLD, 22)
+        draw_text(draw, (W - 30 - xp_w, y + row_h / 2 - 12), xp_str, F_BOLD, 22, WHITE)
 
         y += row_h
 
