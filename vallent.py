@@ -43,7 +43,7 @@ from emoji_config import (
     ICON_SUCCESS, ICON_ERROR, ICON_WARNING, ICON_LOADING,
     ICON_PROFILE, ICON_BADGES, ICON_COMMANDS, ICON_PREMIUM_TAG,
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
-    ICON_BOOST,
+    ICON_BOOST, ICON_ANTINUKE,
     e
 )
 import rank_card
@@ -579,14 +579,14 @@ BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "dev
 
 BOT_ROLE_BADGES = {
     # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
-    "founder":        {"label": "• Founder",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
     "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
     "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
     "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
     "premium":        {"label": "• Premium",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
-    "noprefix":       {"label": "• NOPREFIX",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
+    "noprefix":       {"label": "• NO PREFIX",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
     "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
@@ -1323,7 +1323,7 @@ async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
     log_ch = guild.get_channel(log_id) if log_id else None
     if log_ch:
         emb = discord.Embed(
-            title="🛡️ Anti-Nuke Triggered",
+            title=f"{e(ICON_ANTINUKE, '🛡️')} Anti-Nuke Triggered".strip(),
             description=(
                 f"**Pelaku:** {member.mention} (`{member.id}`)\n"
                 f"**Terdeteksi:** {antinuke.ACTION_LABELS.get(action, action)}\n"
@@ -1855,9 +1855,10 @@ async def _build_leaderboard_entries(guild: discord.Guild, all_d: list) -> list:
 
 def _support_boost_promo(uid: int):
     """Return (content_text, view) buat promo join support server + XP boost.
-    content_text jadi None kalau SUPPORT_INVITE belum di-set di environment —
-    biar gak nawarin invite yang gak ada."""
-    if not SUPPORT_INVITE:
+    content_text jadi None kalau SUPPORT_INVITE belum di-set / formatnya
+    bukan URL valid — biar gak nawarin invite yang gak ada atau bikin
+    discord.ui.Button error karena URL-nya rusak."""
+    if not SUPPORT_INVITE or not SUPPORT_INVITE.startswith(("http://", "https://")):
         return None, None
     remaining = xp_boost_remaining(uid)
     if remaining:
@@ -1865,7 +1866,7 @@ def _support_boost_promo(uid: int):
     else:
         content = "**Join support server** dan dapatkan **+10% XP Boost** selama 60 menit!"
     view = discord.ui.View()
-    view.add_item(discord.ui.Button(label="Join Support Server", style=discord.ButtonStyle.link, url=SUPPORT_INVITE, emoji="➜]"))
+    view.add_item(discord.ui.Button(label="Join Support Server", style=discord.ButtonStyle.link, url=SUPPORT_INVITE))
     return content, view
 
 @bot.command(name="rank")
@@ -1891,13 +1892,19 @@ async def pfx_rank(ctx, member: discord.Member = None):
                 data["xp"], is_prem, data.get("messages", 0)
             )
             file = discord.File(buf, filename="rank.png")
-            content, view = _support_boost_promo(ctx.author.id)
+        except Exception:
+            logging.exception(f"[{BOT_NAME}] Gagal render rank card")
+            file = None
+
+        if file:
             kwargs = {"file": file}
-            if content: kwargs["content"] = content
-            if view:    kwargs["view"] = view
+            try:
+                content, view = _support_boost_promo(ctx.author.id)
+                if content: kwargs["content"] = content
+                if view:    kwargs["view"] = view
+            except Exception:
+                logging.exception(f"[{BOT_NAME}] Gagal build boost promo (rank card tetap dikirim)")
             return await ctx.send(**kwargs)
-        except Exception as e:
-            logging.error(f"[{BOT_NAME}] Gagal render rank card: {e}")
     # Fallback embed teks kalau render gambar gagal total
     pct   = int((cx / max(nx, 1)) * 100)
     bar   = "▰" * int(pct/100*16) + "▱" * (16-int(pct/100*16))
@@ -2937,7 +2944,7 @@ async def pfx_help(ctx):
         value="`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`", inline=False)
     embed.add_field(name=sec(ICON_ANTISPAM, "Antispam"),
         value="`antispam setchannel #ch` · `antispam status`", inline=False)
-    embed.add_field(name="🛡️ Anti-Nuke",
+    embed.add_field(name=sec(ICON_ANTINUKE, "Anti-Nuke"),
         value="`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`", inline=False)
     embed.add_field(name=sec(ICON_BOOST, "Server Boost"),
         value="`/boostconfig` (slash only) — atur channel & tampilan notifikasi boost", inline=False)
@@ -2994,6 +3001,7 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
     avatar_url  = str(target.display_avatar.with_format("png").with_size(256))
 
     import aiohttp
+    file = None
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -3004,13 +3012,18 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
             data["xp"], is_prem, data.get("messages", 0)
         )
         file = discord.File(buf, filename="rank.png")
-        content, view = _support_boost_promo(i.user.id)
+    except Exception:
+        logging.exception(f"[{BOT_NAME}] Gagal render rank card")
+
+    if file:
         kwargs = {"file": file}
-        if content: kwargs["content"] = content
-        if view:    kwargs["view"] = view
+        try:
+            content, view = _support_boost_promo(i.user.id)
+            if content: kwargs["content"] = content
+            if view:    kwargs["view"] = view
+        except Exception:
+            logging.exception(f"[{BOT_NAME}] Gagal build boost promo (rank card tetap dikirim)")
         return await i.followup.send(**kwargs)
-    except Exception as e:
-        logging.error(f"[{BOT_NAME}] Gagal render rank card: {e}")
 
     pct   = int((cx / max(nx,1)) * 100)
     bar   = "▰"*int(pct/100*16) + "▱"*(16-int(pct/100*16))
@@ -3150,7 +3163,7 @@ async def slash_help(i: discord.Interaction):
     embed.add_field(name="Level & XP", value="`rank` · `leaderboard` (alias `lb`) · `level` · `xp`", inline=False)
     embed.add_field(name="Giveaway", value="`giveaway start/end/reroll/list`", inline=False)
     embed.add_field(name="Antispam", value="`antispam setchannel` · `antispam status`", inline=False)
-    embed.add_field(name="🛡️ Anti-Nuke", value="`antinuke enable/disable/logchannel/punishment/whitelist/status`", inline=False)
+    embed.add_field(name=f"{e(ICON_ANTINUKE, '🛡️')} Anti-Nuke".strip(), value="`antinuke enable/disable/logchannel/punishment/whitelist/status`", inline=False)
     embed.add_field(name=f"{e(ICON_BOOST, '🎉')} Server Boost".strip(), value="`/boostconfig` — atur channel & tampilan notifikasi boost", inline=False)
     if is_owner_user:
         embed.add_field(name="Owner Only", value=(
@@ -3186,7 +3199,7 @@ async def on_member_join(member: discord.Member):
         description=(
             "Halo " + member.mention + "!\n\n"
             "Kamu baru saja mendapatkan badge **USER**!\n"
-            "🚀 Bonus: **+10% XP Boost** aktif selama **60 menit** di semua server yang pakai " + BOT_NAME + "!\n\n"
+            "Bonus: **+10% XP Boost** aktif selama **60 menit** di semua server yang pakai " + BOT_NAME + "!\n\n"
             "Ketik `profile` untuk lihat badge kamu.\n\nKetik `help` untuk lihat semua command."
         ),
         color=COLOR_PRIMARY,
