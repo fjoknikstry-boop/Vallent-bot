@@ -48,7 +48,7 @@ ICON_LANGUAGE    = "<:emoji_59:1522399712563564595>"   # Icon untuk section Lang
 ICON_OWNER       = "<:emoji_56:1522402451104464946>"   # Icon untuk section Owner Only
 ICON_BOOST       = "<:emoji_56:1522694857913667684>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
 ICON_ANTINUKE    = "<:emoji_59:1522400572228108389>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
-ICON_IGNORE = "<:emoji_55:1522411835725185186>>"
+ICON_IGNORE      = "<:emoji_55:1522411835725185186>"
 # Status / result icons
 ICON_SUCCESS     = "<:emoji_59:1522429663690100756>"   # Icon sukses (checklist, dll)
 ICON_ERROR       = "<:emoji_60:1522431940492398754>"   # Icon error / gagal
