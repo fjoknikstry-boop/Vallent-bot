@@ -296,6 +296,31 @@ def get_member_xp(gc: dict, uid: str) -> dict:
     data.setdefault("messages", 0)
     return data
 
+async def apply_level_roles(guild: discord.Guild, member: discord.Member, gc: dict, new_level: int) -> list:
+    """Kasih semua role reward yang levelnya <= new_level dan belum dimiliki member
+    (stacking — sekali dapat, role sebelumnya gak dicabut). Return list role yang
+    baru aja diberikan (buat ditampilin di notifikasi level up)."""
+    level_roles = gc.get("level_roles", {})
+    if not level_roles:
+        return []
+    granted = []
+    for lvl_str, role_id in level_roles.items():
+        try:
+            lvl = int(lvl_str)
+        except ValueError:
+            continue
+        if lvl > new_level:
+            continue
+        role = guild.get_role(role_id)
+        if not role or role in member.roles:
+            continue
+        try:
+            await member.add_roles(role, reason=f"Level role reward — mencapai level {lvl}")
+            granted.append(role)
+        except Exception as e:
+            logging.error(f"[{BOT_NAME}] Gagal kasih level role {role_id} ke {member.id}: {e}")
+    return granted
+
 # ══════════════════════════════════════════════════════════════════
 # BOT SETUP
 # ══════════════════════════════════════════════════════════════════
@@ -500,14 +525,14 @@ BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "dev
 BOT_ROLE_BADGES = {
     # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
     "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
-    "developer":      {"label": "• DEVELOPER",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
-    "management":     {"label": "• MANAGEMENT",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
-    "server_manager": {"label": "• SERVER MANAGER", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
-    "moderator":      {"label": "• MODERATOR",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
-    "staff":          {"label": "• STAFF",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
-    "premium":        {"label": "• PREMIUM",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
+    "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
+    "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
+    "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
+    "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
+    "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
+    "premium":        {"label": "• Premium",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
     "noprefix":       {"label": "• NOPREFIX",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
-    "user":           {"label": "• USER",           "color": 0x6B7280, "emoji": BADGE_USER},
+    "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
 def get_support_guild() -> Optional[discord.Guild]:
@@ -1271,6 +1296,7 @@ async def on_message(message: discord.Message):
             data["messages"]    = data.get("messages", 0) + 1
             save_config(cfg)
             if data["level"] > old_level:
+                granted_roles = await apply_level_roles(message.guild, message.author, gc, data["level"])
                 lvl_ch_id = gc.get("level_channel")
                 lvl_ch    = message.guild.get_channel(lvl_ch_id) if lvl_ch_id else message.channel
                 if lvl_ch:
@@ -1280,22 +1306,27 @@ async def on_message(message: discord.Message):
                             async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                                 avatar_bytes = await resp.read()
                         is_prem = user_has_premium(message.guild, message.author)
+                        role_names = [r.name for r in granted_roles] if granted_roles else None
                         buf = await asyncio.to_thread(
                             rank_card.render_levelup_card,
-                            avatar_bytes, message.author.display_name, data["level"], is_prem
+                            avatar_bytes, message.author.display_name, data["level"], is_prem, role_names
                         )
                         file = discord.File(buf, filename="levelup.png")
-                        await lvl_ch.send(content=message.author.mention, file=file, delete_after=30)
+                        content = message.author.mention
+                        if granted_roles:
+                            role_mentions = " ".join(r.mention for r in granted_roles)
+                            content += f"\n🎁 Kamu dapat role baru: {role_mentions}"
+                        await lvl_ch.send(content=content, file=file)
                     except Exception as e:
                         logging.error(f"[{BOT_NAME}] Gagal render level-up card: {e}")
-                        lvl_emb = discord.Embed(
-                            description=f"{message.author.mention} leveled up to **Level {data['level']}**!",
-                            color=COLOR_ERROR
-                        )
+                        desc = f"{message.author.mention} leveled up to **Level {data['level']}**!"
+                        if granted_roles:
+                            desc += "\n🎁 Role baru: " + " ".join(r.mention for r in granted_roles)
+                        lvl_emb = discord.Embed(description=desc, color=COLOR_ERROR)
                         lvl_emb.set_author(name="Level Up!", icon_url=message.author.display_avatar.url)
                         lvl_emb.set_footer(text=BOT_NAME)
                         try:
-                            await lvl_ch.send(embed=lvl_emb, delete_after=30)
+                            await lvl_ch.send(embed=lvl_emb)
                         except Exception:
                             pass
 
@@ -1684,6 +1715,27 @@ async def pfx_profile(ctx, member: discord.Member = None):
 
 # ── RANK & LEADERBOARD ────────────────────────────────────────────
 
+async def _build_leaderboard_entries(guild: discord.Guild, all_d: list) -> list:
+    """Ambil avatar tiap member top-10 secara paralel (bukan satu-satu) biar
+    generate leaderboard card gak lemot nunggu 10 request HTTP berurutan."""
+    async def fetch_one(idx, uid, data):
+        m    = guild.get_member(int(uid))
+        name = m.display_name if m else f"User ({uid[:6]})"
+        avatar_url = str((m.display_avatar if m else guild.me.display_avatar).with_format("png").with_size(128))
+        avatar_bytes = b""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                    avatar_bytes = await resp.read()
+        except Exception:
+            pass
+        return {
+            "rank": idx + 1, "avatar_bytes": avatar_bytes, "name": name,
+            "level": data.get("level", 0), "xp": data.get("xp", 0),
+        }
+    tasks = [fetch_one(idx, uid, data) for idx, (uid, data) in enumerate(all_d)]
+    return await asyncio.gather(*tasks)
+
 @bot.command(name="rank")
 async def pfx_rank(ctx, member: discord.Member = None):
     import aiohttp
@@ -1733,6 +1785,17 @@ async def pfx_leaderboard(ctx):
     all_d = sorted(gc["members_xp"].items(), key=lambda x: x[1].get("xp", 0), reverse=True)[:10]
     if not all_d:
         return await ctx.send(embed=info_embed("Leaderboard", "Belum ada data XP."))
+
+    async with ctx.typing():
+        try:
+            entries = await _build_leaderboard_entries(ctx.guild, all_d)
+            buf  = await asyncio.to_thread(rank_card.render_leaderboard_card, ctx.guild.name, entries)
+            file = discord.File(buf, filename="leaderboard.png")
+            return await ctx.send(file=file)
+        except Exception as e:
+            logging.error(f"[{BOT_NAME}] Gagal render leaderboard card: {e}")
+
+    # Fallback teks kalau render gambar gagal total
     lines = []
     for idx, (uid, data) in enumerate(all_d):
         m     = ctx.guild.get_member(int(uid))
@@ -1787,6 +1850,54 @@ async def pfx_level(ctx, sub: str = "", *args):
         save_config(cfg)
         await ctx.send(embed=success_embed("Level-up notif akan dikirim ke " + ch.mention + "."))
 
+    elif sub == "role":
+        if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        level_roles = gc.setdefault("level_roles", {})
+        action = args[0].lower() if args else ""
+
+        if action == "set":
+            if len(args) < 3 or not args[1].isdigit():
+                return await ctx.send(embed=error_embed("Usage: `level role set <level> <@role/role_id>`"))
+            lvl = int(args[1])
+            role = None
+            if ctx.message.role_mentions:
+                role = ctx.message.role_mentions[0]
+            elif args[2].isdigit():
+                role = ctx.guild.get_role(int(args[2]))
+            if not role:
+                return await ctx.send(embed=error_embed("Role tidak ditemukan."))
+            level_roles[str(lvl)] = role.id
+            save_config(cfg)
+            return await ctx.send(embed=success_embed(f"Member yang mencapai **Level {lvl}** sekarang otomatis dapat role {role.mention}."))
+
+        elif action == "remove":
+            if len(args) < 2 or not args[1].isdigit():
+                return await ctx.send(embed=error_embed("Usage: `level role remove <level>`"))
+            lvl = args[1]
+            if lvl not in level_roles:
+                return await ctx.send(embed=error_embed(f"Belum ada role reward untuk level {lvl}."))
+            level_roles.pop(lvl, None)
+            save_config(cfg)
+            return await ctx.send(embed=success_embed(f"Role reward untuk level {lvl} dihapus. Role yang udah dimiliki member gak dicabut."))
+
+        elif action == "list":
+            if not level_roles:
+                return await ctx.send(embed=info_embed("Level Role Rewards", "Belum ada role reward yang di-set."))
+            lines = []
+            for lvl in sorted(level_roles, key=lambda x: int(x)):
+                role = ctx.guild.get_role(level_roles[lvl])
+                lines.append(f"**Level {lvl}** → {role.mention if role else '*(role tidak ditemukan)*'}")
+            return await ctx.send(embed=info_embed("Level Role Rewards", "\n".join(lines)))
+
+        else:
+            await ctx.send(embed=info_embed("Level Role Rewards", (
+                "`level role set <level> <@role>` — kasih role otomatis pas member nyampe level segitu\n"
+                "`level role remove <level>` — hapus reward level itu\n"
+                "`level role list` — lihat semua reward yang aktif\n\n"
+                "Role itu stacking — sekali dapat gak akan dicabut walau nanti reward-nya diubah/dihapus."
+            )))
+
     elif sub == "status":
         enabled  = gc.get("leveling_enabled", True)
         lvl_ch   = ctx.guild.get_channel(gc["level_channel"]) if gc.get("level_channel") else None
@@ -1807,6 +1918,7 @@ async def pfx_level(ctx, sub: str = "", *args):
             "`level toggle` - nyalain/matiin leveling\n"
             "`level setchannel #channel` - set channel notif\n"
             "`level setchannel` - nonaktifkan channel\n"
+            "`level role set/remove/list` - kelola role reward per level\n"
             "`level status` - lihat konfigurasi\n"
             "`level rank [@user]` - lihat rank\n"
             "`level leaderboard` - top 10"))
@@ -2644,6 +2756,16 @@ async def slash_leaderboard(i: discord.Interaction):
     all_d = sorted(gc["members_xp"].items(), key=lambda x: x[1].get("xp",0), reverse=True)[:10]
     if not all_d:
         return await i.response.send_message(embed=info_embed("Leaderboard", "Belum ada data XP."), ephemeral=True)
+
+    await i.response.defer()
+    try:
+        entries = await _build_leaderboard_entries(i.guild, all_d)
+        buf  = await asyncio.to_thread(rank_card.render_leaderboard_card, i.guild.name, entries)
+        file = discord.File(buf, filename="leaderboard.png")
+        return await i.followup.send(file=file)
+    except Exception as e:
+        logging.error(f"[{BOT_NAME}] Gagal render leaderboard card: {e}")
+
     lines = []
     for idx,(uid,data) in enumerate(all_d):
         m     = i.guild.get_member(int(uid))
@@ -2652,7 +2774,7 @@ async def slash_leaderboard(i: discord.Interaction):
         lines.append(f"**{medal} {name}** — Level **{data.get('level',0)}** · {data.get('xp',0):,} XP")
     embed = discord.Embed(title="XP Leaderboard", description="\n".join(lines), color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"{BOT_NAME} · {i.guild.name}")
-    await i.response.send_message(embed=embed)
+    await i.followup.send(embed=embed)
 
 @bot.tree.command(name="profile", description="Lihat profile card dan badge kamu atau member lain.")
 @app_commands.describe(member="Member yang ingin dilihat profilenya")
