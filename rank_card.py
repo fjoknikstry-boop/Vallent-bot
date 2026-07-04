@@ -171,7 +171,7 @@ def render_rank_card(
 
     sub_y = name_y + 60
     if is_premium:
-        draw.text((text_x, sub_y), "★ PREMIUM MEMBER", font=f_small, fill=GOLD)
+        draw.text((text_x, sub_y), "🜲 PREMIUM MEMBER", font=f_small, fill=GOLD)
         sub_y += 30
 
     rl_y = sub_y + 4
