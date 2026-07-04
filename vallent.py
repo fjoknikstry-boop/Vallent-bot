@@ -47,6 +47,7 @@ from emoji_config import (
     e
 )
 import rank_card
+import antinuke
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -147,6 +148,16 @@ def _init_guild(gc: dict):
     gc["boost"].setdefault("description", "{mention} just boosted **{server}**! Thanks for the support 💜")
     gc.setdefault("active_tickets",    {})   # uid(str) -> [{"channel_id","panel_id","opened_at"}, ...]
     gc.setdefault("mod_log_channel",   None)
+    gc.setdefault("antinuke", {
+        "enabled":     False,
+        "log_channel": None,
+        "whitelist":   [],
+        "punishment":  "strip_roles",
+    })
+    gc["antinuke"].setdefault("enabled",     False)
+    gc["antinuke"].setdefault("log_channel", None)
+    gc["antinuke"].setdefault("whitelist",   [])
+    gc["antinuke"].setdefault("punishment",  "strip_roles")
     gc.setdefault("ticket", {"panels": {}})
     gc["ticket"].setdefault("panels", {})
     # Migrasi struktur ticket lama (single-config, panels sebagai list) ke multi-panel dict.
@@ -575,7 +586,7 @@ BOT_ROLE_BADGES = {
     "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
     "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
     "premium":        {"label": "• Premium",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
-    "noprefix":       {"label": "• No Prefix",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
+    "noprefix":       {"label": "• NOPREFIX",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
     "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
 }
 
@@ -1272,6 +1283,64 @@ async def on_command_completion(ctx: commands.Context):
     save_config(cfg)
 
 @bot.event
+async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
+    """Jantungnya anti-nuke — dipanggil Discord real-time tiap ada audit log
+    baru, gak perlu polling. Butuh permission 'View Audit Log' di role bot."""
+    guild = entry.guild
+    gc    = guild_cfg(cfg, guild.id)
+    ac    = gc.get("antinuke", {})
+    if not ac.get("enabled"):
+        return
+    if not entry.user or entry.user.id == bot.user.id:
+        return
+    if antinuke.is_whitelisted(guild, entry.user.id, bot.owner_id, ac.get("whitelist", [])):
+        return
+
+    action = antinuke.classify_entry(entry)
+    if not action:
+        return
+
+    triggered = False
+    if action in antinuke.INSTANT_ACTIONS:
+        triggered = True
+    else:
+        th = antinuke.DEFAULT_THRESHOLDS.get(action)
+        if th:
+            triggered = antinuke._record_and_check(guild.id, entry.user.id, action, th["count"], th["seconds"])
+
+    if not triggered:
+        return
+
+    member = guild.get_member(entry.user.id)
+    if not member:
+        return
+
+    punishment = ac.get("punishment", "strip_roles")
+    result = await antinuke.punish(guild, member, punishment, f"[Anti-Nuke] Terdeteksi: {antinuke.ACTION_LABELS.get(action, action)}")
+    antinuke.reset_tracker(guild.id, entry.user.id)
+
+    log_id = ac.get("log_channel")
+    log_ch = guild.get_channel(log_id) if log_id else None
+    if log_ch:
+        emb = discord.Embed(
+            title="🛡️ Anti-Nuke Triggered",
+            description=(
+                f"**Pelaku:** {member.mention} (`{member.id}`)\n"
+                f"**Terdeteksi:** {antinuke.ACTION_LABELS.get(action, action)}\n"
+                f"**Tindakan:** {result}"
+            ),
+            color=COLOR_ERROR,
+            timestamp=discord.utils.utcnow()
+        )
+        emb.set_thumbnail(url=member.display_avatar.url)
+        emb.set_footer(text=BOT_NAME)
+        try:
+            await log_ch.send(embed=emb)
+        except Exception:
+            pass
+    logging.warning(f"[{BOT_NAME}] Anti-Nuke triggered in {guild.name}: {member} -> {action} -> {result}")
+
+@bot.event
 async def on_guild_join(guild: discord.Guild):
     guild_cfg(cfg, guild.id)
     logging.info(f"[{BOT_NAME}] Joined: {guild.name} ({guild.id})")
@@ -1792,11 +1861,11 @@ def _support_boost_promo(uid: int):
         return None, None
     remaining = xp_boost_remaining(uid)
     if remaining:
-        content = f"🚀 XP Boost **+10%** kamu masih aktif sampai {discord.utils.format_dt(remaining, 'R')}!"
+        content = f"XP Boost **+10%** kamu masih aktif sampai {discord.utils.format_dt(remaining, 'R')}!"
     else:
-        content = "🚀 **Join support server** dan dapatkan **+10% XP Boost** selama 60 menit!"
+        content = "**Join support server** dan dapatkan **+10% XP Boost** selama 60 menit!"
     view = discord.ui.View()
-    view.add_item(discord.ui.Button(label="Join Support Server", style=discord.ButtonStyle.link, url=SUPPORT_INVITE, emoji="🚀"))
+    view.add_item(discord.ui.Button(label="Join Support Server", style=discord.ButtonStyle.link, url=SUPPORT_INVITE, emoji="➜]"))
     return content, view
 
 @bot.command(name="rank")
@@ -2370,6 +2439,95 @@ async def pfx_antispam(ctx, sub: str = "", *, args: str = ""):
     else:
         await ctx.send(embed=info_embed("Antispam Honeypot", "`antispam setchannel #channel`\n`antispam setchannel` (nonaktifkan)\n`antispam status`"))
 
+# ── ANTI-NUKE ────────────────────────────────────────────────────
+
+@bot.command(name="antinuke")
+async def pfx_antinuke(ctx, sub: str = "", *, rest: str = ""):
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.administrator:
+        return await ctx.send(embed=error_embed("Cuma Administrator atau owner yang bisa atur anti-nuke."))
+    gc  = guild_cfg(cfg, ctx.guild.id)
+    ac  = gc.setdefault("antinuke", {"enabled": False, "log_channel": None, "whitelist": [], "punishment": "strip_roles"})
+    sub = sub.lower()
+
+    if sub == "enable":
+        me = ctx.guild.me
+        if not me.guild_permissions.view_audit_log:
+            return await ctx.send(embed=error_embed("Bot butuh permission **View Audit Log** dulu buat ngaktifin anti-nuke."))
+        ac["enabled"] = True
+        save_config(cfg)
+        await ctx.send(embed=success_embed(
+            "Anti-Nuke **AKTIF**.\nDeteksi: mass channel delete/create, mass role delete, mass ban/kick, "
+            "mass webhook create, dan pemberian permission Administrator mendadak.\n\n"
+            "Jangan lupa: `antinuke logchannel #channel` biar ada laporan kalau ke-trigger."
+        ))
+
+    elif sub == "disable":
+        ac["enabled"] = False
+        save_config(cfg)
+        await ctx.send(embed=success_embed("Anti-Nuke dinonaktifkan."))
+
+    elif sub == "logchannel":
+        ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else None
+        if not ch:
+            ac["log_channel"] = None
+            save_config(cfg)
+            return await ctx.send(embed=success_embed("Log channel anti-nuke dikosongkan."))
+        ac["log_channel"] = ch.id
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Laporan anti-nuke bakal dikirim ke {ch.mention}."))
+
+    elif sub == "punishment":
+        choice = rest.strip().lower()
+        if choice not in ("strip_roles", "kick", "ban"):
+            return await ctx.send(embed=error_embed("Pilihan: `strip_roles`, `kick`, atau `ban`."))
+        ac["punishment"] = choice
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Tindakan anti-nuke di-set ke **{choice}**."))
+
+    elif sub == "whitelist":
+        parts  = rest.split(maxsplit=1)
+        action = parts[0].lower() if parts else ""
+        wl     = ac.setdefault("whitelist", [])
+        if action == "add" and ctx.message.mentions:
+            u = ctx.message.mentions[0]
+            if u.id not in wl:
+                wl.append(u.id)
+                save_config(cfg)
+            await ctx.send(embed=success_embed(f"{u.mention} sekarang di-whitelist dari anti-nuke."))
+        elif action == "remove" and ctx.message.mentions:
+            u = ctx.message.mentions[0]
+            if u.id in wl:
+                wl.remove(u.id)
+                save_config(cfg)
+            await ctx.send(embed=success_embed(f"{u.mention} dihapus dari whitelist."))
+        elif action == "list":
+            lines = [f"<@{uid}>" for uid in wl] or ["*(kosong)*"]
+            await ctx.send(embed=info_embed("Anti-Nuke Whitelist", "\n".join(lines)))
+        else:
+            await ctx.send(embed=info_embed("Anti-Nuke Whitelist", "`antinuke whitelist add @user`\n`antinuke whitelist remove @user`\n`antinuke whitelist list`"))
+
+    elif sub == "status":
+        status = "🟢 Aktif" if ac.get("enabled") else "🔴 Tidak aktif"
+        log_ch = ctx.guild.get_channel(ac.get("log_channel")) if ac.get("log_channel") else None
+        embed = base_embed("Anti-Nuke Status", None, color=COLOR_ERROR if ac.get("enabled") else COLOR_INFO)
+        embed.add_field(name="Status", value=status, inline=True)
+        embed.add_field(name="Tindakan", value=f"`{ac.get('punishment','strip_roles')}`", inline=True)
+        embed.add_field(name="Log Channel", value=log_ch.mention if log_ch else "*(belum di-set)*", inline=True)
+        embed.add_field(name="Whitelist", value=str(len(ac.get("whitelist", []))) + " user", inline=True)
+        embed.add_field(name="Deteksi", value="\n".join(f"• {v}" for v in antinuke.ACTION_LABELS.values()), inline=False)
+        await ctx.send(embed=embed)
+
+    else:
+        await ctx.send(embed=info_embed("Anti-Nuke", (
+            "`antinuke enable` — aktifin proteksi\n"
+            "`antinuke disable` — matiin\n"
+            "`antinuke logchannel #channel` — channel buat laporan\n"
+            "`antinuke punishment strip_roles/kick/ban` — tindakan ke pelaku\n"
+            "`antinuke whitelist add/remove/list @user` — orang yang di-skip dari deteksi\n"
+            "`antinuke status` — lihat konfigurasi sekarang\n\n"
+            "Owner bot dan pemilik server otomatis ke-whitelist, gak perlu ditambahin manual."
+        )))
+
 # ── OWNER COMMANDS ────────────────────────────────────────────────
 
 @bot.command(name="maintenance")
@@ -2779,6 +2937,8 @@ async def pfx_help(ctx):
         value="`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`", inline=False)
     embed.add_field(name=sec(ICON_ANTISPAM, "Antispam"),
         value="`antispam setchannel #ch` · `antispam status`", inline=False)
+    embed.add_field(name="🛡️ Anti-Nuke",
+        value="`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`", inline=False)
     embed.add_field(name=sec(ICON_BOOST, "Server Boost"),
         value="`/boostconfig` (slash only) — atur channel & tampilan notifikasi boost", inline=False)
     embed.add_field(name=sec(ICON_LANGUAGE, "Language"),
@@ -2990,6 +3150,7 @@ async def slash_help(i: discord.Interaction):
     embed.add_field(name="Level & XP", value="`rank` · `leaderboard` (alias `lb`) · `level` · `xp`", inline=False)
     embed.add_field(name="Giveaway", value="`giveaway start/end/reroll/list`", inline=False)
     embed.add_field(name="Antispam", value="`antispam setchannel` · `antispam status`", inline=False)
+    embed.add_field(name="🛡️ Anti-Nuke", value="`antinuke enable/disable/logchannel/punishment/whitelist/status`", inline=False)
     embed.add_field(name=f"{e(ICON_BOOST, '🎉')} Server Boost".strip(), value="`/boostconfig` — atur channel & tampilan notifikasi boost", inline=False)
     if is_owner_user:
         embed.add_field(name="Owner Only", value=(
