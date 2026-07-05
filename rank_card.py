@@ -330,7 +330,7 @@ def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_
     draw.text((text_x, 46), "LEVEL UP", font=f_tag, fill=(*CRIMSON, 255))
 
     # Level progression, e.g. "LEVEL 6  ➔  LEVEL 7" — auto-shrinks to fit
-    prog_txt = f"LEVEL {old_level}  \u2794  LEVEL {new_level}"
+    prog_txt = f"LEVEL {old_level}  \u2192  LEVEL {new_level}"
     size = 64
     while text_width(draw, prog_txt, F_DISPLAY, size) > max_w and size > 30:
         size -= 2
