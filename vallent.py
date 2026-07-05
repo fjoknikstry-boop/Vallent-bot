@@ -127,7 +127,7 @@ def _init_guild(gc: dict):
     gc.setdefault("main_channel",      None)
     gc.setdefault("announce_channel",  None)
     gc.setdefault("level_channel",     None)
-    gc.setdefault("levelup_message",   "{mention} leveled up to **Level {level}**!")
+    gc.setdefault("levelup_message",   "{mention} just leveled up to **Level {level}**! Keep chatting in {server} to climb even higher. {roles}")
     gc.setdefault("antispam", {
         "trap_channel": None,
         "log_channel":  None,
@@ -556,7 +556,7 @@ BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "dev
 
 BOT_ROLE_BADGES = {
     # Emoji sourced from emoji_config.py — edit that file to set the emoji IDs
-    "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "founder":        {"label": "• Founder",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
     "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
@@ -1457,7 +1457,7 @@ async def on_message(message: discord.Message):
                 lvl_ch    = message.guild.get_channel(lvl_ch_id) if lvl_ch_id else message.channel
                 if lvl_ch:
                     roles_txt = ("🎁 Unlocked: " + " ".join(r.mention for r in granted_roles)) if granted_roles else ""
-                    template  = gc.get("levelup_message") or "{mention} leveled up to **Level {level}**!"
+                    template  = gc.get("levelup_message") or "{mention} just leveled up to **Level {level}**! Keep chatting in {server} to climb even higher. {roles}"
                     content   = (template
                                  .replace("{mention}", message.author.mention)
                                  .replace("{user}",    message.author.name)
@@ -1473,7 +1473,7 @@ async def on_message(message: discord.Message):
                         role_names = [r.name for r in granted_roles] if granted_roles else None
                         buf = await asyncio.to_thread(
                             rank_card.render_levelup_card,
-                            avatar_bytes, message.author.name, data["level"], is_prem, role_names
+                            avatar_bytes, message.author.name, old_level, data["level"], is_prem, role_names
                         )
                         file = discord.File(buf, filename="levelup.png")
                         await lvl_ch.send(content=content, file=file)
@@ -2047,7 +2047,7 @@ async def pfx_level(ctx, sub: str = "", *args):
             embed = success_embed(f"Level-up message updated.\n\n**Preview:**\n{preview}")
             return await ctx.send(embed=embed)
         elif action == "reset":
-            gc["levelup_message"] = "{mention} leveled up to **Level {level}**!"
+            gc["levelup_message"] = "{mention} just leveled up to **Level {level}**! Keep chatting in {server} to climb even higher. {roles}"
             save_config(cfg)
             return await ctx.send(embed=success_embed("Level-up message reset to default."))
         elif action == "show":
