@@ -43,7 +43,7 @@ from emoji_config import (
     ICON_SUCCESS, ICON_ERROR, ICON_WARNING, ICON_LOADING,
     ICON_PROFILE, ICON_BADGES, ICON_COMMANDS, ICON_PREMIUM_TAG,
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
-    ICON_BOOST, ICON_ANTINUKE, ICON_IGNORE,
+    ICON_BOOST, ICON_ANTINUKE, ICON_IGNORE, ICON_AUTOMOD,
     e
 )
 import rank_card
@@ -2641,6 +2641,81 @@ async def pfx_antispam(ctx, sub: str = "", *, rest: str = ""):
 
 # ── ANTI-NUKE ────────────────────────────────────────────────────
 
+@bot.command(name="automod", aliases=["am"])
+async def pfx_automod(ctx, sub: str = "", *, rest: str = ""):
+    """Bikin AutoMod Rule Discord asli lewat API (bukan deteksi manual bot).
+    Sekali bot ini berhasil bikin 1 rule di server manapun, Discord otomatis
+    kasih badge 'Uses AutoMod' di profile bot — permanen, gak perlu diulang."""
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
+    if not ctx.guild.me.guild_permissions.manage_guild:
+        return await ctx.send(embed=error_embed("The bot needs the **Manage Server** permission to create AutoMod rules."))
+    sub = sub.lower()
+
+    if sub == "setup":
+        try:
+            existing = await ctx.guild.fetch_automod_rules()
+        except Exception:
+            existing = []
+        if any(r.creator_id == bot.user.id for r in existing):
+            return await ctx.send(embed=error_embed("This server already has an AutoMod rule created by this bot. Use `automod list` to see it."))
+
+        actions = [discord.AutoModRuleAction(type=discord.AutoModRuleActionType.block_message)]
+        try:
+            rule = await ctx.guild.create_automod_rule(
+                name=f"{BOT_NAME} — Blocked Content",
+                event_type=discord.AutoModRuleEventType.message_send,
+                trigger=discord.AutoModTrigger(type=discord.AutoModRuleTriggerType.keyword, presets=discord.AutoModPresets(profanity=True, sexual_content=True, slurs=True)),
+                actions=actions,
+                enabled=True,
+                reason=f"[{BOT_NAME}] AutoMod setup"
+            )
+        except discord.Forbidden:
+            return await ctx.send(embed=error_embed("The bot doesn't have permission to create AutoMod rules in this server."))
+        except Exception as e:
+            logging.exception(f"[{BOT_NAME}] Failed to create AutoMod rule")
+            return await ctx.send(embed=error_embed(f"Failed to create the rule: {e}"))
+
+        await ctx.send(embed=success_embed(
+            f"AutoMod rule **{rule.name}** created and enabled — blocks profanity, sexual content, and slurs automatically.\n\n"
+            "This uses Discord's native AutoMod (not the bot's own spam detection), so it also unlocks the "
+            "**\"Uses AutoMod\"** badge on this bot's profile."
+        ))
+
+    elif sub == "list":
+        try:
+            rules = await ctx.guild.fetch_automod_rules()
+        except Exception:
+            rules = []
+        if not rules:
+            return await ctx.send(embed=info_embed("AutoMod Rules", "No AutoMod rules exist in this server yet."))
+        lines = [f"**{r.name}** — {'enabled' if r.enabled else 'disabled'} (`{r.id}`)" for r in rules]
+        await ctx.send(embed=info_embed("AutoMod Rules", "\n".join(lines)))
+
+    elif sub == "remove":
+        rule_id = rest.strip()
+        if not rule_id.isdigit():
+            return await ctx.send(embed=error_embed("Usage: `automod remove <rule_id>` — get the ID from `automod list`."))
+        try:
+            rules = await ctx.guild.fetch_automod_rules()
+            rule = next((r for r in rules if r.id == int(rule_id)), None)
+            if not rule:
+                return await ctx.send(embed=error_embed("Rule not found."))
+            await rule.delete(reason=f"[{BOT_NAME}] Removed via automod remove")
+            await ctx.send(embed=success_embed(f"AutoMod rule **{rule.name}** removed."))
+        except Exception as e:
+            await ctx.send(embed=error_embed(f"Failed to remove the rule: {e}"))
+
+    else:
+        await ctx.send(embed=info_embed("AutoMod", (
+            "`automod setup` — create a native Discord AutoMod rule (blocks profanity/sexual content/slurs) "
+            "and unlocks the bot's \"Uses AutoMod\" profile badge\n"
+            "`automod list` — view every AutoMod rule in this server\n"
+            "`automod remove <rule_id>` — delete a rule\n\n"
+            "This is different from `antispam`/`antinuke` — those are the bot's own custom detection. "
+            "This uses Discord's built-in AutoMod system directly."
+        )))
+
 @bot.command(name="antinuke", aliases=["an"])
 async def pfx_antinuke(ctx, sub: str = "", *, rest: str = ""):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.administrator:
@@ -3198,6 +3273,7 @@ HELP_CATEGORIES = [
     ("giveaway", "Giveaway", ICON_GIVEAWAY, "🎉", "`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`"),
     ("antispam", "Antispam", ICON_ANTISPAM, "🛡️", "`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`"),
     ("antinuke", "Anti-Nuke", ICON_ANTINUKE, "🛡️", "`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`"),
+    ("automod", "AutoMod", ICON_AUTOMOD, "🤖", "`automod setup` — creates a native Discord AutoMod rule (blocks profanity/sexual content/slurs)\n`automod list` · `automod remove <rule_id>`"),
     ("ignore", "Ignore Channel", ICON_IGNORE, "🔇", "`ignorechannel add/remove/list [#channel]` — makes the bot completely silent in a specific channel"),
     ("boost", "Server Boost", ICON_BOOST, "🎉", "`/boostconfig` (slash only) — configure the server boost notification channel & appearance"),
 ]
