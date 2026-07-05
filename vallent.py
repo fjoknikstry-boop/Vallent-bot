@@ -39,7 +39,7 @@ from emoji_config import (
     BADGE_FOUNDER, BADGE_DEVELOPER, BADGE_MANAGEMENT, BADGE_STAFF,
     BADGE_PREMIUM, BADGE_NOPREFIX, BADGE_USER, BADGE_MODERATOR, BADGE_SERVER_MANAGER,
     ICON_MODERATION, ICON_ROLE, ICON_INFO, ICON_TICKET, ICON_LEVEL,
-    ICON_GIVEAWAY, ICON_ANTISPAM, ICON_LANGUAGE, ICON_OWNER,
+    ICON_GIVEAWAY, ICON_ANTISPAM, ICON_OWNER,
     ICON_SUCCESS, ICON_ERROR, ICON_WARNING, ICON_LOADING,
     ICON_PROFILE, ICON_BADGES, ICON_COMMANDS, ICON_PREMIUM_TAG,
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
@@ -114,8 +114,8 @@ def load_config() -> dict:
     data.setdefault("bot_roles",        {})
     data.setdefault("role_sync",        {})
     data.setdefault("votes",            {})
-    data.setdefault("support_server_members", [])  # user IDs yang sudah join support server
-    data.setdefault("commands_run",           {})  # uid → jumlah command dijalankan
+    data.setdefault("support_server_members", [])  # user IDs who have joined the support server
+    data.setdefault("commands_run",           {})  # uid -> number of commands run
     data.setdefault("xp_boost",                {})  # uid(str) -> {"expiry": iso, "multiplier": float}
     data.setdefault("maintenance", {"enabled": False, "reason": "", "since": None})
     for gid, gc in data.get("guilds", {}).items():
@@ -124,7 +124,6 @@ def load_config() -> dict:
     return data
 
 def _init_guild(gc: dict):
-    gc.setdefault("language",          "en")
     gc.setdefault("main_channel",      None)
     gc.setdefault("announce_channel",  None)
     gc.setdefault("level_channel",     None)
@@ -149,7 +148,7 @@ def _init_guild(gc: dict):
     gc["antispam"].setdefault("flood_count",  5)
     gc["antispam"].setdefault("flood_window", 4)
     gc["antispam"].setdefault("punishment",   "ban")
-    # Migrasi dari key lama spam_trap_channel (sebelum ada dict antispam terpusat)
+    # Migration from the old spam_trap_channel key (before the centralized antispam dict existed)
     if "spam_trap_channel" in gc:
         legacy_trap = gc.pop("spam_trap_channel")
         if legacy_trap and not gc["antispam"]["trap_channel"]:
@@ -172,7 +171,7 @@ def _init_guild(gc: dict):
     gc["boost"].setdefault("description", "{mention} just boosted **{server}**! Thanks for the support 💜")
     gc.setdefault("active_tickets",    {})   # uid(str) -> [{"channel_id","panel_id","opened_at"}, ...]
     gc.setdefault("mod_log_channel",   None)
-    gc.setdefault("ignored_channels",  [])   # channel ID -> bot diem total (no command, no XP)
+    gc.setdefault("ignored_channels",  [])   # channel ID -> bot stays fully silent (no commands, no XP)
     gc.setdefault("antinuke", {
         "enabled":     False,
         "log_channel": None,
@@ -185,7 +184,7 @@ def _init_guild(gc: dict):
     gc["antinuke"].setdefault("punishment",  "strip_roles")
     gc.setdefault("ticket", {"panels": {}})
     gc["ticket"].setdefault("panels", {})
-    # Migrasi struktur ticket lama (single-config, panels sebagai list) ke multi-panel dict.
+    # Migrate the old ticket structure (single-config, panels as a list) to the multi-panel dict.
     legacy_cat  = gc["ticket"].pop("category",     None) if "category"     in gc["ticket"] else None
     legacy_log  = gc["ticket"].pop("log_channel",  None) if "log_channel"  in gc["ticket"] else None
     legacy_role = gc["ticket"].pop("support_role", None) if "support_role" in gc["ticket"] else None
@@ -199,7 +198,7 @@ def _init_guild(gc: dict):
             "support_role": legacy_role,
             "max_tickets":  legacy_max or 1,
             "title":        "Support Tickets",
-            "description":  "Klik tombol untuk membuka support ticket.",
+            "description":  "Click the button below to open a support ticket.",
             "message_id":   None,
             "channel_id":   None,
         }
@@ -209,10 +208,10 @@ def _init_guild(gc: dict):
         p.setdefault("support_role", None)
         p.setdefault("max_tickets",  1)
         p.setdefault("title",        "Support Tickets")
-        p.setdefault("description",  "Klik tombol untuk membuka support ticket.")
+        p.setdefault("description",  "Click the button below to open a support ticket.")
         p.setdefault("message_id",   None)
         p.setdefault("channel_id",   None)
-    # Migrasi active_tickets lama (uid -> single channel_id int) ke format baru (uid -> list).
+    # Migrate the old active_tickets format (uid -> single channel_id int) to the new format (uid -> list).
     for uid, val in list(gc["active_tickets"].items()):
         if isinstance(val, int):
             gc["active_tickets"][uid] = [{"channel_id": val, "panel_id": "default", "opened_at": None}]
@@ -231,53 +230,6 @@ def guild_cfg(cfg: dict, guild_id: int) -> dict:
     gc = cfg["guilds"][gid]
     _init_guild(gc)
     return gc
-
-# ══════════════════════════════════════════════════════════════════
-# LANGUAGE
-# ══════════════════════════════════════════════════════════════════
-
-LANGUAGES = {
-    "en": "English", "id": "Indonesian", "de": "German",
-    "ar": "Arabic",  "th": "Thai",       "vi": "Vietnamese",
-    "ja": "Japanese","ko": "Korean",
-}
-
-STRINGS = {
-    "en": {
-        "no_perm":         "You do not have permission to use this command.",
-        "kick_success":    "{user} has been kicked. Reason: {reason}",
-        "ban_success":     "{user} has been banned. Reason: {reason}",
-        "timeout_success": "{user} has been timed out for {duration} minutes.",
-        "warn_success":    "{user} has been warned. Reason: {reason}",
-        "role_add":        "Role {role} added to {user}.",
-        "role_remove":     "Role {role} removed from {user}.",
-        "move_success":    "{user} moved to {channel}.",
-        "emoji_add":       "Emoji {name} added.",
-        "ticket_open":     "Your ticket has been created: {channel}",
-        "ticket_exists":   "You already have an open ticket.",
-        "lang_set":        "Language set to {lang}.",
-    },
-    "id": {
-        "no_perm":         "Kamu tidak memiliki izin untuk menggunakan perintah ini.",
-        "kick_success":    "{user} telah dikick. Alasan: {reason}",
-        "ban_success":     "{user} telah diban. Alasan: {reason}",
-        "timeout_success": "{user} telah di-timeout selama {duration} menit.",
-        "warn_success":    "{user} telah diperingatkan. Alasan: {reason}",
-        "role_add":        "Peran {role} ditambahkan ke {user}.",
-        "role_remove":     "Peran {role} dihapus dari {user}.",
-        "move_success":    "{user} dipindahkan ke {channel}.",
-        "emoji_add":       "Emoji {name} berhasil ditambahkan.",
-        "ticket_open":     "Tiket kamu telah dibuat: {channel}",
-        "ticket_exists":   "Kamu sudah memiliki tiket yang terbuka.",
-        "lang_set":        "Bahasa diatur ke {lang}.",
-    },
-}
-
-def t(cfg: dict, guild_id: int, key: str, **kwargs) -> str:
-    gc   = guild_cfg(cfg, guild_id)
-    lang = gc.get("language", "en")
-    s    = STRINGS.get(lang, STRINGS["en"]).get(key, STRINGS["en"].get(key, key))
-    return s.format(**kwargs)
 
 # ══════════════════════════════════════════════════════════════════
 # EMBED HELPERS
@@ -335,9 +287,9 @@ def get_member_xp(gc: dict, uid: str) -> dict:
     return data
 
 async def apply_level_roles(guild: discord.Guild, member: discord.Member, gc: dict, new_level: int) -> list:
-    """Kasih semua role reward yang levelnya <= new_level dan belum dimiliki member
-    (stacking — sekali dapat, role sebelumnya gak dicabut). Return list role yang
-    baru aja diberikan (buat ditampilin di notifikasi level up)."""
+    """Grant every level-role reward whose level is <= new_level that the member
+    doesn't already have (stacking — once granted, earlier roles are never removed).
+    Returns the list of roles that were just granted (for display in the level-up notification)."""
     level_roles = gc.get("level_roles", {})
     if not level_roles:
         return []
@@ -353,10 +305,10 @@ async def apply_level_roles(guild: discord.Guild, member: discord.Member, gc: di
         if not role or role in member.roles:
             continue
         try:
-            await member.add_roles(role, reason=f"Level role reward — mencapai level {lvl}")
+            await member.add_roles(role, reason=f"Level role reward — reached level {lvl}")
             granted.append(role)
         except Exception as e:
-            logging.error(f"[{BOT_NAME}] Gagal kasih level role {role_id} ke {member.id}: {e}")
+            logging.error(f"[{BOT_NAME}] Failed to grant level role {role_id} to {member.id}: {e}")
     return granted
 
 # ══════════════════════════════════════════════════════════════════
@@ -377,8 +329,8 @@ class VallentTree(app_commands.CommandTree):
         data = getattr(interaction, "data", None)
         if not data:
             return True
-        # Hanya proses pemanggilan slash command sungguhan — biarkan
-        # autocomplete dan tipe interaksi lain lewat tanpa disentuh.
+        # Only process real slash-command invocations — let autocomplete
+        # and other interaction types pass through untouched.
         if interaction.type != discord.InteractionType.application_command or data.get("type", 1) != 1:
             return True
 
@@ -394,12 +346,12 @@ class VallentTree(app_commands.CommandTree):
         cmd_name  = " ".join(parts)
         is_owner_ = interaction.user.id == bot.owner_id
 
-        # ── Maintenance mode — cuma owner yang bisa lewat ──────────────
+        # ── Maintenance mode — only the owner can bypass ────────────────
         if is_maintenance_on() and not is_owner_:
             m = cfg.get("maintenance", {})
-            desc = f"**{BOT_NAME}** lagi maintenance, coba lagi nanti."
+            desc = f"**{BOT_NAME}** is under maintenance, please try again later."
             if m.get("reason"):
-                desc += f"\n\n**Alasan:** {m['reason']}"
+                desc += f"\n\n**Reason:** {m['reason']}"
             try:
                 await interaction.response.send_message(
                     embed=warning_embed("Under Maintenance", desc), ephemeral=True)
@@ -413,14 +365,14 @@ class VallentTree(app_commands.CommandTree):
                 await interaction.response.send_message(
                     embed=warning_embed(
                         "Premium Required",
-                        f"Command `/{cmd_name}` hanya untuk **Premium** users.\n"
-                        "Hubungi owner atau kunjungi server support untuk berlangganan."
+                        f"Command `/{cmd_name}` is for **Premium** users only.\n"
+                        "Contact the owner or join the support server to subscribe."
                     ), ephemeral=True)
             except discord.InteractionResponded:
                 pass
             return False
 
-        # ── Command usage counter ───────────────────────────────────────
+        # ── Command usage counter ────────────────────────────────────────
         cmds_run = cfg.setdefault("commands_run", {})
         uid_str  = str(interaction.user.id)
         cmds_run[uid_str] = cmds_run.get(uid_str, 0) + 1
@@ -485,18 +437,18 @@ async def check_premium_expiry():
             try:
                 user = bot.get_user(uid) or await bot.fetch_user(uid)
                 await user.send(embed=base_embed(
-                    "Premium Berakhir",
-                    f"Masa aktif Premium kamu di **{BOT_NAME}** sudah habis.\n"
-                    "Semua command premium dan akses no-prefix sudah dinonaktifkan.\n"
-                    "Hubungi owner kalau mau perpanjang.",
+                    "Premium Expired",
+                    f"Your Premium subscription on **{BOT_NAME}** has ended.\n"
+                    "All premium commands and no-prefix access have been disabled.\n"
+                    "Contact the owner if you'd like to renew.",
                     color=COLOR_ERROR
                 ))
             except Exception:
                 pass
 
 def user_has_no_prefix(guild: Optional[discord.Guild], user: discord.abc.User) -> bool:
-    """No-prefix aktif untuk: owner, user yang di-grant manual (dengan/tanpa durasi),
-    guild yang di-grant, atau siapapun yang lagi Premium (Premium otomatis membuka no-prefix)."""
+    """No-prefix is active for: the owner, manually-granted users (with/without a
+    duration), granted guilds, or anyone with active Premium (Premium auto-unlocks no-prefix)."""
     if user.id == bot.owner_id:
         return True
     if user.id in cfg.get("no_prefix_users", []):
@@ -542,10 +494,10 @@ async def check_no_prefix_expiry():
             try:
                 user = bot.get_user(uid) or await bot.fetch_user(uid)
                 await user.send(embed=base_embed(
-                    "No-Prefix Berakhir",
-                    f"Akses no-prefix kamu di **{BOT_NAME}** sudah habis.\n"
-                    "Sekarang command harus pakai prefix `!vx` lagi.\n"
-                    "Hubungi owner kalau mau perpanjang.",
+                    "No-Prefix Expired",
+                    f"Your no-prefix access on **{BOT_NAME}** has ended.\n"
+                    "Commands now need the `!vx` prefix again.\n"
+                    "Contact the owner if you'd like to renew.",
                     color=COLOR_ERROR
                 ))
             except Exception:
@@ -555,16 +507,16 @@ def is_maintenance_on() -> bool:
     return bool(cfg.get("maintenance", {}).get("enabled", False))
 
 def grant_xp_boost(uid: int, minutes: int = 60, multiplier: float = 1.10):
-    """Kasih boost XP sementara — dipakai sebagai insentif join support server.
-    Berlaku di SEMUA guild (bukan per-guild) karena ini reward personal, bukan
-    setting server."""
+    """Grant a temporary XP boost — used as an incentive for joining the support
+    server. Applies across ALL guilds (not per-guild) since this is a personal
+    reward, not a server setting."""
     expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
     cfg.setdefault("xp_boost", {})[str(uid)] = {"expiry": expiry.isoformat(), "multiplier": multiplier}
     save_config(cfg)
 
 def get_xp_multiplier(uid: int) -> float:
-    """Return pengali XP aktif untuk user (1.0 kalau gak ada boost / udah expired).
-    Expired entry dibersihkan otomatis (lazy cleanup, sama pola kayak premium)."""
+    """Return the active XP multiplier for a user (1.0 if no boost / already expired).
+    Expired entries are cleaned up automatically (lazy cleanup, same pattern as premium)."""
     boosts  = cfg.setdefault("xp_boost", {})
     uid_str = str(uid)
     entry   = boosts.get(uid_str)
@@ -584,7 +536,7 @@ def get_xp_multiplier(uid: int) -> float:
         return 1.0
 
 def xp_boost_remaining(uid: int) -> Optional[datetime.datetime]:
-    """Return waktu expiry boost yang masih aktif, atau None kalau gak ada."""
+    """Return the expiry time of an active boost, or None if there isn't one."""
     entry = cfg.get("xp_boost", {}).get(str(uid))
     if not entry:
         return None
@@ -603,8 +555,8 @@ def xp_boost_remaining(uid: int) -> Optional[datetime.datetime]:
 BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "developer", "founder"]
 
 BOT_ROLE_BADGES = {
-    # Emoji diambil dari emoji_config.py — edit file itu untuk isi ID emoji
-    "founder":        {"label": "• Founder",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    # Emoji sourced from emoji_config.py — edit that file to set the emoji IDs
+    "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
     "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
@@ -620,9 +572,9 @@ def get_support_guild() -> Optional[discord.Guild]:
     return bot.get_guild(support_server_id) if support_server_id else None
 
 def get_synced_role(uid: int) -> Optional[str]:
-    """Cek role Discord asli user di support server, cocokin ke role_sync mapping.
-    Dicek dari yang tertinggi (founder) ke terendah (staff) — kalau punya beberapa
-    role yang disync, badge tertinggi yang menang."""
+    """Check the user's real Discord role in the support server against the
+    role_sync mapping. Checked from highest (founder) to lowest (staff) — if the
+    member has multiple synced roles, the highest badge wins."""
     guild = get_support_guild()
     if not guild:
         return None
@@ -630,7 +582,7 @@ def get_synced_role(uid: int) -> Optional[str]:
     if not member:
         return None
     role_sync = cfg.get("role_sync", {})
-    for tier in reversed(BOT_ROLE_HIERARCHY):  # founder → developer → management → staff
+    for tier in reversed(BOT_ROLE_HIERARCHY):  # founder -> developer -> management -> staff
         role_id = role_sync.get(tier)
         if role_id and any(r.id == role_id for r in member.roles):
             return tier
@@ -646,10 +598,10 @@ def get_bot_role(uid: int) -> str:
 
 def get_user_badges(uid: int) -> list:
     """
-    Kumpulkan semua badge user.
-    Hierarki: founder > developer > management > staff > noprefix > premium > user
-    Badge USER hanya didapat kalau user join server support bot.
-    Kalau tidak punya badge apapun → list kosong.
+    Collect all of a user's badges.
+    Hierarchy: founder > developer > management > staff > noprefix > premium > user
+    The USER badge is only granted if the user has joined the bot's support server.
+    If they have no badges at all -> empty list.
     """
     badges  = []
     role    = get_bot_role(uid)
@@ -662,7 +614,7 @@ def get_user_badges(uid: int) -> list:
         badges.append("premium")
     if uid in cfg.get("support_server_members", []):
         badges.append("user")
-    # Tidak ada default badge — kalau kosong ya kosong
+    # No default badge — if it's empty, it stays empty
     return badges
 
 def build_profile_embed(user: discord.abc.User) -> discord.Embed:
@@ -679,7 +631,7 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
     embed = discord.Embed(title=f"{profile_icon} {user.display_name}'s Profile".strip(), color=color)
     embed.set_thumbnail(url=user.display_avatar.url)
 
-    # ── ALL BADGES — field sendiri, satu badge per baris ──────────────
+    # ── ALL BADGES — its own field, one badge per line ────────────────
     if badges:
         badge_lines = []
         for b in badges:
@@ -690,20 +642,20 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
         badges_value = "\n".join(badge_lines)
     else:
         invite = SUPPORT_INVITE
-        badges_value = "Belum ada badge."
+        badges_value = "No badges yet."
         if invite:
-            badges_value += "\n[Join server support](" + invite + ") untuk dapat badge **USER**!"
+            badges_value += "\n[Join the support server](" + invite + ") to get the **USER** badge!"
         else:
-            badges_value += "\nJoin server support untuk dapat badge **USER**!"
+            badges_value += "\nJoin the support server to get the **USER** badge!"
 
     badges_icon = e(ICON_BADGES, "✨")
     embed.add_field(name=f"{badges_icon} __ALL BADGES__".strip(), value=badges_value, inline=False)
 
-    # ── Total Badges & Commands Runned — dua field sejajar ────────────
+    # ── Total Badges & Commands Runned — two fields side by side ───────
     embed.add_field(name="Total Badges", value="**" + str(len(badges)) + "**", inline=True)
     embed.add_field(name=f"{e(ICON_COMMANDS, '⚙️')} Commands Runned".strip(), value="**" + str(cmds_run) + "**", inline=True)
 
-    # ── Premium — field sendiri kalau ada ──────────────────────────────
+    # ── Premium — its own field, only shown if active ───────────────────
     if has_prem:
         exp_str = expiry_map.get(str(uid))
         prem_value = "Lifetime"
@@ -748,8 +700,8 @@ def _spam_fingerprint(message: discord.Message) -> str:
     return "|".join(sorted(set(parts))) or "empty"
 
 def _antispam_is_ignored(member: discord.Member, ac: dict) -> bool:
-    """True kalau member ini harus di-skip dari semua deteksi antispam —
-    owner bot, manage_guild (staff/admin), atau masuk ignore list manual."""
+    """True if this member should be skipped from all antispam detection —
+    bot owner, manage_guild (staff/admin), or on the manual ignore list."""
     if member.id == bot.owner_id:
         return True
     if member.guild_permissions.manage_guild:
@@ -762,26 +714,26 @@ def _antispam_is_ignored(member: discord.Member, ac: dict) -> bool:
     return False
 
 async def _antispam_punish(guild: discord.Guild, member: discord.Member, punishment: str, reason: str) -> str:
-    """Eksekusi hukuman antispam, return string ringkas buat log."""
+    """Execute the antispam punishment, return a short string for the log."""
     try:
         if punishment == "kick":
             await guild.kick(member, reason=reason)
             return "**KICKED**"
         elif punishment == "timeout":
             await member.timeout(datetime.timedelta(hours=1), reason=reason)
-            return "**TIMEOUT** (1 jam)"
-        else:  # ban — default, paling tegas buat spam bot/raid
+            return "**TIMEOUT** (1 hour)"
+        else:  # ban — default, the harshest option for spam bots/raids
             await guild.ban(member, reason=reason, delete_message_seconds=86400)
             return "**BANNED**"
     except discord.Forbidden:
-        return "⚠️ GAGAL — bot gak punya izin/role bot lebih rendah dari target"
+        return "⚠️ FAILED — bot lacks permission, or its role is lower than the target's"
     except Exception as e:
-        logging.error(f"[{BOT_NAME}] Gagal eksekusi punishment antispam: {e}")
-        return f"⚠️ GAGAL — {e}"
+        logging.error(f"[{BOT_NAME}] Failed to execute antispam punishment: {e}")
+        return f"⚠️ FAILED — {e}"
 
 async def _antispam_log(guild: discord.Guild, gc: dict, member: discord.Member, kind: str, detail: str, result: str):
-    """Kirim laporan ke log channel antispam (kalau di-set) — dipakai bareng
-    oleh honeypot, cross-channel spam, dan flood detector biar konsisten."""
+    """Send a report to the antispam log channel (if set) — shared by the
+    honeypot, cross-channel spam, and flood detector for consistency."""
     ac     = gc.get("antispam", {})
     log_id = ac.get("log_channel") or _fallback_log_channel(gc)
     if not log_id:
@@ -790,9 +742,9 @@ async def _antispam_log(guild: discord.Guild, gc: dict, member: discord.Member, 
     if not log_ch:
         return
     emb = base_embed(f"Antispam: {kind}", None, color=COLOR_ERROR)
-    emb.add_field(name="User",     value=f"{member.mention} (`{member.id}`)", inline=True)
-    emb.add_field(name="Tindakan", value=result, inline=True)
-    emb.add_field(name="Detail",   value=detail, inline=False)
+    emb.add_field(name="User",   value=f"{member.mention} (`{member.id}`)", inline=True)
+    emb.add_field(name="Action", value=result, inline=True)
+    emb.add_field(name="Detail", value=detail, inline=False)
     emb.set_thumbnail(url=member.display_avatar.url)
     emb.set_footer(text=BOT_NAME)
     try:
@@ -820,9 +772,9 @@ async def global_maintenance_check(ctx: commands.Context) -> bool:
     if ctx.author.id == bot.owner_id or not is_maintenance_on():
         return True
     m    = cfg.get("maintenance", {})
-    desc = f"**{BOT_NAME}** lagi maintenance, coba lagi nanti."
+    desc = f"**{BOT_NAME}** is under maintenance, please try again later."
     if m.get("reason"):
-        desc += f"\n\n**Alasan:** {m['reason']}"
+        desc += f"\n\n**Reason:** {m['reason']}"
     await ctx.send(embed=warning_embed("Under Maintenance", desc), delete_after=10)
     return False
 
@@ -839,8 +791,8 @@ async def global_prefix_premium_check(ctx: commands.Context) -> bool:
         return True
     await ctx.send(embed=warning_embed(
         "Premium Required",
-        f"Command `{cmd}` hanya untuk **Premium** users.\n"
-        "Hubungi owner untuk berlangganan."
+        f"Command `{cmd}` is for **Premium** users only.\n"
+        "Contact the owner to subscribe."
     ))
     return False
 
@@ -849,7 +801,7 @@ async def global_prefix_premium_check(ctx: commands.Context) -> bool:
 # ══════════════════════════════════════════════════════════════════
 
 def _is_protected(guild: discord.Guild, member: discord.Member) -> bool:
-    """Cek apakah member tidak bisa dimoderasi (owner guild atau role lebih tinggi dari bot)."""
+    """Check whether this member cannot be moderated (guild owner or a role higher than the bot's)."""
     if member.id == guild.owner_id:
         return True
     if guild.me and member.top_role >= guild.me.top_role:
@@ -858,41 +810,41 @@ def _is_protected(guild: discord.Guild, member: discord.Member) -> bool:
 
 async def do_kick(guild, author, member, reason, reply_fn):
     if author.id != bot.owner_id and not author.guild_permissions.kick_members:
-        return await reply_fn(embed=error_embed(t(cfg, guild.id, "no_perm")))
+        return await reply_fn(embed=error_embed("You don't have permission to use this command."))
     if _is_protected(guild, member):
-        return await reply_fn(embed=error_embed("Tidak bisa kick user ini."))
+        return await reply_fn(embed=error_embed("This user can't be kicked."))
     try:
         await member.kick(reason=f"{author} | {reason}")
-        await reply_fn(embed=success_embed(t(cfg, guild.id, "kick_success", user=member.mention, reason=reason)))
+        await reply_fn(embed=success_embed(f"{member.mention} has been kicked. Reason: {reason}"))
     except discord.Forbidden:
-        await reply_fn(embed=error_embed("Bot tidak punya izin untuk kick."))
+        await reply_fn(embed=error_embed("The bot doesn't have permission to kick."))
 
 async def do_ban(guild, author, member, reason, reply_fn):
     if author.id != bot.owner_id and not author.guild_permissions.ban_members:
-        return await reply_fn(embed=error_embed(t(cfg, guild.id, "no_perm")))
+        return await reply_fn(embed=error_embed("You don't have permission to use this command."))
     if _is_protected(guild, member):
-        return await reply_fn(embed=error_embed("Tidak bisa ban user ini."))
+        return await reply_fn(embed=error_embed("This user can't be banned."))
     try:
         await guild.ban(member, reason=f"{author} | {reason}", delete_message_days=0)
-        await reply_fn(embed=success_embed(t(cfg, guild.id, "ban_success", user=member.mention, reason=reason)))
+        await reply_fn(embed=success_embed(f"{member.mention} has been banned. Reason: {reason}"))
     except discord.Forbidden:
-        await reply_fn(embed=error_embed("Bot tidak punya izin untuk ban."))
+        await reply_fn(embed=error_embed("The bot doesn't have permission to ban."))
 
 async def do_timeout(guild, author, member, minutes, reason, reply_fn):
     if author.id != bot.owner_id and not author.guild_permissions.moderate_members:
-        return await reply_fn(embed=error_embed(t(cfg, guild.id, "no_perm")))
+        return await reply_fn(embed=error_embed("You don't have permission to use this command."))
     if _is_protected(guild, member):
-        return await reply_fn(embed=error_embed("Tidak bisa timeout user ini."))
+        return await reply_fn(embed=error_embed("This user can't be timed out."))
     try:
         until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
         await member.timeout(until, reason=f"{author} | {reason}")
-        await reply_fn(embed=success_embed(t(cfg, guild.id, "timeout_success", user=member.mention, duration=minutes)))
+        await reply_fn(embed=success_embed(f"{member.mention} has been timed out for {minutes} minutes."))
     except discord.Forbidden:
-        await reply_fn(embed=error_embed("Bot tidak punya izin untuk timeout."))
+        await reply_fn(embed=error_embed("The bot doesn't have permission to timeout members."))
 
 async def do_warn(guild, author, member, reason, reply_fn):
     if author.id != bot.owner_id and not author.guild_permissions.manage_messages:
-        return await reply_fn(embed=error_embed(t(cfg, guild.id, "no_perm")))
+        return await reply_fn(embed=error_embed("You don't have permission to use this command."))
     gc = guild_cfg(cfg, guild.id)
     gc.setdefault("warnings", {}).setdefault(str(member.id), []).append({
         "reason": reason, "warned_by": author.id,
@@ -904,34 +856,34 @@ async def do_warn(guild, author, member, reason, reply_fn):
         await member.send(embed=dm)
     except Exception:
         pass
-    await reply_fn(embed=success_embed(t(cfg, guild.id, "warn_success", user=member.mention, reason=reason)))
+    await reply_fn(embed=success_embed(f"{member.mention} has been warned. Reason: {reason}"))
 
 async def do_addrole(guild, author, member, role, reply_fn):
     if author.id != bot.owner_id and not author.guild_permissions.manage_roles:
-        return await reply_fn(embed=error_embed(t(cfg, guild.id, "no_perm")))
+        return await reply_fn(embed=error_embed("You don't have permission to use this command."))
     try:
         await member.add_roles(role, reason=f"By {author}")
-        await reply_fn(embed=success_embed(t(cfg, guild.id, "role_add", role=role.name, user=member.mention)))
+        await reply_fn(embed=success_embed(f"Role {role.name} added to {member.mention}."))
     except discord.Forbidden:
-        await reply_fn(embed=error_embed("Bot tidak punya izin untuk manage roles."))
+        await reply_fn(embed=error_embed("The bot doesn't have permission to manage roles."))
 
 async def do_removerole(guild, author, member, role, reply_fn):
     if author.id != bot.owner_id and not author.guild_permissions.manage_roles:
-        return await reply_fn(embed=error_embed(t(cfg, guild.id, "no_perm")))
+        return await reply_fn(embed=error_embed("You don't have permission to use this command."))
     try:
         await member.remove_roles(role, reason=f"By {author}")
-        await reply_fn(embed=success_embed(t(cfg, guild.id, "role_remove", role=role.name, user=member.mention)))
+        await reply_fn(embed=success_embed(f"Role {role.name} removed from {member.mention}."))
     except discord.Forbidden:
-        await reply_fn(embed=error_embed("Bot tidak punya izin untuk manage roles."))
+        await reply_fn(embed=error_embed("The bot doesn't have permission to manage roles."))
 
 async def do_move(guild, author, member, channel, reply_fn):
     if author.id != bot.owner_id and not author.guild_permissions.move_members:
-        return await reply_fn(embed=error_embed(t(cfg, guild.id, "no_perm")))
+        return await reply_fn(embed=error_embed("You don't have permission to use this command."))
     try:
         await member.move_to(channel, reason=f"By {author}")
-        await reply_fn(embed=success_embed(t(cfg, guild.id, "move_success", user=member.mention, channel=channel.name)))
+        await reply_fn(embed=success_embed(f"{member.mention} moved to {channel.name}."))
     except discord.Forbidden:
-        await reply_fn(embed=error_embed("Bot tidak punya izin untuk move member."))
+        await reply_fn(embed=error_embed("The bot doesn't have permission to move members."))
 
 async def do_userinfo(guild, member, reply_fn):
     roles = [r.mention for r in reversed(member.roles) if r.name != "@everyone"][:10]
@@ -969,16 +921,16 @@ async def do_addemoji(guild, emoji_or_url: str, name: str):
         else:
             url = emoji_or_url
         if not name:
-            return {"success": False, "error": "Nama emoji diperlukan."}
+            return {"success": False, "error": "An emoji name is required."}
         async with aiohttp.ClientSession() as s:
             async with s.get(url) as r:
                 if r.status != 200:
-                    return {"success": False, "error": f"Gagal fetch image: HTTP {r.status}"}
+                    return {"success": False, "error": f"Failed to fetch image: HTTP {r.status}"}
                 data = await r.read()
         emoji = await guild.create_custom_emoji(name=name, image=data)
         return {"success": True, "emoji": emoji}
     except discord.Forbidden:
-        return {"success": False, "error": "Bot tidak punya izin manage emojis."}
+        return {"success": False, "error": "The bot doesn't have permission to manage emojis."}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -987,9 +939,9 @@ async def do_addemoji(guild, emoji_or_url: str, name: str):
 # ══════════════════════════════════════════════════════════════════
 
 def _fallback_log_channel(gc: dict) -> Optional[int]:
-    """Dipakai honeypot/log umum kalau mod_log_channel belum di-set —
-    pinjam log channel dari antispam config, lalu ticket panel pertama
-    yang punya satu."""
+    """Used by the general honeypot/log system when mod_log_channel isn't set —
+    borrows the log channel from the antispam config, then falls back to the
+    first ticket panel that has one."""
     if gc.get("antispam", {}).get("log_channel"):
         return gc["antispam"]["log_channel"]
     if gc.get("mod_log_channel"):
@@ -1000,8 +952,8 @@ def _fallback_log_channel(gc: dict) -> Optional[int]:
     return None
 
 def _find_active_ticket(gc: dict, channel_id: int):
-    """Cari ticket aktif berdasarkan channel_id.
-    Return (uid_str, ticket_dict, panel_dict) atau (None, None, None)."""
+    """Find an active ticket by channel_id.
+    Returns (uid_str, ticket_dict, panel_dict) or (None, None, None)."""
     for uid, tickets in gc["active_tickets"].items():
         for tk in tickets:
             if tk.get("channel_id") == channel_id:
@@ -1016,15 +968,15 @@ async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
 
     if not panel or not panel.get("category"):
         return await interaction.response.send_message(
-            embed=error_embed("Ticket panel ini belum dikonfigurasi dengan benar."), ephemeral=True)
+            embed=error_embed("This ticket panel hasn't been configured properly."), ephemeral=True)
 
     tickets    = gc["active_tickets"].setdefault(uid, [])
     same_panel = [tk for tk in tickets if tk.get("panel_id") == panel_id and interaction.guild.get_channel(tk.get("channel_id"))]
     max_t      = panel.get("max_tickets", 1)
     if len(same_panel) >= max_t:
         ch  = interaction.guild.get_channel(same_panel[0]["channel_id"]) if same_panel else None
-        msg = t(cfg, interaction.guild.id, "ticket_exists") if max_t == 1 else \
-            f"Kamu sudah punya {len(same_panel)}/{max_t} ticket terbuka untuk panel **{panel.get('title', panel_id)}**."
+        msg = "You already have an open ticket." if max_t == 1 else \
+            f"You already have {len(same_panel)}/{max_t} open tickets for the **{panel.get('title', panel_id)}** panel."
         if ch:
             msg += f"\n{ch.mention}"
         return await interaction.response.send_message(embed=error_embed(msg), ephemeral=True)
@@ -1032,7 +984,7 @@ async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
     category = interaction.guild.get_channel(panel["category"])
     if not category:
         return await interaction.response.send_message(
-            embed=error_embed("Ticket category tidak ditemukan."), ephemeral=True)
+            embed=error_embed("Ticket category not found."), ephemeral=True)
 
     overwrites = {
         interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -1059,7 +1011,7 @@ async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
 
     welcome_embed = base_embed(
         panel.get("title") or f"Ticket — {interaction.user.display_name}",
-        panel.get("description") or "Tim support akan segera membantu. Jelaskan keperluanmu di sini.",
+        panel.get("description") or "Our support team will be with you shortly. Please describe your issue here.",
         color=COLOR_PRIMARY
     )
     await ch.send(content=interaction.user.mention, embed=welcome_embed, view=TicketCloseView())
@@ -1078,24 +1030,24 @@ async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
                 pass
 
     await interaction.response.send_message(
-        embed=success_embed(t(cfg, interaction.guild.id, "ticket_open", channel=ch.mention)),
+        embed=success_embed(f"Your ticket has been created: {ch.mention}"),
         ephemeral=True
     )
 
 async def close_ticket_channel(guild: discord.Guild, channel: discord.abc.GuildChannel,
                                 closer: discord.abc.User, reason: str, send_confirmation) -> bool:
-    """Logic inti penutupan ticket, dipakai bareng tombol Close dan command `ticket close`.
-    Log dikirim ke log channel milik PANEL asal ticket tersebut, bukan log channel global."""
+    """Core ticket-closing logic, shared by the Close button and the `ticket close` command.
+    The log is sent to the log channel belonging to the ticket's PANEL, not a global log channel."""
     gc = guild_cfg(cfg, guild.id)
     uid, tk, panel = _find_active_ticket(gc, channel.id)
     if not tk:
-        await send_confirmation(embed=error_embed("Channel ini bukan ticket aktif."))
+        await send_confirmation(embed=error_embed("This channel isn't an active ticket."))
         return False
 
     is_owner_  = closer.id == bot.owner_id
     can_manage = getattr(closer, "guild_permissions", None) and closer.guild_permissions.manage_channels
     if not (is_owner_ or can_manage or str(closer.id) == uid):
-        await send_confirmation(embed=error_embed("Kamu tidak bisa menutup ticket ini."))
+        await send_confirmation(embed=error_embed("You can't close this ticket."))
         return False
 
     gc["active_tickets"][uid] = [x for x in gc["active_tickets"][uid] if x.get("channel_id") != channel.id]
@@ -1105,7 +1057,7 @@ async def close_ticket_channel(guild: discord.Guild, channel: discord.abc.GuildC
 
     reason = reason or "Closed via command."
     await send_confirmation(embed=base_embed(
-        "Ticket Closing", f"Ditutup oleh {closer.mention}.\n{reason}\n\nChannel dihapus dalam 5 detik.", color=COLOR_ERROR))
+        "Ticket Closing", f"Closed by {closer.mention}.\n{reason}\n\nChannel will be deleted in 5 seconds.", color=COLOR_ERROR))
 
     log_id = panel.get("log_channel")
     if log_id:
@@ -1140,8 +1092,8 @@ async def close_ticket_channel(guild: discord.Guild, channel: discord.abc.GuildC
     return True
 
 class TicketCloseView(discord.ui.View):
-    """View persisten & statis — satu custom_id untuk semua ticket, aman dipakai
-    lintas restart bot lewat bot.add_view() di on_ready."""
+    """Persistent, static view — one custom_id shared by every ticket, safe to use
+    across bot restarts via bot.add_view() in on_ready."""
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -1154,11 +1106,11 @@ class TicketCloseView(discord.ui.View):
                 await interaction.response.send_message(**kw)
             except discord.InteractionResponded:
                 await interaction.followup.send(**kw)
-        await close_ticket_channel(interaction.guild, interaction.channel, interaction.user, "Ditutup via tombol.", _respond)
+        await close_ticket_channel(interaction.guild, interaction.channel, interaction.user, "Closed via button.", _respond)
 
 class TicketOpenView(discord.ui.View):
-    """Satu instance per panel — custom_id menyimpan panel_id supaya tombol tetap
-    tahu panel mana yang harus dibuka, termasuk setelah bot restart."""
+    """One instance per panel — custom_id stores the panel_id so the button always
+    knows which panel to open, even after a bot restart."""
     def __init__(self, panel_id: str):
         super().__init__(timeout=None)
         self.panel_id = panel_id
@@ -1186,7 +1138,7 @@ def build_giveaway_embed(gw: dict) -> discord.Embed:
         title=f"GIVEAWAY — {gw['prize']}",
         description=(
             (gw.get("description", "") + "\n\n" if gw.get("description") else "") +
-            f"React dengan 🎉 untuk ikut!\n\n"
+            f"React with 🎉 to enter!\n\n"
             f"**Winners:** {gw['winner_count']}\n"
             f"**Ends:** {discord.utils.format_dt(ends_dt, 'R')}\n"
             f"**Hosted by:** <@{gw['host_id']}>"
@@ -1216,13 +1168,13 @@ async def end_giveaway(gw: dict):
     entries = list(set(gw.get("entries", [])))
     if not entries:
         ended_embed = build_giveaway_embed(gw)
-        ended_embed.description = "**Giveaway Ended**\n\nTidak ada peserta."
+        ended_embed.description = "**Giveaway Ended**\n\nNo entries."
         ended_embed.color = 0x4B5563
         try:
             await msg.edit(embed=ended_embed)
         except Exception:
             pass
-        await channel.send(embed=info_embed("Giveaway Ended", f"Tidak ada pemenang untuk **{gw['prize']}**."))
+        await channel.send(embed=info_embed("Giveaway Ended", f"No winners for **{gw['prize']}**."))
         return
     count   = min(gw["winner_count"], len(entries))
     winners = random.sample(entries, count)
@@ -1250,10 +1202,10 @@ async def end_giveaway(gw: dict):
                     except Exception:
                         pass
             if assigned:
-                role_note = f"\nRole {win_role.mention} diberikan ke {assigned} pemenang."
+                role_note = f"\nRole {win_role.mention} was granted to {assigned} winner(s)."
     win_embed = discord.Embed(
         title=f"{e(ICON_WINNER, '🏆')} Giveaway Winners!".strip(),
-        description=f"Selamat {winner_str}!\n\n**Prize:** {gw['prize']}{role_note}",
+        description=f"Congratulations {winner_str}!\n\n**Prize:** {gw['prize']}{role_note}",
         color=COLOR_SUCCESS,
         timestamp=discord.utils.utcnow()
     )
@@ -1301,8 +1253,8 @@ async def rotate_status():
     await bot.change_presence(activity=_r.choice(statuses), status=discord.Status.dnd)
 
 async def sync_premium_descriptions():
-    """Tempel prefix [💎] di deskripsi slash command yang lagi di-lock ke Premium,
-    lalu re-sync ke Discord biar kelihatan di UI slash command."""
+    """Prepend a [💎] prefix to the descriptions of slash commands that are
+    Premium-locked, then re-sync to Discord so it shows up in the slash-command UI."""
     locked  = set(cfg.get("premium_commands", []))
     changed = False
     for cmd in bot.tree.get_commands():
@@ -1323,7 +1275,7 @@ async def sync_premium_descriptions():
         try:
             await bot.tree.sync()
         except Exception as e:
-            logging.error(f"[{BOT_NAME}] Gagal sync deskripsi premium: {e}")
+            logging.error(f"[{BOT_NAME}] Failed to sync premium descriptions: {e}")
 
 # ══════════════════════════════════════════════════════════════════
 # BOT EVENTS
@@ -1344,7 +1296,7 @@ async def on_ready():
     except Exception as e:
         print(f"[{BOT_NAME}] Sync error: {e}")
 
-    # Daftarkan ulang persistent views (ticket) supaya tombol tetap hidup setelah restart.
+    # Re-register persistent views (tickets) so buttons keep working after a restart.
     bot.add_view(TicketCloseView())
     panel_ids = {pid for gcfg in cfg.get("guilds", {}).values() for pid in gcfg.get("ticket", {}).get("panels", {}).keys()}
     for pid in panel_ids:
@@ -1360,8 +1312,8 @@ async def on_ready():
 
 @bot.event
 async def on_command_completion(ctx: commands.Context):
-    """Dipanggil discord.py setiap kali prefix command SUKSES dijalankan.
-    Ini sumber kebenaran untuk statistik 'Commands Runned' di profile."""
+    """Called by discord.py every time a prefix command runs SUCCESSFULLY.
+    This is the source of truth for the 'Commands Runned' stat on the profile."""
     uid_str  = str(ctx.author.id)
     cmds_run = cfg.setdefault("commands_run", {})
     cmds_run[uid_str] = cmds_run.get(uid_str, 0) + 1
@@ -1369,8 +1321,9 @@ async def on_command_completion(ctx: commands.Context):
 
 @bot.event
 async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
-    """Jantungnya anti-nuke — dipanggil Discord real-time tiap ada audit log
-    baru, gak perlu polling. Butuh permission 'View Audit Log' di role bot."""
+    """The heart of anti-nuke — called by Discord in real time whenever a new
+    audit log entry appears, no polling needed. Requires the 'View Audit Log'
+    permission on the bot's role."""
     guild = entry.guild
     gc    = guild_cfg(cfg, guild.id)
     ac    = gc.get("antinuke", {})
@@ -1401,7 +1354,7 @@ async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
         return
 
     punishment = ac.get("punishment", "strip_roles")
-    result = await antinuke.punish(guild, member, punishment, f"[Anti-Nuke] Terdeteksi: {antinuke.ACTION_LABELS.get(action, action)}")
+    result = await antinuke.punish(guild, member, punishment, f"[Anti-Nuke] Detected: {antinuke.ACTION_LABELS.get(action, action)}")
     antinuke.reset_tracker(guild.id, entry.user.id)
 
     log_id = ac.get("log_channel")
@@ -1410,9 +1363,9 @@ async def on_audit_log_entry_create(entry: discord.AuditLogEntry):
         emb = discord.Embed(
             title=f"{e(ICON_ANTINUKE, '🛡️')} Anti-Nuke Triggered".strip(),
             description=(
-                f"**Pelaku:** {member.mention} (`{member.id}`)\n"
-                f"**Terdeteksi:** {antinuke.ACTION_LABELS.get(action, action)}\n"
-                f"**Tindakan:** {result}"
+                f"**Culprit:** {member.mention} (`{member.id}`)\n"
+                f"**Detected:** {antinuke.ACTION_LABELS.get(action, action)}\n"
+                f"**Action:** {result}"
             ),
             color=COLOR_ERROR,
             timestamp=discord.utils.utcnow()
@@ -1444,12 +1397,12 @@ async def on_message(message: discord.Message):
     if not message.guild:
         return
 
-    # ── Ignored channel — bot diem total, gak proses apapun di sini ────────
+    # ── Ignored channel — bot stays fully silent, no processing at all ─────
     gc_ignore = guild_cfg(cfg, message.guild.id)
     if message.channel.id in gc_ignore.get("ignored_channels", []):
         return
 
-    # ── Honeypot channel check ────────────────────────────────────────────
+    # ── Honeypot channel check ──────────────────────────────────────────────
     gc_trap  = guild_cfg(cfg, message.guild.id)
     ac_trap  = gc_trap.get("antispam", {})
     trap_ch  = ac_trap.get("trap_channel")
@@ -1471,7 +1424,7 @@ async def on_message(message: discord.Message):
                 emb = base_embed("Honeypot Triggered", None, color=COLOR_ERROR)
                 emb.add_field(name="User",      value=f"{message.author.mention} (`{message.author.id}`)", inline=True)
                 emb.add_field(name="Channel",   value=f"<#{trap_ch}>", inline=True)
-                emb.add_field(name="Tindakan",  value=result, inline=True)
+                emb.add_field(name="Action",    value=result, inline=True)
                 snippet = (message.content or "")[:200]
                 if snippet:
                     emb.add_field(name="Content", value=f"```{snippet}```", inline=False)
@@ -1481,7 +1434,7 @@ async def on_message(message: discord.Message):
                     pass
         return
 
-    # ── XP system ─────────────────────────────────────────────────────────
+    # ── XP system ────────────────────────────────────────────────────────
     gc = guild_cfg(cfg, message.guild.id)
     if gc.get("leveling_enabled", True):
         import time
@@ -1525,7 +1478,7 @@ async def on_message(message: discord.Message):
                         file = discord.File(buf, filename="levelup.png")
                         await lvl_ch.send(content=content, file=file)
                     except Exception as e:
-                        logging.error(f"[{BOT_NAME}] Gagal render level-up card: {e}")
+                        logging.error(f"[{BOT_NAME}] Failed to render level-up card: {e}")
                         lvl_emb = discord.Embed(description=content, color=COLOR_ERROR)
                         lvl_emb.set_author(name="Level Up!", icon_url=message.author.display_avatar.url)
                         lvl_emb.set_footer(text=BOT_NAME)
@@ -1542,7 +1495,7 @@ async def on_message(message: discord.Message):
         key    = (gid, uid)
         now_ts = discord.utils.utcnow().timestamp()
 
-        # -- Flood: banyak pesan beruntun di channel yang sama dalam waktu singkat
+        # -- Flood: many rapid-fire messages in the same channel within a short window
         flood_count  = ac.get("flood_count", 5)
         flood_window = ac.get("flood_window", 4)
         fl = flood_tracker[key]
@@ -1552,12 +1505,12 @@ async def on_message(message: discord.Message):
         if len(fl) >= flood_count:
             flood_tracker.pop(key, None)
             result = await _antispam_punish(message.guild, message.author, ac.get("punishment", "ban"),
-                                             f"[{BOT_NAME}] Message flood detected ({flood_count}+ pesan dalam {flood_window}s).")
+                                             f"[{BOT_NAME}] Message flood detected ({flood_count}+ messages within {flood_window}s).")
             await _antispam_log(message.guild, gc, message.author, "Message Flood",
-                                 f"{flood_count}+ pesan dalam {flood_window} detik di {message.channel.mention}", result)
+                                 f"{flood_count}+ messages within {flood_window} seconds in {message.channel.mention}", result)
             return
 
-        # -- Cross-channel: pesan/link/attachment identik disebar ke banyak channel berbeda
+        # -- Cross-channel: an identical message/link/attachment spammed across many different channels
         fingerprint = _spam_fingerprint(message)
         if fingerprint != "empty":
             threshold = ac.get("threshold", SPAM_THRESHOLD)
@@ -1584,12 +1537,12 @@ async def on_message(message: discord.Message):
                     except Exception:
                         pass
                 result = await _antispam_punish(message.guild, message.author, ac.get("punishment", "ban"),
-                                                 f"[{BOT_NAME}] Cross-channel spam detected ({threshold}+ channel dalam {window}s).")
+                                                 f"[{BOT_NAME}] Cross-channel spam detected ({threshold}+ channels within {window}s).")
                 await _antispam_log(message.guild, gc, message.author, "Cross-Channel Spam",
-                                     f"Pesan/link yang sama muncul di {len(entry['channels'])} channel dalam {window} detik.", result)
+                                     f"The same message/link appeared in {len(entry['channels'])} channels within {window} seconds.", result)
                 return
 
-    # ── Prefix routing + no-prefix ────────────────────────────────────────
+    # ── Prefix routing + no-prefix ───────────────────────────────────────
     low = message.content.lower().strip()
     if low.startswith("!vx ") or low == "!vx":
         message.content = "!vx " + message.content[len("!vx"):].lstrip()
@@ -1614,7 +1567,7 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_member_remove(member: discord.Member):
-    """Cabut badge USER saat user leave server support."""
+    """Revoke the USER badge when a user leaves the support server."""
     support_server_id = int(os.getenv("SUPPORT_SERVER_ID", "0"))
     if member.guild.id != support_server_id:
         return
@@ -1624,8 +1577,8 @@ async def on_member_remove(member: discord.Member):
         save_config(cfg)
 
 async def handle_new_boost(member: discord.Member):
-    """Kirim notifikasi ke channel yang dikonfigurasi lewat /boostconfig ketika
-    seorang member baru mulai boost server ini."""
+    """Send a notification to the channel configured via /boostconfig when a
+    member starts boosting this server."""
     gc    = guild_cfg(cfg, member.guild.id)
     bc    = gc.get("boost", {})
     ch_id = bc.get("channel")
@@ -1663,14 +1616,14 @@ async def handle_new_boost(member: discord.Member):
 
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-    # ── Server boost notification — jalan di semua guild yang dikonfigurasi ──
+    # ── Server boost notification — runs on every guild that has it configured ─
     if not before.premium_since and after.premium_since:
         await handle_new_boost(after)
 
-    # ── Badge role-sync itu live (dihitung langsung dari role Discord tiap kali
-    # get_bot_role() dipanggil), jadi gak butuh update apapun di sini. Ini cuma
-    # buat kasih DM selamat pas seseorang baru dapat role yang di-sync ke badge
-    # — biar mereka sadar badge-nya naik. Cuma berlaku di support server. ────
+    # ── Badge role-sync is computed live (straight from the Discord role every
+    # time get_bot_role() is called), so nothing needs updating here. This is
+    # just to send a congratulatory DM when someone gains a role that's synced
+    # to a badge — so they notice their badge went up. Support server only. ──
     support_server_id = int(os.getenv("SUPPORT_SERVER_ID", "0"))
     if after.guild.id != support_server_id or after.bot:
         return
@@ -1690,8 +1643,8 @@ async def on_member_update(before: discord.Member, after: discord.Member):
             try:
                 await after.send(embed=base_embed(
                     "Badge Updated!",
-                    f"Kamu baru dapat role di **{after.guild.name}** dan sekarang otomatis punya badge "
-                    f"{badge_tag}**{info['label']}** di {BOT_NAME}!\nCek profil: `profile`",
+                    f"You just got a role in **{after.guild.name}** and now automatically have the "
+                    f"{badge_tag}**{info['label']}** badge on {BOT_NAME}!\nCheck your profile: `profile`",
                     color=info["color"]
                 ))
             except Exception:
@@ -1745,15 +1698,15 @@ async def pfx_ban(ctx, member: discord.Member, *, reason: str = "No reason provi
 @bot.command(name="unban", aliases=["ub"])
 async def pfx_unban(ctx, user_id: str):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.ban_members:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     try:
         uid  = int(user_id.strip("<@!>"))
         await ctx.guild.unban(discord.Object(id=uid), reason=f"By {ctx.author}")
-        await ctx.send(embed=success_embed(f"User `{uid}` di-unban."))
+        await ctx.send(embed=success_embed(f"User `{uid}` has been unbanned."))
     except discord.NotFound:
-        await ctx.send(embed=error_embed("User tidak ada di ban list."))
+        await ctx.send(embed=error_embed("That user isn't on the ban list."))
     except discord.Forbidden:
-        await ctx.send(embed=error_embed("Bot tidak punya izin."))
+        await ctx.send(embed=error_embed("The bot doesn't have permission."))
 
 @bot.command(name="timeout", aliases=["to", "mute"])
 async def pfx_timeout(ctx, member: discord.Member, minutes: int, *, reason: str = "No reason provided."):
@@ -1762,12 +1715,12 @@ async def pfx_timeout(ctx, member: discord.Member, minutes: int, *, reason: str 
 @bot.command(name="untimeout", aliases=["unmute", "unto"])
 async def pfx_untimeout(ctx, member: discord.Member):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.moderate_members:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     try:
         await member.timeout(None, reason=f"By {ctx.author}")
-        await ctx.send(embed=success_embed(f"Timeout {member.mention} dilepas."))
+        await ctx.send(embed=success_embed(f"Timeout removed from {member.mention}."))
     except discord.Forbidden:
-        await ctx.send(embed=error_embed("Bot tidak punya izin."))
+        await ctx.send(embed=error_embed("The bot doesn't have permission."))
 
 @bot.command(name="warn", aliases=["w"])
 async def pfx_warn(ctx, member: discord.Member, *, reason: str = "No reason provided."):
@@ -1779,7 +1732,7 @@ async def pfx_warnings(ctx, member: discord.Member = None):
     gc     = guild_cfg(cfg, ctx.guild.id)
     warns  = gc.get("warnings", {}).get(str(target.id), [])
     if not warns:
-        return await ctx.send(embed=info_embed(f"Warnings — {target.display_name}", "Tidak ada warning."))
+        return await ctx.send(embed=info_embed(f"Warnings — {target.display_name}", "No warnings."))
     lines = [
         f"**{i+1}.** {w.get('reason','?')} *(by <@{w.get('warned_by','?')}> — {w.get('timestamp','')[:10]})*"
         for i, w in enumerate(warns)
@@ -1792,33 +1745,33 @@ async def pfx_warnings(ctx, member: discord.Member = None):
 @bot.command(name="unwarn", aliases=["uw"])
 async def pfx_unwarn(ctx, member: discord.Member, number: int):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_messages:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     gc    = guild_cfg(cfg, ctx.guild.id)
     warns = gc.get("warnings", {}).get(str(member.id), [])
     if not warns:
-        return await ctx.send(embed=error_embed(f"{member.display_name} tidak punya warning."))
+        return await ctx.send(embed=error_embed(f"{member.display_name} has no warnings."))
     if not 1 <= number <= len(warns):
-        return await ctx.send(embed=error_embed(f"Nomor tidak valid (1–{len(warns)})."))
+        return await ctx.send(embed=error_embed(f"Invalid number (1–{len(warns)})."))
     removed = warns.pop(number - 1)
     save_config(cfg)
-    await ctx.send(embed=success_embed(f"Warning #{number} `{removed.get('reason','?')}` dihapus dari {member.mention}."))
+    await ctx.send(embed=success_embed(f"Warning #{number} `{removed.get('reason','?')}` removed from {member.mention}."))
 
 @bot.command(name="clearwarnings", aliases=["cw", "clearwarns"])
 async def pfx_clearwarnings(ctx, member: discord.Member):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_messages:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     gc = guild_cfg(cfg, ctx.guild.id)
     gc.setdefault("warnings", {})[str(member.id)] = []
     save_config(cfg)
-    await ctx.send(embed=success_embed(f"Semua warning {member.mention} dihapus."))
+    await ctx.send(embed=success_embed(f"All warnings for {member.mention} have been cleared."))
 
 @bot.command(name="purge", aliases=["clear", "prune"])
 async def pfx_purge(ctx, amount: int = 10):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_messages:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")), delete_after=5)
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."), delete_after=5)
     amount  = max(1, min(100, amount))
     deleted = await ctx.channel.purge(limit=amount + 1)
-    msg = await ctx.send(embed=success_embed(f"Dihapus {max(0, len(deleted)-1)} pesan."))
+    msg = await ctx.send(embed=success_embed(f"Deleted {max(0, len(deleted)-1)} message(s)."))
     await asyncio.sleep(4)
     try:
         await msg.delete()
@@ -1828,41 +1781,41 @@ async def pfx_purge(ctx, amount: int = 10):
 @bot.command(name="lock", aliases=["lockdown"])
 async def pfx_lock(ctx, channel: discord.TextChannel = None):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_channels:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     ch = channel or ctx.channel
     ow = ch.overwrites_for(ctx.guild.default_role)
     ow.send_messages = False
     try:
         await ch.set_permissions(ctx.guild.default_role, overwrite=ow, reason=f"Locked by {ctx.author}")
-        await ctx.send(embed=success_embed(f"{ch.mention} dikunci."))
+        await ctx.send(embed=success_embed(f"{ch.mention} has been locked."))
     except discord.Forbidden:
-        await ctx.send(embed=error_embed("Bot tidak punya izin."))
+        await ctx.send(embed=error_embed("The bot doesn't have permission."))
 
 @bot.command(name="unlock", aliases=["unlockdown"])
 async def pfx_unlock(ctx, channel: discord.TextChannel = None):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_channels:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     ch = channel or ctx.channel
     ow = ch.overwrites_for(ctx.guild.default_role)
     ow.send_messages = None
     try:
         await ch.set_permissions(ctx.guild.default_role, overwrite=ow, reason=f"Unlocked by {ctx.author}")
-        await ctx.send(embed=success_embed(f"{ch.mention} dibuka."))
+        await ctx.send(embed=success_embed(f"{ch.mention} has been unlocked."))
     except discord.Forbidden:
-        await ctx.send(embed=error_embed("Bot tidak punya izin."))
+        await ctx.send(embed=error_embed("The bot doesn't have permission."))
 
 @bot.command(name="slowmode", aliases=["sm"])
 async def pfx_slowmode(ctx, seconds: int = 0, channel: discord.TextChannel = None):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_channels:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     ch = channel or ctx.channel
     seconds = max(0, min(21600, seconds))
     try:
         await ch.edit(slowmode_delay=seconds, reason=f"By {ctx.author}")
-        msg = f"Slowmode {ch.mention} dimatikan." if seconds == 0 else f"Slowmode {ch.mention} → **{seconds} detik**."
+        msg = f"Slowmode disabled in {ch.mention}." if seconds == 0 else f"Slowmode in {ch.mention} → **{seconds}s**."
         await ctx.send(embed=success_embed(msg))
     except discord.Forbidden:
-        await ctx.send(embed=error_embed("Bot tidak punya izin."))
+        await ctx.send(embed=error_embed("The bot doesn't have permission."))
 
 # ── ROLE & VOICE ──────────────────────────────────────────────────
 
@@ -1913,13 +1866,13 @@ async def pfx_ping(ctx):
 @bot.command(name="addemoji", aliases=["ae"])
 async def pfx_addemoji(ctx, emoji_or_url: str = "", *, name: str = ""):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_emojis:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     if not emoji_or_url:
-        return await ctx.send(embed=error_embed("Usage: `!vx addemoji <:emoji:id>` atau `!vx addemoji <url> <name>`"))
+        return await ctx.send(embed=error_embed("Usage: `!vx addemoji <:emoji:id>` or `!vx addemoji <url> <name>`"))
     result = await do_addemoji(ctx.guild, emoji_or_url, name)
     if result["success"]:
         emoji = result["emoji"]
-        await ctx.send(embed=success_embed(f"Emoji **{emoji.name}** ditambahkan! {emoji}"))
+        await ctx.send(embed=success_embed(f"Emoji **{emoji.name}** added! {emoji}"))
     else:
         await ctx.send(embed=error_embed(result["error"]))
 
@@ -1930,7 +1883,7 @@ async def pfx_profile(ctx, member: discord.Member = None):
     target = member or ctx.author
     embed  = build_profile_embed(target)
     embed.set_author(name="Profile & Badge Panel", icon_url=target.display_avatar.url)
-    # Requested By di footer dengan avatar
+    # Requested By in the footer with avatar
     embed.set_footer(
         text=BOT_NAME + "  |  Requested By " + ctx.author.display_name,
         icon_url=ctx.author.display_avatar.url
@@ -1940,8 +1893,8 @@ async def pfx_profile(ctx, member: discord.Member = None):
 # ── RANK & LEADERBOARD ────────────────────────────────────────────
 
 async def _build_leaderboard_entries(guild: discord.Guild, all_d: list) -> list:
-    """Ambil avatar tiap member top-10 secara paralel (bukan satu-satu) biar
-    generate leaderboard card gak lemot nunggu 10 request HTTP berurutan."""
+    """Fetch each top-10 member's avatar in parallel (not one at a time) so
+    generating the leaderboard card doesn't stall waiting on 10 sequential HTTP requests."""
     async def fetch_one(idx, uid, data):
         m    = guild.get_member(int(uid))
         name = m.name if m else f"User ({uid[:6]})"
@@ -1961,17 +1914,17 @@ async def _build_leaderboard_entries(guild: discord.Guild, all_d: list) -> list:
     return await asyncio.gather(*tasks)
 
 def _support_boost_promo(uid: int):
-    """Return (content_text, view) buat promo join support server + XP boost.
-    content_text jadi None kalau SUPPORT_INVITE belum di-set / formatnya
-    bukan URL valid — biar gak nawarin invite yang gak ada atau bikin
-    discord.ui.Button error karena URL-nya rusak."""
+    """Return (content_text, view) for the join-support-server + XP boost promo.
+    content_text is None if SUPPORT_INVITE isn't set / isn't a valid URL — so we
+    don't offer an invite that doesn't exist or make discord.ui.Button error
+    out on a broken URL."""
     if not SUPPORT_INVITE or not SUPPORT_INVITE.startswith(("http://", "https://")):
         return None, None
     remaining = xp_boost_remaining(uid)
     if remaining:
-        content = f"XP Boost **+10%** kamu masih aktif sampai {discord.utils.format_dt(remaining, 'R')}!"
+        content = f"Your **+10%** XP Boost is still active until {discord.utils.format_dt(remaining, 'R')}!"
     else:
-        content = "**Join support server** dan dapatkan **+10% XP Boost** selama 60 menit!"
+        content = "**Join the support server** and get a **+10% XP Boost** for 60 minutes!"
     view = discord.ui.View()
     view.add_item(discord.ui.Button(label="Join Support Server", style=discord.ButtonStyle.link, url=SUPPORT_INVITE))
     return content, view
@@ -2000,7 +1953,7 @@ async def pfx_rank(ctx, member: discord.Member = None):
             )
             file = discord.File(buf, filename="rank.png")
         except Exception:
-            logging.exception(f"[{BOT_NAME}] Gagal render rank card")
+            logging.exception(f"[{BOT_NAME}] Failed to render rank card")
             file = None
 
         if file:
@@ -2010,9 +1963,9 @@ async def pfx_rank(ctx, member: discord.Member = None):
                 if content: kwargs["content"] = content
                 if view:    kwargs["view"] = view
             except Exception:
-                logging.exception(f"[{BOT_NAME}] Gagal build boost promo (rank card tetap dikirim)")
+                logging.exception(f"[{BOT_NAME}] Failed to build boost promo (rank card still sent)")
             return await ctx.send(**kwargs)
-    # Fallback embed teks kalau render gambar gagal total
+    # Fallback text embed if image rendering fails entirely
     pct   = int((cx / max(nx, 1)) * 100)
     bar   = "▰" * int(pct/100*16) + "▱" * (16-int(pct/100*16))
     embed = discord.Embed(
@@ -2034,7 +1987,7 @@ async def pfx_leaderboard(ctx):
     gc    = guild_cfg(cfg, ctx.guild.id)
     all_d = sorted(gc["members_xp"].items(), key=lambda x: x[1].get("xp", 0), reverse=True)[:10]
     if not all_d:
-        return await ctx.send(embed=info_embed("Leaderboard", "Belum ada data XP."))
+        return await ctx.send(embed=info_embed("Leaderboard", "No XP data yet."))
 
     async with ctx.typing():
         try:
@@ -2043,9 +1996,9 @@ async def pfx_leaderboard(ctx):
             file = discord.File(buf, filename="leaderboard.png")
             return await ctx.send(file=file)
         except Exception as e:
-            logging.error(f"[{BOT_NAME}] Gagal render leaderboard card: {e}")
+            logging.error(f"[{BOT_NAME}] Failed to render leaderboard card: {e}")
 
-    # Fallback teks kalau render gambar gagal total
+    # Fallback text if image rendering fails entirely
     lines = []
     for idx, (uid, data) in enumerate(all_d):
         m     = ctx.guild.get_member(int(uid))
@@ -2073,15 +2026,15 @@ async def pfx_level(ctx, sub: str = "", *args):
 
     elif sub == "message":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         action = args[0].lower() if args else ""
         if action == "set":
             template = " ".join(args[1:]).strip()
             if not template:
                 return await ctx.send(embed=error_embed(
-                    "Usage: `level message set <teks>`\n\n"
-                    "Placeholder: `{mention}` `{user}` `{level}` `{server}` `{roles}`\n"
-                    "Contoh: `level message set {mention} gila lu nyampe **Level {level}**! 🔥 {roles}`"
+                    "Usage: `level message set <text>`\n\n"
+                    "Placeholders: `{mention}` `{user}` `{level}` `{server}` `{roles}`\n"
+                    "Example: `level message set {mention} just hit **Level {level}**! 🔥 {roles}`"
                 ))
             gc["levelup_message"] = template
             save_config(cfg)
@@ -2091,55 +2044,55 @@ async def pfx_level(ctx, sub: str = "", *args):
                        .replace("{level}",   "27")
                        .replace("{server}",  ctx.guild.name)
                        .replace("{roles}",   "🎁 Unlocked: @Elite"))
-            embed = success_embed(f"Deskripsi level-up diupdate.\n\n**Preview:**\n{preview}")
+            embed = success_embed(f"Level-up message updated.\n\n**Preview:**\n{preview}")
             return await ctx.send(embed=embed)
         elif action == "reset":
             gc["levelup_message"] = "{mention} leveled up to **Level {level}**!"
             save_config(cfg)
-            return await ctx.send(embed=success_embed("Deskripsi level-up dikembalikan ke default."))
+            return await ctx.send(embed=success_embed("Level-up message reset to default."))
         elif action == "show":
             return await ctx.send(embed=info_embed("Level-Up Message Template", f"```{gc.get('levelup_message','')}```"))
         else:
             return await ctx.send(embed=info_embed("Level-Up Message", (
-                "`level message set <teks>` — ganti deskripsi notifikasi level up\n"
-                "`level message show` — lihat template sekarang\n"
-                "`level message reset` — balikin ke default\n\n"
-                "Placeholder yang bisa dipakai: `{mention}` `{user}` `{level}` `{server}` `{roles}`\n"
-                "(`{roles}` otomatis kosong kalau gak ada role reward yang didapat)"
+                "`level message set <text>` — change the level-up notification message\n"
+                "`level message show` — view the current template\n"
+                "`level message reset` — revert to the default\n\n"
+                "Available placeholders: `{mention}` `{user}` `{level}` `{server}` `{roles}`\n"
+                "(`{roles}` is automatically empty if no role reward was earned)"
             )))
 
     elif sub == "toggle":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         current = gc.get("leveling_enabled", True)
         gc["leveling_enabled"] = not current
         save_config(cfg)
-        state = "diaktifkan" if gc["leveling_enabled"] else "dimatikan"
+        state = "enabled" if gc["leveling_enabled"] else "disabled"
         color = COLOR_SUCCESS if gc["leveling_enabled"] else COLOR_ERROR
         await ctx.send(embed=base_embed("Leveling System",
-            "Sistem leveling **" + state + "** di server ini.", color=color))
+            "The leveling system is now **" + state + "** in this server.", color=color))
 
     elif sub == "setchannel":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         if not args:
             gc["level_channel"] = None
             save_config(cfg)
-            return await ctx.send(embed=success_embed("Level channel dinonaktifkan. Notif dikirim ke channel aktif."))
+            return await ctx.send(embed=success_embed("Level channel disabled. Notifications will be sent to the active channel."))
         ch = None
         if ctx.message.channel_mentions:
             ch = ctx.message.channel_mentions[0]
         elif args[0].isdigit():
             ch = ctx.guild.get_channel(int(args[0]))
         if not ch:
-            return await ctx.send(embed=error_embed("Channel tidak ditemukan. Gunakan #mention atau channel ID."))
+            return await ctx.send(embed=error_embed("Channel not found. Use a #mention or channel ID."))
         gc["level_channel"] = ch.id
         save_config(cfg)
-        await ctx.send(embed=success_embed("Level-up notif akan dikirim ke " + ch.mention + "."))
+        await ctx.send(embed=success_embed("Level-up notifications will be sent to " + ch.mention + "."))
 
     elif sub == "role":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         level_roles = gc.setdefault("level_roles", {})
         action = args[0].lower() if args else ""
 
@@ -2153,36 +2106,36 @@ async def pfx_level(ctx, sub: str = "", *args):
             elif args[2].isdigit():
                 role = ctx.guild.get_role(int(args[2]))
             if not role:
-                return await ctx.send(embed=error_embed("Role tidak ditemukan."))
+                return await ctx.send(embed=error_embed("Role not found."))
             level_roles[str(lvl)] = role.id
             save_config(cfg)
-            return await ctx.send(embed=success_embed(f"Member yang mencapai **Level {lvl}** sekarang otomatis dapat role {role.mention}."))
+            return await ctx.send(embed=success_embed(f"Members who reach **Level {lvl}** will now automatically get the {role.mention} role."))
 
         elif action == "remove":
             if len(args) < 2 or not args[1].isdigit():
                 return await ctx.send(embed=error_embed("Usage: `level role remove <level>`"))
             lvl = args[1]
             if lvl not in level_roles:
-                return await ctx.send(embed=error_embed(f"Belum ada role reward untuk level {lvl}."))
+                return await ctx.send(embed=error_embed(f"There's no role reward set for level {lvl}."))
             level_roles.pop(lvl, None)
             save_config(cfg)
-            return await ctx.send(embed=success_embed(f"Role reward untuk level {lvl} dihapus. Role yang udah dimiliki member gak dicabut."))
+            return await ctx.send(embed=success_embed(f"Role reward for level {lvl} removed. Roles members already have won't be revoked."))
 
         elif action == "list":
             if not level_roles:
-                return await ctx.send(embed=info_embed("Level Role Rewards", "Belum ada role reward yang di-set."))
+                return await ctx.send(embed=info_embed("Level Role Rewards", "No role rewards have been set yet."))
             lines = []
             for lvl in sorted(level_roles, key=lambda x: int(x)):
                 role = ctx.guild.get_role(level_roles[lvl])
-                lines.append(f"**Level {lvl}** → {role.mention if role else '*(role tidak ditemukan)*'}")
+                lines.append(f"**Level {lvl}** → {role.mention if role else '*(role not found)*'}")
             return await ctx.send(embed=info_embed("Level Role Rewards", "\n".join(lines)))
 
         else:
             await ctx.send(embed=info_embed("Level Role Rewards", (
-                "`level role set <level> <@role>` — kasih role otomatis pas member nyampe level segitu\n"
-                "`level role remove <level>` — hapus reward level itu\n"
-                "`level role list` — lihat semua reward yang aktif\n\n"
-                "Role itu stacking — sekali dapat gak akan dicabut walau nanti reward-nya diubah/dihapus."
+                "`level role set <level> <@role>` — auto-grant a role once a member reaches that level\n"
+                "`level role remove <level>` — remove that level's reward\n"
+                "`level role list` — view all active rewards\n\n"
+                "Roles stack — once granted, they won't be revoked even if the reward is later changed/removed."
             )))
 
     elif sub == "status":
@@ -2191,29 +2144,29 @@ async def pfx_level(ctx, sub: str = "", *args):
         xp_range = gc.get("xp_per_message", [15, 25])
         cooldown = gc.get("xp_cooldown", 60)
         embed = base_embed("Leveling Status", None, COLOR_SUCCESS if enabled else COLOR_ERROR)
-        embed.add_field(name="Status",     value="Aktif" if enabled else "Mati",                  inline=True)
+        embed.add_field(name="Status",     value="Enabled" if enabled else "Disabled",             inline=True)
         embed.add_field(name="Channel",    value=lvl_ch.mention if lvl_ch else "Current channel",  inline=True)
         embed.add_field(name="XP/Message", value=str(xp_range[0]) + "-" + str(xp_range[1]) + " XP", inline=True)
-        embed.add_field(name="Cooldown",   value=str(cooldown) + " detik",                        inline=True)
+        embed.add_field(name="Cooldown",   value=str(cooldown) + " seconds",                       inline=True)
         await ctx.send(embed=embed)
 
     else:
         enabled = gc.get("leveling_enabled", True)
-        status  = "Aktif" if enabled else "Mati"
+        status  = "Enabled" if enabled else "Disabled"
         await ctx.send(embed=info_embed("Level System",
             "Status: **" + status + "**\n\n"
-            "`level toggle` - nyalain/matiin leveling\n"
-            "`level setchannel #channel` - set channel notif\n"
-            "`level setchannel` - nonaktifkan channel\n"
-            "`level role set/remove/list` - kelola role reward per level\n"
-            "`level message set/show/reset` - custom deskripsi notif level up\n"
-            "`level status` - lihat konfigurasi\n"
-            "`level rank [@user]` - lihat rank\n"
+            "`level toggle` - turn leveling on/off\n"
+            "`level setchannel #channel` - set the notification channel\n"
+            "`level setchannel` - disable the channel override\n"
+            "`level role set/remove/list` - manage per-level role rewards\n"
+            "`level message set/show/reset` - customize the level-up notification\n"
+            "`level status` - view current configuration\n"
+            "`level rank [@user]` - view rank\n"
             "`level leaderboard` - top 10"))
 @bot.command(name="xp", aliases=["exp"])
 async def pfx_xp(ctx, sub: str = "", *args):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     sub  = sub.lower()
     gc   = guild_cfg(cfg, ctx.guild.id)
     VALID = ("add","remove","set","setlevel","reset")
@@ -2223,37 +2176,37 @@ async def pfx_xp(ctx, sub: str = "", *args):
         return await ctx.send(embed=error_embed(f"Usage: `xp {sub} @user [amount]`"))
     try:
         member = ctx.guild.get_member(int(args[0].strip("<@!>")))
-        if not member: return await ctx.send(embed=error_embed("Member tidak ditemukan."))
+        if not member: return await ctx.send(embed=error_embed("Member not found."))
     except ValueError:
-        return await ctx.send(embed=error_embed("Mention atau ID yang valid."))
+        return await ctx.send(embed=error_embed("Please provide a valid mention or ID."))
     data = get_member_xp(gc, str(member.id))
     if sub == "reset":
         gc["members_xp"][str(member.id)] = {"xp":0,"level":0,"last_msg_ts":0.0,"messages":0}
         save_config(cfg)
-        return await ctx.send(embed=success_embed(f"XP {member.mention} di-reset."))
+        return await ctx.send(embed=success_embed(f"XP for {member.mention} has been reset."))
     if len(args) < 2:
         return await ctx.send(embed=error_embed(f"Usage: `xp {sub} @user <amount>`"))
     try:
         amount = int(args[1])
     except ValueError:
-        return await ctx.send(embed=error_embed("Amount harus angka."))
+        return await ctx.send(embed=error_embed("Amount must be a number."))
     if sub == "add":
         data["xp"] = max(0, data["xp"] + amount)
         data["level"] = level_from_xp(data["xp"])
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"+{amount} XP ke {member.mention} (Total: {data['xp']:,} · Level {data['level']})"))
+        await ctx.send(embed=success_embed(f"+{amount} XP to {member.mention} (Total: {data['xp']:,} · Level {data['level']})"))
     elif sub == "remove":
         data["xp"] = max(0, data["xp"] - amount)
         data["level"] = level_from_xp(data["xp"])
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"-{amount} XP dari {member.mention} (Total: {data['xp']:,} · Level {data['level']})"))
+        await ctx.send(embed=success_embed(f"-{amount} XP from {member.mention} (Total: {data['xp']:,} · Level {data['level']})"))
     elif sub == "set":
         data["xp"] = max(0, amount)
         data["level"] = level_from_xp(data["xp"])
         save_config(cfg)
         await ctx.send(embed=success_embed(f"XP {member.mention} → {amount:,} (Level {data['level']})"))
     elif sub == "setlevel":
-        if not 0 <= amount <= 999: return await ctx.send(embed=error_embed("Level 0–999."))
+        if not 0 <= amount <= 999: return await ctx.send(embed=error_embed("Level must be between 0 and 999."))
         total = sum(xp_for_level(lv) for lv in range(amount))
         data["xp"] = total; data["level"] = amount
         save_config(cfg)
@@ -2280,29 +2233,29 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
 
     if sub == "setup":
         if not is_manager():
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         parts = rest.split()
         if len(parts) < 3:
             return await ctx.send(embed=error_embed(
                 "Usage: `ticket setup <panel_id> <category_id> <log_id> [role_id] [max]`\n"
-                "Contoh: `ticket setup support 123456 654321 999999 3`"))
+                "Example: `ticket setup support 123456 654321 999999 3`"))
         panel_id = parts[0].lower()
         if not re.fullmatch(r"[a-z0-9_-]{1,32}", panel_id):
-            return await ctx.send(embed=error_embed("Panel ID cuma boleh huruf kecil, angka, `-`, `_` (maks 32 karakter)."))
+            return await ctx.send(embed=error_embed("Panel ID can only contain lowercase letters, numbers, `-`, `_` (max 32 characters)."))
         try:
             cat_id  = int(parts[1]); log_id = int(parts[2])
             role_id = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else None
             max_t   = int(parts[4]) if len(parts) > 4 else 1
         except ValueError:
-            return await ctx.send(embed=error_embed("Category ID / Log ID / Role ID harus angka."))
+            return await ctx.send(embed=error_embed("Category ID / Log ID / Role ID must be numbers."))
         cat    = ctx.guild.get_channel(cat_id)
         log_ch = ctx.guild.get_channel(log_id)
         if not isinstance(cat, discord.CategoryChannel):
-            return await ctx.send(embed=error_embed("Category channel tidak ditemukan."))
+            return await ctx.send(embed=error_embed("Category channel not found."))
         if not log_ch:
-            return await ctx.send(embed=error_embed("Log channel tidak ditemukan."))
+            return await ctx.send(embed=error_embed("Log channel not found."))
         panel = panels.setdefault(panel_id, {
-            "title": "Support Tickets", "description": "Klik tombol untuk membuka support ticket.",
+            "title": "Support Tickets", "description": "Click the button below to open a support ticket.",
             "message_id": None, "channel_id": None
         })
         panel.update({
@@ -2315,19 +2268,19 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
         embed.add_field(name="Log Channel",  value=log_ch.mention,                          inline=True)
         embed.add_field(name="Support Role", value=f"<@&{role_id}>" if role_id else "None",  inline=True)
         embed.add_field(name="Max Tickets",  value=str(panel["max_tickets"]),                inline=True)
-        embed.set_footer(text=f"Lanjut: ticket panel {panel_id} <title> | <description>")
+        embed.set_footer(text=f"Next: ticket panel {panel_id} <title> | <description>")
         await ctx.send(embed=embed)
 
     elif sub == "panel":
         if not is_manager():
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         parts = rest.split(maxsplit=1)
         if not parts:
             return await ctx.send(embed=error_embed("Usage: `ticket panel <panel_id> <title> | <description>`"))
         panel_id = parts[0].lower()
         panel    = panels.get(panel_id)
         if not panel or not panel.get("category"):
-            return await ctx.send(embed=error_embed(f"Panel `{panel_id}` belum di-setup. Jalankan `ticket setup` dulu."))
+            return await ctx.send(embed=error_embed(f"Panel `{panel_id}` hasn't been set up yet. Run `ticket setup` first."))
         title, desc = parse_title_desc(parts[1] if len(parts) > 1 else "", panel["title"], panel["description"])
         panel["title"], panel["description"] = title, desc
         msg = await ctx.send(embed=base_embed(title, desc, color=COLOR_PRIMARY), view=TicketOpenView(panel_id))
@@ -2336,14 +2289,14 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
 
     elif sub == "edit":
         if not is_manager():
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         parts = rest.split(maxsplit=1)
         if len(parts) < 2:
             return await ctx.send(embed=error_embed("Usage: `ticket edit <panel_id> <title> | <description>`"))
         panel_id = parts[0].lower()
         panel    = panels.get(panel_id)
         if not panel:
-            return await ctx.send(embed=error_embed(f"Panel `{panel_id}` tidak ditemukan."))
+            return await ctx.send(embed=error_embed(f"Panel `{panel_id}` not found."))
         title, desc = parse_title_desc(parts[1], panel["title"], panel["description"])
         panel["title"], panel["description"] = title, desc
         save_config(cfg)
@@ -2357,12 +2310,12 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
                     edited = True
                 except Exception:
                     pass
-        note = "Panel message ikut ter-update." if edited else "Config tersimpan, tapi panel message lama tidak ditemukan/sudah dihapus — kirim ulang dengan `ticket panel`."
-        await ctx.send(embed=success_embed(f"Panel `{panel_id}` diupdate.\n{note}"))
+        note = "The panel message was updated too." if edited else "Config saved, but the old panel message wasn't found/was deleted — resend it with `ticket panel`."
+        await ctx.send(embed=success_embed(f"Panel `{panel_id}` updated.\n{note}"))
 
     elif sub == "list":
         if not panels:
-            return await ctx.send(embed=info_embed("Ticket Panels", "Belum ada panel yang di-setup."))
+            return await ctx.send(embed=info_embed("Ticket Panels", "No panels have been set up yet."))
         embed = base_embed("Ticket Panels", None)
         for pid, p in panels.items():
             cat = ctx.guild.get_channel(p.get("category"))    if p.get("category")    else None
@@ -2376,13 +2329,13 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
 
     elif sub == "delete":
         if not is_manager():
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         panel_id = rest.strip().lower()
         if panel_id not in panels:
-            return await ctx.send(embed=error_embed(f"Panel `{panel_id}` tidak ditemukan."))
+            return await ctx.send(embed=error_embed(f"Panel `{panel_id}` not found."))
         del panels[panel_id]
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Panel `{panel_id}` dihapus. Ticket yang masih terbuka dari panel ini tidak otomatis ditutup."))
+        await ctx.send(embed=success_embed(f"Panel `{panel_id}` deleted. Tickets still open from this panel won't be closed automatically."))
 
     elif sub == "close":
         async def _respond(**kw):
@@ -2397,8 +2350,8 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
             "`ticket list`\n"
             "`ticket delete <panel_id>`\n"
             "`ticket close [reason]`\n\n"
-            "Setiap panel punya category, log channel, dan role support sendiri-sendiri — "
-            "jadi tiap jenis ticket bisa dipisah log-nya."
+            "Each panel has its own category, log channel, and support role — "
+            "so every ticket type can have its logs kept separate."
         )))
 
 # ── GIVEAWAY ─────────────────────────────────────────────────────
@@ -2408,7 +2361,7 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
     sub = sub.lower()
     if sub == "list":
         gws = [gw for gw in active_giveaways.values() if gw.get("guild_id") == ctx.guild.id]
-        if not gws: return await ctx.send(embed=info_embed("Giveaways", "Tidak ada giveaway aktif."))
+        if not gws: return await ctx.send(embed=info_embed("Giveaways", "No active giveaways."))
         embed = discord.Embed(title="Active Giveaways", color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
         for gw in gws[:10]:
             ends_dt = datetime.datetime.utcfromtimestamp(gw["ends_ts"]).replace(tzinfo=datetime.timezone.utc)
@@ -2419,22 +2372,22 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
         await ctx.send(embed=embed)
     elif sub == "end":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         if not args: return await ctx.send(embed=error_embed("Usage: `giveaway end <message_id>`"))
         try: mid = int(args[0])
-        except ValueError: return await ctx.send(embed=error_embed("ID harus angka."))
+        except ValueError: return await ctx.send(embed=error_embed("ID must be a number."))
         gw = active_giveaways.get(mid)
-        if not gw or gw["guild_id"] != ctx.guild.id: return await ctx.send(embed=error_embed("Giveaway tidak ditemukan."))
-        await ctx.send(embed=info_embed("", f"Mengakhiri **{gw['prize']}**..."))
+        if not gw or gw["guild_id"] != ctx.guild.id: return await ctx.send(embed=error_embed("Giveaway not found."))
+        await ctx.send(embed=info_embed("", f"Ending **{gw['prize']}**..."))
         await end_giveaway(gw)
     elif sub == "reroll":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         if not args: return await ctx.send(embed=error_embed("Usage: `giveaway reroll <message_id> [count]`"))
         try: mid = int(args[0]); count = int(args[1]) if len(args) > 1 else 1
-        except ValueError: return await ctx.send(embed=error_embed("ID dan count harus angka."))
+        except ValueError: return await ctx.send(embed=error_embed("ID and count must be numbers."))
         try: msg = await ctx.channel.fetch_message(mid)
-        except discord.NotFound: return await ctx.send(embed=error_embed("Pesan tidak ditemukan."))
+        except discord.NotFound: return await ctx.send(embed=error_embed("Message not found."))
         entries = []
         target_emoji = ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉"
         for reaction in msg.reactions:
@@ -2442,30 +2395,30 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
                 async for user in reaction.users():
                     if not user.bot: entries.append(user.id)
                 break
-        if not entries: return await ctx.send(embed=error_embed("Tidak ada peserta."))
+        if not entries: return await ctx.send(embed=error_embed("No entries."))
         count   = max(1, min(count, len(entries)))
         winners = random.sample(list(set(entries)), count)
         ws      = " ".join(f"<@{w}>" for w in winners)
-        embed   = discord.Embed(title=f"{e(ICON_WINNER, '🏆')} Giveaway Rerolled!".strip(), description=f"Pemenang baru: {ws}", color=COLOR_SUCCESS, timestamp=discord.utils.utcnow())
+        embed   = discord.Embed(title=f"{e(ICON_WINNER, '🏆')} Giveaway Rerolled!".strip(), description=f"New winner(s): {ws}", color=COLOR_SUCCESS, timestamp=discord.utils.utcnow())
         embed.set_footer(text=BOT_NAME)
         await ctx.send(content=ws, embed=embed)
     elif sub == "start":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
         if len(args) < 3:
-            return await ctx.send(embed=error_embed("Usage: `giveaway start <durasi> <winners> <prize>`\nOptional: `--role <id>` `--winrole <id>`"))
+            return await ctx.send(embed=error_embed("Usage: `giveaway start <duration> <winners> <prize>`\nOptional: `--role <id>` `--winrole <id>`"))
         dur_str = args[0].lower()
         m_dur   = re.fullmatch(r"(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?", dur_str)
         if not m_dur or not any(m_dur.group(x) for x in (1,2,3)):
-            return await ctx.send(embed=error_embed("Format durasi: `1h`, `30m`, `2h30m`, `1d`"))
+            return await ctx.send(embed=error_embed("Duration format: `1h`, `30m`, `2h30m`, `1d`"))
         dur_secs = int(m_dur.group(1) or 0)*86400 + int(m_dur.group(2) or 0)*3600 + int(m_dur.group(3) or 0)*60
         if not dur_secs or dur_secs > 7*86400:
-            return await ctx.send(embed=error_embed("Durasi 1 menit – 7 hari."))
+            return await ctx.send(embed=error_embed("Duration must be between 1 minute and 7 days."))
         try:
             winner_count = int(args[1])
             if not 1 <= winner_count <= 20: raise ValueError
         except ValueError:
-            return await ctx.send(embed=error_embed("Winners 1–20."))
+            return await ctx.send(embed=error_embed("Winners must be between 1 and 20."))
         rest = list(args[2:]); req_role_id = win_role_id = None; prize_parts = []; i = 0
         while i < len(rest):
             if rest[i] == "--role" and i+1 < len(rest):
@@ -2479,7 +2432,7 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
             else:
                 prize_parts.append(rest[i]); i += 1
         prize = " ".join(prize_parts).strip()
-        if not prize: return await ctx.send(embed=error_embed("Nama hadiah tidak boleh kosong."))
+        if not prize: return await ctx.send(embed=error_embed("Prize name can't be empty."))
         req_role = ctx.guild.get_role(req_role_id) if req_role_id else None
         win_role = ctx.guild.get_role(win_role_id) if win_role_id else None
         ends_ts  = discord.utils.utcnow().timestamp() + dur_secs
@@ -2493,7 +2446,7 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
             msg = await ctx.channel.send(embed=gw_embed)
             await msg.add_reaction(ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉")
         except discord.Forbidden:
-            return await ctx.send(embed=error_embed("Bot tidak bisa kirim pesan di channel ini."))
+            return await ctx.send(embed=error_embed("The bot can't send messages in this channel."))
         gw["message_id"] = msg.id
         active_giveaways[msg.id] = gw
         async def _timer():
@@ -2501,39 +2454,22 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
             if msg.id in active_giveaways: await end_giveaway(active_giveaways[msg.id])
         asyncio.create_task(_timer())
         ends_dt = datetime.datetime.utcfromtimestamp(ends_ts).replace(tzinfo=datetime.timezone.utc)
-        confirm = success_embed(f"Giveaway dimulai!\n\nPrize: {prize}\nWinners: {winner_count}\nEnds: {discord.utils.format_dt(ends_dt,'R')}")
+        confirm = success_embed(f"Giveaway started!\n\nPrize: {prize}\nWinners: {winner_count}\nEnds: {discord.utils.format_dt(ends_dt,'R')}")
         if req_role: confirm.add_field(name="Required Role", value=req_role.mention, inline=True)
         if win_role: confirm.add_field(name="Winner Role",   value=win_role.mention, inline=True)
         await ctx.send(embed=confirm)
     else:
         await ctx.send(embed=info_embed("Giveaway",
-            "`giveaway start <durasi> <winners> <prize>`\n"
+            "`giveaway start <duration> <winners> <prize>`\n"
             "  Optional: `--role <id>` `--winrole <id>`\n"
             "`giveaway end <msg_id>` · `giveaway reroll <msg_id>` · `giveaway list`"))
-
-# ── LANGUAGE ─────────────────────────────────────────────────────
-
-@bot.command(name="language", aliases=["lang"])
-async def pfx_language(ctx, action: str = "list", lang: str = ""):
-    if action.lower() == "set":
-        if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-            return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
-        if lang not in LANGUAGES:
-            return await ctx.send(embed=error_embed(f"Valid codes: {', '.join(LANGUAGES.keys())}"))
-        guild_cfg(cfg, ctx.guild.id)["language"] = lang
-        save_config(cfg)
-        await ctx.send(embed=success_embed(f"Bahasa diatur ke **{LANGUAGES[lang]}**."))
-    else:
-        cur   = guild_cfg(cfg, ctx.guild.id).get("language", "en")
-        lines = "\n".join(f"{'[OK]' if k==cur else '[ ]'} `{k}` — {v}" for k, v in LANGUAGES.items())
-        await ctx.send(embed=info_embed("Supported Languages", lines))
 
 # ── ANTISPAM HONEYPOT ─────────────────────────────────────────────
 
 @bot.command(name="ignorechannel", aliases=["ignorech", "ic"])
 async def pfx_ignorechannel(ctx, action: str = "", *, rest: str = ""):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     gc     = guild_cfg(cfg, ctx.guild.id)
     ignored = gc.setdefault("ignored_channels", [])
     action  = action.lower()
@@ -2548,45 +2484,45 @@ async def pfx_ignorechannel(ctx, action: str = "", *, rest: str = ""):
 
     if action == "add":
         ch = resolve_channel()
-        if not ch: return await ctx.send(embed=error_embed("Channel tidak ditemukan. Mention channel-nya atau kasih ID."))
+        if not ch: return await ctx.send(embed=error_embed("Channel not found. Mention the channel or give its ID."))
         if ch.id not in ignored:
             ignored.append(ch.id)
             save_config(cfg)
         warn = ""
         if ch.id == ctx.channel.id:
-            warn = f"\n\n⚠️ Ini channel yang lagi lu pakai sekarang — command apapun di sini gak akan direspon lagi mulai sekarang, **termasuk** `ignorechannel remove`. Kalau mau aktifin lagi, jalanin dari channel lain: `ignorechannel remove #{ch.name}`."
-        await ctx.send(embed=success_embed(f"Bot sekarang diem total di {ch.mention} — gak proses command, gak gain XP, gak respon apapun.{warn}"))
+            warn = f"\n\n⚠️ This is the channel you're using right now — no command will be responded to here anymore starting now, **including** `ignorechannel remove`. To re-enable it, run the command from another channel: `ignorechannel remove #{ch.name}`."
+        await ctx.send(embed=success_embed(f"The bot is now completely silent in {ch.mention} — no commands, no XP, no responses at all.{warn}"))
 
     elif action == "remove":
         ch = resolve_channel()
-        if not ch: return await ctx.send(embed=error_embed("Channel tidak ditemukan. Mention channel-nya atau kasih ID."))
+        if not ch: return await ctx.send(embed=error_embed("Channel not found. Mention the channel or give its ID."))
         if ch.id in ignored:
             ignored.remove(ch.id)
             save_config(cfg)
-            await ctx.send(embed=success_embed(f"Bot balik aktif normal di {ch.mention}."))
+            await ctx.send(embed=success_embed(f"The bot is active again in {ch.mention}."))
         else:
-            await ctx.send(embed=error_embed(f"{ch.mention} emang belum di-ignore."))
+            await ctx.send(embed=error_embed(f"{ch.mention} isn't being ignored anyway."))
 
     elif action == "list":
         lines = []
         for cid in ignored:
             ch = ctx.guild.get_channel(cid)
-            lines.append(ch.mention if ch else f"`{cid}` (channel udah gak ada)")
-        await ctx.send(embed=info_embed("Ignored Channels", "\n".join(lines) or "*(kosong — bot aktif di semua channel)*"))
+            lines.append(ch.mention if ch else f"`{cid}` (channel no longer exists)")
+        await ctx.send(embed=info_embed("Ignored Channels", "\n".join(lines) or "*(empty — the bot is active in every channel)*"))
 
     else:
         await ctx.send(embed=info_embed("Ignore Channel", (
-            "`ignorechannel add [#channel]` — bot diem total di channel ini (default: channel sekarang)\n"
-            "`ignorechannel remove [#channel]` — aktifin lagi\n"
-            "`ignorechannel list` — lihat semua channel yang di-ignore\n\n"
-            "Beda sama `antispam ignore` — itu buat skip ORANG dari deteksi spam, "
-            "ini buat bikin bot gak respon sama sekali di CHANNEL tertentu."
+            "`ignorechannel add [#channel]` — makes the bot fully silent in this channel (defaults to the current channel)\n"
+            "`ignorechannel remove [#channel]` — re-enables it\n"
+            "`ignorechannel list` — lists every ignored channel\n\n"
+            "Different from `antispam ignore` — that skips PEOPLE from spam detection, "
+            "this makes the bot not respond at all in a specific CHANNEL."
         )))
 
 @bot.command(name="antispam", aliases=["as"])
 async def pfx_antispam(ctx, sub: str = "", *, rest: str = ""):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
-        return await ctx.send(embed=error_embed(t(cfg, ctx.guild.id, "no_perm")))
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
     gc  = guild_cfg(cfg, ctx.guild.id)
     ac  = gc.setdefault("antispam", {})
     sub = sub.lower()
@@ -2595,49 +2531,49 @@ async def pfx_antispam(ctx, sub: str = "", *, rest: str = ""):
         if not rest.strip():
             ac["trap_channel"] = None
             save_config(cfg)
-            return await ctx.send(embed=success_embed("Honeypot channel dinonaktifkan."))
+            return await ctx.send(embed=success_embed("Honeypot channel disabled."))
         ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else (ctx.guild.get_channel(int(rest.strip())) if rest.strip().isdigit() else None)
-        if not ch: return await ctx.send(embed=error_embed("Channel tidak ditemukan."))
+        if not ch: return await ctx.send(embed=error_embed("Channel not found."))
         ac["trap_channel"] = ch.id
         save_config(cfg)
-        await ctx.send(embed=base_embed("Honeypot Aktif", ch.mention + " — siapapun yang kirim pesan di sini langsung kena tindakan.", color=COLOR_ERROR))
+        await ctx.send(embed=base_embed("Honeypot Active", ch.mention + " — anyone who sends a message here gets punished immediately.", color=COLOR_ERROR))
 
     elif sub == "logchannel":
         if not rest.strip():
             ac["log_channel"] = None
             save_config(cfg)
-            return await ctx.send(embed=success_embed("Log channel antispam dikosongkan."))
+            return await ctx.send(embed=success_embed("Antispam log channel cleared."))
         ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else (ctx.guild.get_channel(int(rest.strip())) if rest.strip().isdigit() else None)
-        if not ch: return await ctx.send(embed=error_embed("Channel tidak ditemukan."))
+        if not ch: return await ctx.send(embed=error_embed("Channel not found."))
         ac["log_channel"] = ch.id
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Laporan antispam (honeypot, cross-channel spam, flood) bakal dikirim ke {ch.mention}."))
+        await ctx.send(embed=success_embed(f"Antispam reports (honeypot, cross-channel spam, flood) will be sent to {ch.mention}."))
 
     elif sub == "punishment":
         choice = rest.strip().lower()
         if choice not in ("ban", "kick", "timeout"):
-            return await ctx.send(embed=error_embed("Pilihan: `ban`, `kick`, atau `timeout`."))
+            return await ctx.send(embed=error_embed("Choices: `ban`, `kick`, or `timeout`."))
         ac["punishment"] = choice
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Tindakan antispam di-set ke **{choice}**."))
+        await ctx.send(embed=success_embed(f"Antispam punishment set to **{choice}**."))
 
     elif sub == "threshold":
         parts = rest.split()
         if len(parts) != 2 or not all(p.isdigit() for p in parts):
             return await ctx.send(embed=error_embed(
-                f"Usage: `antispam threshold <jumlah_channel> <detik>`\nSekarang: **{ac.get('threshold', SPAM_THRESHOLD)} channel / {ac.get('window', SPAM_WINDOW)}s**"))
+                f"Usage: `antispam threshold <channel_count> <seconds>`\nCurrent: **{ac.get('threshold', SPAM_THRESHOLD)} channels / {ac.get('window', SPAM_WINDOW)}s**"))
         ac["threshold"], ac["window"] = int(parts[0]), int(parts[1])
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Cross-channel spam sekarang trigger kalau pesan/link yang sama muncul di **{ac['threshold']} channel** dalam **{ac['window']} detik**."))
+        await ctx.send(embed=success_embed(f"Cross-channel spam will now trigger when the same message/link appears in **{ac['threshold']} channels** within **{ac['window']} seconds**."))
 
     elif sub == "flood":
         parts = rest.split()
         if len(parts) != 2 or not all(p.isdigit() for p in parts):
             return await ctx.send(embed=error_embed(
-                f"Usage: `antispam flood <jumlah_pesan> <detik>`\nSekarang: **{ac.get('flood_count', 5)} pesan / {ac.get('flood_window', 4)}s**"))
+                f"Usage: `antispam flood <message_count> <seconds>`\nCurrent: **{ac.get('flood_count', 5)} messages / {ac.get('flood_window', 4)}s**"))
         ac["flood_count"], ac["flood_window"] = int(parts[0]), int(parts[1])
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Flood detection sekarang trigger kalau ada **{ac['flood_count']} pesan** dalam **{ac['flood_window']} detik** di channel yang sama."))
+        await ctx.send(embed=success_embed(f"Flood detection will now trigger on **{ac['flood_count']} messages** within **{ac['flood_window']} seconds** in the same channel."))
 
     elif sub == "ignore":
         parts  = rest.split(maxsplit=1)
@@ -2650,32 +2586,32 @@ async def pfx_antispam(ctx, sub: str = "", *, rest: str = ""):
                 u = ctx.message.mentions[0]
                 if u.id not in users: users.append(u.id)
                 save_config(cfg)
-                return await ctx.send(embed=success_embed(f"{u.mention} di-skip dari semua deteksi antispam."))
+                return await ctx.send(embed=success_embed(f"{u.mention} is now skipped from all antispam detection."))
             if ctx.message.role_mentions:
                 r = ctx.message.role_mentions[0]
                 if r.id not in roles: roles.append(r.id)
                 save_config(cfg)
-                return await ctx.send(embed=success_embed(f"Role {r.mention} di-skip dari semua deteksi antispam."))
-            return await ctx.send(embed=error_embed("Mention user atau role yang mau di-ignore."))
+                return await ctx.send(embed=success_embed(f"Role {r.mention} is now skipped from all antispam detection."))
+            return await ctx.send(embed=error_embed("Mention the user or role you want to ignore."))
         elif action == "remove":
             if ctx.message.mentions:
                 u = ctx.message.mentions[0]
                 if u.id in users: users.remove(u.id)
                 save_config(cfg)
-                return await ctx.send(embed=success_embed(f"{u.mention} dihapus dari ignore list."))
+                return await ctx.send(embed=success_embed(f"{u.mention} removed from the ignore list."))
             if ctx.message.role_mentions:
                 r = ctx.message.role_mentions[0]
                 if r.id in roles: roles.remove(r.id)
                 save_config(cfg)
-                return await ctx.send(embed=success_embed(f"Role {r.mention} dihapus dari ignore list."))
-            return await ctx.send(embed=error_embed("Mention user atau role yang mau dihapus dari ignore list."))
+                return await ctx.send(embed=success_embed(f"Role {r.mention} removed from the ignore list."))
+            return await ctx.send(embed=error_embed("Mention the user or role you want to remove from the ignore list."))
         elif action == "list":
-            u_lines = [f"<@{uid}>" for uid in users] or ["*(kosong)*"]
-            r_lines = [f"<@&{rid}>" for rid in roles] or ["*(kosong)*"]
+            u_lines = [f"<@{uid}>" for uid in users] or ["*(empty)*"]
+            r_lines = [f"<@&{rid}>" for rid in roles] or ["*(empty)*"]
             embed = base_embed("Antispam Ignore List", None)
             embed.add_field(name="Users", value="\n".join(u_lines), inline=False)
             embed.add_field(name="Roles", value="\n".join(r_lines), inline=False)
-            embed.set_footer(text="Owner bot & siapapun dengan izin Manage Server otomatis di-skip juga.")
+            embed.set_footer(text="The bot owner and anyone with Manage Server are always skipped too.")
             await ctx.send(embed=embed)
         else:
             await ctx.send(embed=info_embed("Antispam Ignore", "`antispam ignore add @user/@role`\n`antispam ignore remove @user/@role`\n`antispam ignore list`"))
@@ -2684,23 +2620,23 @@ async def pfx_antispam(ctx, sub: str = "", *, rest: str = ""):
         trap_ch = ctx.guild.get_channel(ac.get("trap_channel")) if ac.get("trap_channel") else None
         log_ch  = ctx.guild.get_channel(ac.get("log_channel"))  if ac.get("log_channel")  else None
         embed = base_embed("Antispam Status", None, color=COLOR_ERROR if trap_ch else COLOR_INFO)
-        embed.add_field(name="Honeypot Channel", value=trap_ch.mention if trap_ch else "*(tidak aktif)*", inline=True)
-        embed.add_field(name="Log Channel", value=log_ch.mention if log_ch else "*(belum di-set)*", inline=True)
-        embed.add_field(name="Tindakan", value=f"`{ac.get('punishment', 'ban')}`", inline=True)
-        embed.add_field(name="Cross-Channel Threshold", value=f"{ac.get('threshold', SPAM_THRESHOLD)} channel / {ac.get('window', SPAM_WINDOW)}s", inline=True)
-        embed.add_field(name="Flood Threshold", value=f"{ac.get('flood_count', 5)} pesan / {ac.get('flood_window', 4)}s", inline=True)
+        embed.add_field(name="Honeypot Channel", value=trap_ch.mention if trap_ch else "*(inactive)*", inline=True)
+        embed.add_field(name="Log Channel", value=log_ch.mention if log_ch else "*(not set)*", inline=True)
+        embed.add_field(name="Punishment", value=f"`{ac.get('punishment', 'ban')}`", inline=True)
+        embed.add_field(name="Cross-Channel Threshold", value=f"{ac.get('threshold', SPAM_THRESHOLD)} channels / {ac.get('window', SPAM_WINDOW)}s", inline=True)
+        embed.add_field(name="Flood Threshold", value=f"{ac.get('flood_count', 5)} messages / {ac.get('flood_window', 4)}s", inline=True)
         embed.add_field(name="Ignore List", value=f"{len(ac.get('ignore_users', []))} user, {len(ac.get('ignore_roles', []))} role", inline=True)
         await ctx.send(embed=embed)
 
     else:
         await ctx.send(embed=info_embed("Antispam", (
-            "`antispam setchannel #channel` — honeypot trap (nonaktifkan tanpa argumen)\n"
-            "`antispam logchannel #channel` — kemana laporan dikirim\n"
-            "`antispam punishment ban/kick/timeout` — tindakan ke pelaku\n"
-            "`antispam threshold <channel> <detik>` — sensitivitas cross-channel spam\n"
-            "`antispam flood <pesan> <detik>` — sensitivitas message flood\n"
-            "`antispam ignore add/remove/list @user/@role` — skip dari deteksi\n"
-            "`antispam status` — lihat semua konfigurasi sekarang"
+            "`antispam setchannel #channel` — honeypot trap (omit the argument to disable)\n"
+            "`antispam logchannel #channel` — where reports get sent\n"
+            "`antispam punishment ban/kick/timeout` — action taken against offenders\n"
+            "`antispam threshold <channels> <seconds>` — cross-channel spam sensitivity\n"
+            "`antispam flood <messages> <seconds>` — message flood sensitivity\n"
+            "`antispam ignore add/remove/list @user/@role` — skip from detection\n"
+            "`antispam status` — view the current configuration"
         )))
 
 # ── ANTI-NUKE ────────────────────────────────────────────────────
@@ -2708,7 +2644,7 @@ async def pfx_antispam(ctx, sub: str = "", *, rest: str = ""):
 @bot.command(name="antinuke", aliases=["an"])
 async def pfx_antinuke(ctx, sub: str = "", *, rest: str = ""):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.administrator:
-        return await ctx.send(embed=error_embed("Cuma Administrator atau owner yang bisa atur anti-nuke."))
+        return await ctx.send(embed=error_embed("Only Administrators or the owner can configure anti-nuke."))
     gc  = guild_cfg(cfg, ctx.guild.id)
     ac  = gc.setdefault("antinuke", {"enabled": False, "log_channel": None, "whitelist": [], "punishment": "strip_roles"})
     sub = sub.lower()
@@ -2716,37 +2652,37 @@ async def pfx_antinuke(ctx, sub: str = "", *, rest: str = ""):
     if sub == "enable":
         me = ctx.guild.me
         if not me.guild_permissions.view_audit_log:
-            return await ctx.send(embed=error_embed("Bot butuh permission **View Audit Log** dulu buat ngaktifin anti-nuke."))
+            return await ctx.send(embed=error_embed("The bot needs the **View Audit Log** permission before anti-nuke can be enabled."))
         ac["enabled"] = True
         save_config(cfg)
         await ctx.send(embed=success_embed(
-            "Anti-Nuke **AKTIF**.\nDeteksi: mass channel delete/create, mass role delete, mass ban/kick, "
-            "mass webhook create, dan pemberian permission Administrator mendadak.\n\n"
-            "Jangan lupa: `antinuke logchannel #channel` biar ada laporan kalau ke-trigger."
+            "Anti-Nuke is now **ENABLED**.\nDetects: mass channel delete/create, mass role delete, mass ban/kick, "
+            "mass webhook create, and sudden Administrator permission grants.\n\n"
+            "Don't forget: `antinuke logchannel #channel` so you get a report when it triggers."
         ))
 
     elif sub == "disable":
         ac["enabled"] = False
         save_config(cfg)
-        await ctx.send(embed=success_embed("Anti-Nuke dinonaktifkan."))
+        await ctx.send(embed=success_embed("Anti-Nuke disabled."))
 
     elif sub == "logchannel":
         ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else None
         if not ch:
             ac["log_channel"] = None
             save_config(cfg)
-            return await ctx.send(embed=success_embed("Log channel anti-nuke dikosongkan."))
+            return await ctx.send(embed=success_embed("Anti-Nuke log channel cleared."))
         ac["log_channel"] = ch.id
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Laporan anti-nuke bakal dikirim ke {ch.mention}."))
+        await ctx.send(embed=success_embed(f"Anti-Nuke reports will be sent to {ch.mention}."))
 
     elif sub == "punishment":
         choice = rest.strip().lower()
         if choice not in ("strip_roles", "kick", "ban"):
-            return await ctx.send(embed=error_embed("Pilihan: `strip_roles`, `kick`, atau `ban`."))
+            return await ctx.send(embed=error_embed("Choices: `strip_roles`, `kick`, or `ban`."))
         ac["punishment"] = choice
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Tindakan anti-nuke di-set ke **{choice}**."))
+        await ctx.send(embed=success_embed(f"Anti-Nuke punishment set to **{choice}**."))
 
     elif sub == "whitelist":
         parts  = rest.split(maxsplit=1)
@@ -2757,39 +2693,39 @@ async def pfx_antinuke(ctx, sub: str = "", *, rest: str = ""):
             if u.id not in wl:
                 wl.append(u.id)
                 save_config(cfg)
-            await ctx.send(embed=success_embed(f"{u.mention} sekarang di-whitelist dari anti-nuke."))
+            await ctx.send(embed=success_embed(f"{u.mention} is now whitelisted from anti-nuke."))
         elif action == "remove" and ctx.message.mentions:
             u = ctx.message.mentions[0]
             if u.id in wl:
                 wl.remove(u.id)
                 save_config(cfg)
-            await ctx.send(embed=success_embed(f"{u.mention} dihapus dari whitelist."))
+            await ctx.send(embed=success_embed(f"{u.mention} removed from the whitelist."))
         elif action == "list":
-            lines = [f"<@{uid}>" for uid in wl] or ["*(kosong)*"]
+            lines = [f"<@{uid}>" for uid in wl] or ["*(empty)*"]
             await ctx.send(embed=info_embed("Anti-Nuke Whitelist", "\n".join(lines)))
         else:
             await ctx.send(embed=info_embed("Anti-Nuke Whitelist", "`antinuke whitelist add @user`\n`antinuke whitelist remove @user`\n`antinuke whitelist list`"))
 
     elif sub == "status":
-        status = "🟢 Aktif" if ac.get("enabled") else "🔴 Tidak aktif"
+        status = "🟢 Enabled" if ac.get("enabled") else "🔴 Disabled"
         log_ch = ctx.guild.get_channel(ac.get("log_channel")) if ac.get("log_channel") else None
         embed = base_embed("Anti-Nuke Status", None, color=COLOR_ERROR if ac.get("enabled") else COLOR_INFO)
         embed.add_field(name="Status", value=status, inline=True)
-        embed.add_field(name="Tindakan", value=f"`{ac.get('punishment','strip_roles')}`", inline=True)
-        embed.add_field(name="Log Channel", value=log_ch.mention if log_ch else "*(belum di-set)*", inline=True)
-        embed.add_field(name="Whitelist", value=str(len(ac.get("whitelist", []))) + " user", inline=True)
-        embed.add_field(name="Deteksi", value="\n".join(f"• {v}" for v in antinuke.ACTION_LABELS.values()), inline=False)
+        embed.add_field(name="Punishment", value=f"`{ac.get('punishment','strip_roles')}`", inline=True)
+        embed.add_field(name="Log Channel", value=log_ch.mention if log_ch else "*(not set)*", inline=True)
+        embed.add_field(name="Whitelist", value=str(len(ac.get("whitelist", []))) + " user(s)", inline=True)
+        embed.add_field(name="Detection", value="\n".join(f"• {v}" for v in antinuke.ACTION_LABELS.values()), inline=False)
         await ctx.send(embed=embed)
 
     else:
         await ctx.send(embed=info_embed("Anti-Nuke", (
-            "`antinuke enable` — aktifin proteksi\n"
-            "`antinuke disable` — matiin\n"
-            "`antinuke logchannel #channel` — channel buat laporan\n"
-            "`antinuke punishment strip_roles/kick/ban` — tindakan ke pelaku\n"
-            "`antinuke whitelist add/remove/list @user` — orang yang di-skip dari deteksi\n"
-            "`antinuke status` — lihat konfigurasi sekarang\n\n"
-            "Owner bot dan pemilik server otomatis ke-whitelist, gak perlu ditambahin manual."
+            "`antinuke enable` — turn on protection\n"
+            "`antinuke disable` — turn it off\n"
+            "`antinuke logchannel #channel` — where reports get sent\n"
+            "`antinuke punishment strip_roles/kick/ban` — action taken against offenders\n"
+            "`antinuke whitelist add/remove/list @user` — people skipped from detection\n"
+            "`antinuke status` — view the current configuration\n\n"
+            "The bot owner and server owner are automatically whitelisted — no need to add them manually."
         )))
 
 # ── OWNER COMMANDS ────────────────────────────────────────────────
@@ -2811,31 +2747,31 @@ async def pfx_maintenance(ctx, action: str = "", *, reason: str = ""):
             )
         except Exception:
             pass
-        desc = f"**{BOT_NAME}** sekarang dalam mode **maintenance**.\nSemua command ditutup untuk semua orang kecuali owner."
+        desc = f"**{BOT_NAME}** is now in **maintenance mode**.\nAll commands are locked for everyone except the owner."
         if m["reason"]:
-            desc += f"\n\n**Alasan:** {m['reason']}"
+            desc += f"\n\n**Reason:** {m['reason']}"
         await ctx.send(embed=warning_embed("Maintenance Mode: ON", desc))
     elif action == "off":
         m["enabled"] = False
         m["reason"]  = ""
         m["since"]   = None
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"**{BOT_NAME}** sudah normal lagi. Semua command dibuka kembali."))
+        await ctx.send(embed=success_embed(f"**{BOT_NAME}** is back to normal. All commands are unlocked."))
     elif action == "status":
         if m.get("enabled"):
             since = m.get("since")
             since_txt = discord.utils.format_dt(datetime.datetime.fromisoformat(since), "R") if since else "?"
-            desc = f"Status: **AKTIF** — sejak {since_txt}"
+            desc = f"Status: **ENABLED** — since {since_txt}"
             if m.get("reason"):
-                desc += f"\n**Alasan:** {m['reason']}"
+                desc += f"\n**Reason:** {m['reason']}"
         else:
-            desc = "Status: **Tidak aktif.** Bot berjalan normal."
+            desc = "Status: **Disabled.** The bot is running normally."
         await ctx.send(embed=info_embed("Maintenance Status", desc))
     else:
         await ctx.send(embed=info_embed("Maintenance",
-            "`maintenance on [alasan]` — kunci semua command kecuali owner\n"
-            "`maintenance off` — buka lagi\n"
-            "`maintenance status` — cek status sekarang"))
+            "`maintenance on [reason]` — lock all commands except for the owner\n"
+            "`maintenance off` — unlock again\n"
+            "`maintenance status` — check the current status"))
 
 @bot.command(name="premiumlock", aliases=["plock"])
 @is_owner()
@@ -2845,32 +2781,32 @@ async def pfx_premiumlock(ctx, action: str = "", *, cmd_name: str = ""):
     cmd_name = cmd_name.strip().lower()
     if action == "add":
         if not cmd_name:
-            return await ctx.send(embed=error_embed("Sebutkan nama command. Contoh: `premiumlock add addemoji`"))
+            return await ctx.send(embed=error_embed("Specify a command name. Example: `premiumlock add addemoji`"))
         if cmd_name in OWNER_ONLY_CMDS:
-            return await ctx.send(embed=error_embed("Command owner-only tidak bisa dikunci ke Premium."))
+            return await ctx.send(embed=error_embed("Owner-only commands can't be Premium-locked."))
         if cmd_name not in locked:
             locked.append(cmd_name)
             save_config(cfg)
         await sync_premium_descriptions()
-        await ctx.send(embed=success_embed(f"Command `{cmd_name}` sekarang **Premium only** (prefix & slash)."))
+        await ctx.send(embed=success_embed(f"Command `{cmd_name}` is now **Premium only** (prefix & slash)."))
     elif action == "remove":
         if cmd_name in locked:
             locked.remove(cmd_name)
             save_config(cfg)
             await sync_premium_descriptions()
-            await ctx.send(embed=success_embed(f"Command `{cmd_name}` dibuka lagi untuk semua orang."))
+            await ctx.send(embed=success_embed(f"Command `{cmd_name}` is open to everyone again."))
         else:
-            await ctx.send(embed=error_embed(f"Command `{cmd_name}` tidak ada di daftar premium lock."))
+            await ctx.send(embed=error_embed(f"Command `{cmd_name}` isn't on the premium lock list."))
     elif action == "list":
         if not locked:
-            return await ctx.send(embed=info_embed("Premium Locked Commands", "Belum ada command yang dikunci ke Premium."))
+            return await ctx.send(embed=info_embed("Premium Locked Commands", "No commands are Premium-locked yet."))
         await ctx.send(embed=info_embed("Premium Locked Commands", "\n".join(f"`{c}`" for c in locked)))
     else:
         await ctx.send(embed=info_embed("Premium Lock",
-            "`premiumlock add <command>` — kunci command ke Premium only\n"
-            "`premiumlock remove <command>` — buka lagi command\n"
-            "`premiumlock list` — lihat semua command yang dikunci\n\n"
-            "Nama command pakai nama slash-nya, contoh untuk subcommand: `ticket setup`."))
+            "`premiumlock add <command>` — lock a command to Premium only\n"
+            "`premiumlock remove <command>` — unlock a command\n"
+            "`premiumlock list` — view every locked command\n\n"
+            "Use the command's slash name, e.g. for a subcommand: `ticket setup`."))
 
 @bot.command(name="noprefix", aliases=["np"])
 @is_owner()
@@ -2908,21 +2844,21 @@ async def pfx_noprefix(ctx, action: str = "", *, rest: str = ""):
 
     if action not in ("grant", "revoke"):
         return await ctx.send(embed=info_embed("No-Prefix", (
-            "`noprefix grant @user/guild_id [durasi]`\n"
+            "`noprefix grant @user/guild_id [duration]`\n"
             "`noprefix revoke @user/guild_id`\n"
             "`noprefix list`\n\n"
-            "Durasi cuma berlaku untuk user (bukan guild). Contoh: `7d`, `24h`, `30m`, "
-            "atau kosongkan/`permanent` untuk selamanya."
+            "Duration only applies to users (not guilds). Example: `7d`, `24h`, `30m`, "
+            "or leave it blank/`permanent` for forever."
         )))
 
     parts = rest.split(maxsplit=1)
     if not parts:
-        return await ctx.send(embed=error_embed("Masukkan @user atau guild ID."))
+        return await ctx.send(embed=error_embed("Provide an @user or guild ID."))
     target_tok = parts[0]
     duration   = parts[1].strip().lower() if len(parts) > 1 else ""
     uid_match  = re.match(r"<@!?(\d+)>|(\d{17,20})", target_tok.strip())
     if not uid_match:
-        return await ctx.send(embed=error_embed("Target tidak valid."))
+        return await ctx.send(embed=error_embed("Invalid target."))
     parsed_id = int(uid_match.group(1) or uid_match.group(2))
 
     g = bot.get_guild(parsed_id)
@@ -2930,24 +2866,24 @@ async def pfx_noprefix(ctx, action: str = "", *, rest: str = ""):
         if action == "grant":
             if parsed_id not in np_guilds: np_guilds.append(parsed_id)
             save_config(cfg)
-            await ctx.send(embed=success_embed(f"No-prefix diaktifkan untuk server **{g.name}**."))
+            await ctx.send(embed=success_embed(f"No-prefix enabled for server **{g.name}**."))
         else:
             if parsed_id in np_guilds: np_guilds.remove(parsed_id)
             save_config(cfg)
-            await ctx.send(embed=success_embed(f"No-prefix dicabut dari server **{g.name}**."))
+            await ctx.send(embed=success_embed(f"No-prefix revoked from server **{g.name}**."))
         return
 
     try:
         user = await bot.fetch_user(parsed_id)
     except Exception:
-        return await ctx.send(embed=error_embed("User/Guild tidak ditemukan."))
+        return await ctx.send(embed=error_embed("User/Guild not found."))
 
     if action == "grant":
         expiry_dt = None
         if duration and duration != "permanent":
             m = re.fullmatch(r"(\d+)(d|h|m)", duration)
             if not m:
-                return await ctx.send(embed=error_embed("Format durasi: `7d`, `24h`, `30m`, atau `permanent`."))
+                return await ctx.send(embed=error_embed("Duration format: `7d`, `24h`, `30m`, or `permanent`."))
             amount = int(m.group(1)); unit = m.group(2)
             delta  = {"d": datetime.timedelta(days=amount), "h": datetime.timedelta(hours=amount), "m": datetime.timedelta(minutes=amount)}[unit]
             expiry_dt = datetime.datetime.now(datetime.timezone.utc) + delta
@@ -2962,18 +2898,18 @@ async def pfx_noprefix(ctx, action: str = "", *, rest: str = ""):
         try:
             dm = base_embed(
                 "No-Prefix Access Granted!",
-                f"Kamu bisa gunain command {BOT_NAME} tanpa prefix!\nCukup ketik nama command langsung.\nExpires: {dur_display}",
+                f"You can now use {BOT_NAME} commands without a prefix!\nJust type the command name directly.\nExpires: {dur_display}",
                 color=COLOR_SUCCESS
             )
             await user.send(embed=dm)
         except Exception:
             pass
-        await ctx.send(embed=success_embed(f"No-prefix diaktifkan untuk {user.mention}.\nExpires: {dur_display}"))
+        await ctx.send(embed=success_embed(f"No-prefix enabled for {user.mention}.\nExpires: {dur_display}"))
     else:
         if parsed_id in np_users: np_users.remove(parsed_id)
         np_expiry.pop(str(parsed_id), None)
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"No-prefix dicabut dari {user.mention}."))
+        await ctx.send(embed=success_embed(f"No-prefix revoked from {user.mention}."))
 
 @bot.command(name="botrole", aliases=["br"])
 @is_owner()
@@ -2984,7 +2920,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
     valid_tiers = ("staff", "moderator", "server_manager", "management", "developer")
 
     if action == "list":
-        if not bot_roles: return await ctx.send(embed=info_embed("Bot Roles (Manual)", "Belum ada assignment manual."))
+        if not bot_roles: return await ctx.send(embed=info_embed("Bot Roles (Manual)", "No manual assignments yet."))
         lines = []
         for uid_str, r in bot_roles.items():
             user = bot.get_user(int(uid_str))
@@ -3000,56 +2936,56 @@ async def pfx_botrole(ctx, action: str = "", *args):
             for tier in valid_tiers:
                 role_id = role_sync.get(tier)
                 if not role_id:
-                    lines.append(f"**{tier.capitalize()}** → *(belum di-set)*")
+                    lines.append(f"**{tier.capitalize()}** → *(not set)*")
                     continue
                 role = guild.get_role(role_id) if guild else None
-                lines.append(f"**{tier.capitalize()}** → {role.mention if role else f'`{role_id}` (role tidak ditemukan)'}")
-            note = "" if guild else "\n\n⚠️ `SUPPORT_SERVER_ID` belum di-set di environment, sync tidak akan jalan."
+                lines.append(f"**{tier.capitalize()}** → {role.mention if role else f'`{role_id}` (role not found)'}")
+            note = "" if guild else "\n\n⚠️ `SUPPORT_SERVER_ID` isn't set in the environment, so sync won't work."
             return await ctx.send(embed=info_embed("Bot Role Sync", "\n".join(lines) + note))
         if sub == "remove":
             tier = args[1].lower() if len(args) > 1 else ""
             if tier not in valid_tiers:
-                return await ctx.send(embed=error_embed("Tier valid: `staff`, `moderator`, `server_manager`, `management`, `developer`."))
+                return await ctx.send(embed=error_embed("Valid tiers: `staff`, `moderator`, `server_manager`, `management`, `developer`."))
             role_sync.pop(tier, None)
             save_config(cfg)
-            return await ctx.send(embed=success_embed(f"Sync role untuk **{tier.capitalize()}** dihapus."))
+            return await ctx.send(embed=success_embed(f"Sync role for **{tier.capitalize()}** removed."))
         # botrole sync <tier> <role_id/mention>
         if len(args) < 2:
             return await ctx.send(embed=info_embed("Bot Role Sync", (
-                "`botrole sync <staff/moderator/server_manager/management/developer> <role_id atau @role>` — hubungkan role Discord di support server ke badge\n"
-                "`botrole sync remove <tier>` — putuskan hubungan\n"
-                "`botrole sync list` — lihat mapping sekarang\n\n"
-                "Begitu di-set, siapapun yang punya role itu di support server otomatis dapat badge-nya "
-                "di `profile` — gak perlu `botrole set` manual lagi."
+                "`botrole sync <staff/moderator/server_manager/management/developer> <role_id or @role>` — link a Discord role in the support server to a badge\n"
+                "`botrole sync remove <tier>` — unlink it\n"
+                "`botrole sync list` — view the current mapping\n\n"
+                "Once set, anyone with that role in the support server automatically gets the badge "
+                "on `profile` — no need for manual `botrole set` anymore."
             )))
         tier = args[0].lower()
         if tier not in valid_tiers:
-            return await ctx.send(embed=error_embed("Tier valid: `staff`, `moderator`, `server_manager`, `management`, `developer`."))
+            return await ctx.send(embed=error_embed("Valid tiers: `staff`, `moderator`, `server_manager`, `management`, `developer`."))
         role_match = re.match(r"<@&(\d+)>|(\d{17,20})", args[1].strip())
         if not role_match:
-            return await ctx.send(embed=error_embed("Masukkan role ID atau mention role yang valid."))
+            return await ctx.send(embed=error_embed("Provide a valid role ID or role mention."))
         role_id = int(role_match.group(1) or role_match.group(2))
         guild = get_support_guild()
         if not guild:
-            return await ctx.send(embed=error_embed("`SUPPORT_SERVER_ID` belum di-set di environment bot."))
+            return await ctx.send(embed=error_embed("`SUPPORT_SERVER_ID` isn't set in the bot's environment."))
         disc_role = guild.get_role(role_id)
         if not disc_role:
-            return await ctx.send(embed=error_embed("Role tidak ditemukan di support server."))
+            return await ctx.send(embed=error_embed("Role not found in the support server."))
         role_sync[tier] = role_id
         save_config(cfg)
         info = BOT_ROLE_BADGES[tier]
         badge_tag = (info["emoji"] + " ") if info.get("emoji") else ""
         return await ctx.send(embed=success_embed(
-            f"Role {disc_role.mention} sekarang otomatis kasih badge {badge_tag}**{info['label']}**.\n"
-            f"Siapapun member support server yang punya role ini langsung ke-update badge-nya."
+            f"Role {disc_role.mention} now automatically grants the {badge_tag}**{info['label']}** badge.\n"
+            f"Any support-server member with this role gets their badge updated instantly."
         ))
 
     if not args:
         return await ctx.send(embed=info_embed("Bot Role", (
-            "`botrole set @user <staff/moderator/server_manager/management/developer>` — assign manual (untuk yang di luar support server)\n"
-            "`botrole remove @user` — cabut manual\n"
-            "`botrole list` — lihat assignment manual\n"
-            "`botrole sync <tier> <role_id>` — auto-sync dari role Discord di support server"
+            "`botrole set @user <staff/moderator/server_manager/management/developer>` — manual assignment (for people outside the support server)\n"
+            "`botrole remove @user` — remove a manual assignment\n"
+            "`botrole list` — view manual assignments\n"
+            "`botrole sync <tier> <role_id>` — auto-sync from a Discord role in the support server"
         )))
 
     member = None
@@ -3060,12 +2996,12 @@ async def pfx_botrole(ctx, action: str = "", *args):
             member = ctx.guild.get_member(uid)
             break
     if not member:
-        return await ctx.send(embed=error_embed("User tidak ditemukan di server ini."))
+        return await ctx.send(embed=error_embed("User not found in this server."))
     role = next((a.lower() for a in args if a.lower() in valid_tiers), "")
 
     if action == "set":
         if role not in valid_tiers:
-            return await ctx.send(embed=error_embed("Role valid: `staff`, `moderator`, `server_manager`, `management`, `developer`"))
+            return await ctx.send(embed=error_embed("Valid roles: `staff`, `moderator`, `server_manager`, `management`, `developer`"))
         bot_roles[str(member.id)] = role
         save_config(cfg)
         info = BOT_ROLE_BADGES[role]
@@ -3073,15 +3009,15 @@ async def pfx_botrole(ctx, action: str = "", *args):
         embed = discord.Embed(title="Bot Role Assigned", description=f"{member.mention} → {badge_tag}**{info['label']}**", color=info["color"], timestamp=discord.utils.utcnow())
         embed.set_thumbnail(url=member.display_avatar.url)
         try:
-            dm = discord.Embed(title="Bot Role Granted!", description=f"Kamu mendapat role {badge_tag}**{info['label']}** di {BOT_NAME}!\nCek profil: `profile`", color=info["color"])
+            dm = discord.Embed(title="Bot Role Granted!", description=f"You've been given the {badge_tag}**{info['label']}** role on {BOT_NAME}!\nCheck your profile: `profile`", color=info["color"])
             await member.send(embed=dm)
         except Exception: pass
         await ctx.send(embed=embed)
     elif action == "remove":
-        if str(member.id) not in bot_roles: return await ctx.send(embed=error_embed(f"{member.display_name} tidak punya bot role manual."))
+        if str(member.id) not in bot_roles: return await ctx.send(embed=error_embed(f"{member.display_name} doesn't have a manual bot role."))
         removed = bot_roles.pop(str(member.id))
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Bot role manual **{removed.capitalize()}** dihapus dari {member.mention}."))
+        await ctx.send(embed=success_embed(f"Manual bot role **{removed.capitalize()}** removed from {member.mention}."))
 
 @bot.command(name="grantpremium", aliases=["gp"])
 @is_owner()
@@ -3095,9 +3031,9 @@ async def pfx_grantpremium(ctx, member: discord.Member = None, duration: str = "
         premium_expiry.pop(str(member.id), None)
         save_config(cfg)
         try:
-            await member.send(embed=base_embed("Premium Ended", f"Premium {BOT_NAME} kamu telah berakhir. Akses command premium dan no-prefix ikut dicabut.", color=COLOR_ERROR))
+            await member.send(embed=base_embed("Premium Ended", f"Your {BOT_NAME} Premium has ended. Premium command access and no-prefix have both been revoked.", color=COLOR_ERROR))
         except Exception: pass
-        return await ctx.send(embed=success_embed(f"Premium dicabut dari {member.mention}."))
+        return await ctx.send(embed=success_embed(f"Premium revoked from {member.mention}."))
     expiry_dt = None
     if duration.lower() != "permanent":
         m = re.fullmatch(r"(\d+)(d|h|m)", duration.lower())
@@ -3110,12 +3046,12 @@ async def pfx_grantpremium(ctx, member: discord.Member = None, duration: str = "
     else: premium_expiry.pop(str(member.id), None)
     save_config(cfg)
     dur_display = "Permanent" if not expiry_dt else discord.utils.format_dt(expiry_dt, "R")
-    embed = discord.Embed(title="Premium Granted!", description=f"{member.mention} sekarang **Premium**!\nExpires: {dur_display}", color=COLOR_WARNING, timestamp=discord.utils.utcnow())
+    embed = discord.Embed(title="Premium Granted!", description=f"{member.mention} is now **Premium**!\nExpires: {dur_display}", color=COLOR_WARNING, timestamp=discord.utils.utcnow())
     embed.set_thumbnail(url=member.display_avatar.url)
     try:
         dm = discord.Embed(
             title="Premium Activated!",
-            description=f"Premium {BOT_NAME} aktif!\nExpires: {dur_display}\n\nSemua command premium terbuka dan **no-prefix otomatis aktif** — cukup ketik nama command tanpa `!vx`.",
+            description=f"Your {BOT_NAME} Premium is active!\nExpires: {dur_display}\n\nEvery premium command is unlocked and **no-prefix is automatically enabled** — just type the command name without `!vx`.",
             color=COLOR_WARNING
         )
         await member.send(embed=dm)
@@ -3128,22 +3064,22 @@ async def pfx_blacklist(ctx, action: str = "", guild_id: str = ""):
     bl = cfg.setdefault("blacklisted_guilds", [])
     if action == "add":
         try: gid = int(guild_id)
-        except ValueError: return await ctx.send(embed=error_embed("Guild ID harus angka."))
+        except ValueError: return await ctx.send(embed=error_embed("Guild ID must be a number."))
         if gid not in bl: bl.append(gid)
         save_config(cfg)
         g = bot.get_guild(gid)
         if g:
             try: await g.leave()
             except Exception: pass
-        await ctx.send(embed=success_embed(f"Guild `{gid}` di-blacklist dan bot leave."))
+        await ctx.send(embed=success_embed(f"Guild `{gid}` has been blacklisted and the bot has left."))
     elif action == "remove":
         try: gid = int(guild_id)
-        except ValueError: return await ctx.send(embed=error_embed("Guild ID harus angka."))
+        except ValueError: return await ctx.send(embed=error_embed("Guild ID must be a number."))
         if gid in bl: bl.remove(gid)
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Guild `{gid}` di-unblacklist."))
+        await ctx.send(embed=success_embed(f"Guild `{gid}` has been removed from the blacklist."))
     elif action == "list":
-        if not bl: return await ctx.send(embed=info_embed("Blacklist", "Tidak ada guild yang di-blacklist."))
+        if not bl: return await ctx.send(embed=info_embed("Blacklist", "No guilds are blacklisted."))
         lines = []
         for gid in bl:
             g = bot.get_guild(gid)
@@ -3153,9 +3089,9 @@ async def pfx_blacklist(ctx, action: str = "", guild_id: str = ""):
         await ctx.send(embed=info_embed("Blacklist", "`blacklist add <guild_id>`\n`blacklist remove <guild_id>`\n`blacklist list`"))
 
 class ServerListView(discord.ui.View):
-    """List semua server yang dipakein bot, lengkap dengan info penting
-    (member count, owner, kapan bot join) — biar owner tau persis server
-    mana yang mau di-leave sebelum jalanin vxleave."""
+    """List every server the bot is in, complete with key info
+    (member count, owner, when the bot joined) — so the owner knows exactly
+    which server they're about to leave before running vxleave."""
     PER_PAGE = 8
 
     def __init__(self, guilds: list, owner_id: int):
@@ -3185,12 +3121,12 @@ class ServerListView(discord.ui.View):
                 ),
                 inline=False
             )
-        embed.set_footer(text=f"Page {self.page + 1}/{self.total_pages} • `vxleave <guild_id>` buat keluar dari server")
+        embed.set_footer(text=f"Page {self.page + 1}/{self.total_pages} • `vxleave <guild_id>` to leave a server")
         return embed
 
     async def _guard(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(embed=error_embed("Cuma owner yang bisa navigasi ini."), ephemeral=True)
+            await interaction.response.send_message(embed=error_embed("Only the owner can navigate this."), ephemeral=True)
             return False
         return True
 
@@ -3215,7 +3151,7 @@ async def pfx_vxservers(ctx, sort: str = "members"):
     else:
         guilds.sort(key=lambda g: g.member_count or 0, reverse=True)
     if not guilds:
-        return await ctx.send(embed=info_embed("Server List", "Bot belum join server manapun."))
+        return await ctx.send(embed=info_embed("Server List", "The bot hasn't joined any servers yet."))
     view = ServerListView(guilds, bot.owner_id)
     await ctx.send(embed=view.build_embed(), view=view)
 
@@ -3225,18 +3161,18 @@ async def pfx_vxleave(ctx, guild_id: str = ""):
     if not guild_id:
         guilds = sorted(bot.guilds, key=lambda g: g.member_count or 0, reverse=True)
         if not guilds:
-            return await ctx.send(embed=info_embed("Leave Guild", "Bot belum join server manapun."))
+            return await ctx.send(embed=info_embed("Leave Guild", "The bot hasn't joined any servers yet."))
         view = ServerListView(guilds, bot.owner_id)
         embed = view.build_embed()
-        embed.description = "Pilih server dari daftar ini, terus jalanin `vxleave <guild_id>`."
+        embed.description = "Pick a server from this list, then run `vxleave <guild_id>`."
         return await ctx.send(embed=embed, view=view)
     try:
         gid = int(guild_id)
     except ValueError:
-        return await ctx.send(embed=error_embed("Guild ID harus angka. Cek `vxservers` buat lihat daftar & ID-nya."))
+        return await ctx.send(embed=error_embed("Guild ID must be a number. Check `vxservers` for the list and IDs."))
     g = bot.get_guild(gid)
     if not g:
-        return await ctx.send(embed=error_embed("Bot tidak ada di guild tersebut. Cek `vxservers` buat lihat daftar server."))
+        return await ctx.send(embed=error_embed("The bot isn't in that guild. Check `vxservers` for the server list."))
     owner_txt = f"{g.owner} (`{g.owner_id}`)" if g.owner else f"`{g.owner_id}`"
     embed = base_embed(f"Leaving {g.name}...", None, color=COLOR_ERROR)
     embed.add_field(name="Guild ID", value=f"`{g.id}`", inline=True)
@@ -3247,7 +3183,7 @@ async def pfx_vxleave(ctx, guild_id: str = ""):
 
 # ── HELP ─────────────────────────────────────────────────────────
 
-# ── HELP MENU — dropdown per kategori biar gak numpuk satu embed ──
+# ── HELP MENU — category dropdown so it doesn't pile up in one embed ──
 
 HELP_CATEGORIES = [
     ("moderation", "Moderation", ICON_MODERATION, "🛠️", (
@@ -3262,26 +3198,25 @@ HELP_CATEGORIES = [
     ("giveaway", "Giveaway", ICON_GIVEAWAY, "🎉", "`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`"),
     ("antispam", "Antispam", ICON_ANTISPAM, "🛡️", "`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`"),
     ("antinuke", "Anti-Nuke", ICON_ANTINUKE, "🛡️", "`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`"),
-    ("ignore", "Ignore Channel", ICON_IGNORE, "🔇", "`ignorechannel add/remove/list [#channel]` — bot diem total di channel tertentu"),
-    ("boost", "Server Boost", ICON_BOOST, "🎉", "`/boostconfig` (slash only) — atur channel & tampilan notifikasi boost"),
-    ("language", "Language", ICON_LANGUAGE, "🌐", "`language list` · `language set <code>`"),
+    ("ignore", "Ignore Channel", ICON_IGNORE, "🔇", "`ignorechannel add/remove/list [#channel]` — makes the bot completely silent in a specific channel"),
+    ("boost", "Server Boost", ICON_BOOST, "🎉", "`/boostconfig` (slash only) — configure the server boost notification channel & appearance"),
 ]
 
 OWNER_HELP_CATEGORY = ("owner", "Owner Only", ICON_OWNER, "👑", (
     "`maintenance on/off/status`\n"
     "`noprefix grant/revoke/list`\n"
     "`botrole set/remove/list`\n"
-    "`grantpremium @user <durasi>/revoke`\n"
+    "`grantpremium @user <duration>/revoke`\n"
     "`premiumlock add/remove/list`\n"
     "`blacklist add/remove/list`\n"
-    "`vxservers` — lihat semua server bot\n"
+    "`vxservers` — view every server the bot is in\n"
     "`vxleave <guild_id>`"
 ))
 
 class HelpView(discord.ui.View):
-    """Dropdown navigasi help — tiap orang yang jalanin `help` dapat View
-    instance sendiri, jadi opsi 'Owner Only' otomatis cuma nongol di dropdown
-    punya owner tanpa perlu DM atau ephemeral khusus."""
+    """Help navigation dropdown — every person who runs `help` gets their own
+    View instance, so the 'Owner Only' option automatically only shows up in
+    the owner's dropdown, with no need for DMs or special ephemeral handling."""
     def __init__(self, invoker_id: int, is_owner_user: bool, has_np: bool):
         super().__init__(timeout=120)
         self.invoker_id = invoker_id
@@ -3289,10 +3224,10 @@ class HelpView(discord.ui.View):
         self.message: Optional[discord.Message] = None
         self.categories = list(HELP_CATEGORIES) + ([OWNER_HELP_CATEGORY] if is_owner_user else [])
 
-        options = [discord.SelectOption(label="Overview", value="_home", emoji="🏠", description="Halaman utama")]
+        options = [discord.SelectOption(label="Overview", value="_home", emoji="🏠", description="Home page")]
         for key, label, icon_var, fallback, _ in self.categories:
             options.append(discord.SelectOption(label=label, value=key, emoji=e(icon_var, fallback)))
-        select = discord.ui.Select(placeholder="Pilih kategori command...", options=options)
+        select = discord.ui.Select(placeholder="Pick a command category...", options=options)
         select.callback = self.on_select
         self.add_item(select)
 
@@ -3302,8 +3237,8 @@ class HelpView(discord.ui.View):
             description=(
                 f"*{BOT_TAGLINE}*\n\n"
                 f"Prefix: **`!vx`** · **`!v`** (alias)\n"
-                + ("✨ **No-prefix aktif** — ketik command langsung!\n" if self.has_np else "")
-                + "\nPilih kategori di dropdown bawah buat lihat command-nya."
+                + ("✨ **No-prefix active** — just type the command directly!\n" if self.has_np else "")
+                + "\nPick a category from the dropdown below to see its commands."
             ),
             color=COLOR_PRIMARY,
             timestamp=discord.utils.utcnow()
@@ -3319,7 +3254,7 @@ class HelpView(discord.ui.View):
 
     async def on_select(self, interaction: discord.Interaction):
         if interaction.user.id != self.invoker_id:
-            return await interaction.response.send_message(embed=error_embed("Menu ini bukan buat kamu — jalanin `help` sendiri."), ephemeral=True)
+            return await interaction.response.send_message(embed=error_embed("This menu isn't for you — run `help` yourself."), ephemeral=True)
         value = interaction.data["values"][0]
         embed = self.home_embed() if value == "_home" else self.category_embed(value)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -3342,35 +3277,35 @@ async def pfx_help(ctx):
 @bot.command(name="ownerhelp", aliases=["oh"])
 @is_owner()
 async def pfx_ownerhelp(ctx):
-    """Reference command owner-only — selalu dikirim lewat DM biar gak kebaca orang lain di channel."""
+    """Owner-only reference command — always sent via DM so it can't be read by anyone else in the channel."""
     embed = discord.Embed(
         title=f"{e(ICON_OWNER, '👑')} {BOT_NAME} — Owner Command Reference".strip(),
-        description="Daftar ini cuma dikirim ke DM kamu, gak pernah ditampilin di channel publik.",
+        description="This list is only ever sent to your DMs — it's never shown in a public channel.",
         color=COLOR_PRIMARY,
         timestamp=discord.utils.utcnow()
     )
-    embed.add_field(name="Maintenance", value="`maintenance on [alasan]` · `maintenance off` · `maintenance status`", inline=False)
-    embed.add_field(name="No-Prefix", value="`noprefix grant @user [durasi]` · `noprefix revoke @user` · `noprefix list`\nDurasi: `7d` / `24h` / `30m` / kosongkan untuk permanent.", inline=False)
-    embed.add_field(name="Bot Role", value="`botrole set @user <role>` · `botrole remove @user` · `botrole list`\n`botrole sync <tier> <role_id>` — auto badge dari role Discord di support server", inline=False)
-    embed.add_field(name="Premium", value="`grantpremium @user <durasi>` · `grantpremium @user revoke`", inline=False)
+    embed.add_field(name="Maintenance", value="`maintenance on [reason]` · `maintenance off` · `maintenance status`", inline=False)
+    embed.add_field(name="No-Prefix", value="`noprefix grant @user [duration]` · `noprefix revoke @user` · `noprefix list`\nDuration: `7d` / `24h` / `30m` / leave blank for permanent.", inline=False)
+    embed.add_field(name="Bot Role", value="`botrole set @user <role>` · `botrole remove @user` · `botrole list`\n`botrole sync <tier> <role_id>` — auto-badge from a Discord role in the support server", inline=False)
+    embed.add_field(name="Premium", value="`grantpremium @user <duration>` · `grantpremium @user revoke`", inline=False)
     embed.add_field(name="Premium Lock", value="`premiumlock add <command>` · `premiumlock remove <command>` · `premiumlock list`", inline=False)
     embed.add_field(name="Blacklist", value="`blacklist add <id>` · `blacklist remove <id>` · `blacklist list`", inline=False)
-    embed.add_field(name="Other", value="`vxservers` — lihat semua server bot\n`vxleave <guild_id>`", inline=False)
+    embed.add_field(name="Other", value="`vxservers` — view every server the bot is in\n`vxleave <guild_id>`", inline=False)
     embed.set_footer(text=BOT_NAME + " v" + BOT_VERSION + " • Owner Only")
 
     try:
         await ctx.author.send(embed=embed)
-        ack = success_embed("Command reference udah dikirim ke DM kamu.")
+        ack = success_embed("The command reference has been sent to your DMs.")
     except discord.Forbidden:
-        ack = error_embed("Gagal DM kamu — buka dulu DM dari server/bot ini, terus coba lagi.")
+        ack = error_embed("Couldn't DM you — open your DMs for this server/bot first, then try again.")
     await ctx.send(embed=ack, delete_after=8)
 
 # ══════════════════════════════════════════════════════════════════
 # SLASH COMMANDS
 # ══════════════════════════════════════════════════════════════════
 
-@bot.tree.command(name="rank", description="Lihat rank card XP kamu atau member lain.")
-@app_commands.describe(member="Member yang ingin dilihat ranknya")
+@bot.tree.command(name="rank", description="View your rank card or another member's.")
+@app_commands.describe(member="The member whose rank you want to view")
 async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = None):
     await i.response.defer()
     target      = member or i.user
@@ -3395,7 +3330,7 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
         )
         file = discord.File(buf, filename="rank.png")
     except Exception:
-        logging.exception(f"[{BOT_NAME}] Gagal render rank card")
+        logging.exception(f"[{BOT_NAME}] Failed to render rank card")
 
     if file:
         kwargs = {"file": file}
@@ -3404,7 +3339,7 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
             if content: kwargs["content"] = content
             if view:    kwargs["view"] = view
         except Exception:
-            logging.exception(f"[{BOT_NAME}] Gagal build boost promo (rank card tetap dikirim)")
+            logging.exception(f"[{BOT_NAME}] Failed to build boost promo (rank card still sent)")
         return await i.followup.send(**kwargs)
 
     pct   = int((cx / max(nx,1)) * 100)
@@ -3414,12 +3349,12 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
     embed.set_thumbnail(url=target.display_avatar.url)
     await i.followup.send(embed=embed)
 
-@bot.tree.command(name="leaderboard", description="Lihat top 10 XP leaderboard server ini.")
+@bot.tree.command(name="leaderboard", description="View this server's top 10 XP leaderboard.")
 async def slash_leaderboard(i: discord.Interaction):
     gc    = guild_cfg(cfg, i.guild.id)
     all_d = sorted(gc["members_xp"].items(), key=lambda x: x[1].get("xp",0), reverse=True)[:10]
     if not all_d:
-        return await i.response.send_message(embed=info_embed("Leaderboard", "Belum ada data XP."), ephemeral=True)
+        return await i.response.send_message(embed=info_embed("Leaderboard", "No XP data yet."), ephemeral=True)
 
     await i.response.defer()
     try:
@@ -3428,7 +3363,7 @@ async def slash_leaderboard(i: discord.Interaction):
         file = discord.File(buf, filename="leaderboard.png")
         return await i.followup.send(file=file)
     except Exception as e:
-        logging.error(f"[{BOT_NAME}] Gagal render leaderboard card: {e}")
+        logging.error(f"[{BOT_NAME}] Failed to render leaderboard card: {e}")
 
     lines = []
     for idx,(uid,data) in enumerate(all_d):
@@ -3440,8 +3375,8 @@ async def slash_leaderboard(i: discord.Interaction):
     embed.set_footer(text=f"{BOT_NAME} · {i.guild.name}")
     await i.followup.send(embed=embed)
 
-@bot.tree.command(name="profile", description="Lihat profile card dan badge kamu atau member lain.")
-@app_commands.describe(member="Member yang ingin dilihat profilenya")
+@bot.tree.command(name="profile", description="View your profile card and badges, or another member's.")
+@app_commands.describe(member="The member whose profile you want to view")
 async def slash_profile(i: discord.Interaction, member: Optional[discord.Member] = None):
     target = member or i.user
     embed  = build_profile_embed(target)
@@ -3452,17 +3387,17 @@ async def slash_profile(i: discord.Interaction, member: Optional[discord.Member]
     )
     await i.response.send_message(embed=embed)
 
-@bot.tree.command(name="userinfo", description="Lihat info lengkap tentang member.")
-@app_commands.describe(member="Member yang ingin dilihat infonya")
+@bot.tree.command(name="userinfo", description="View detailed info about a member.")
+@app_commands.describe(member="The member you want info about")
 async def slash_userinfo(i: discord.Interaction, member: Optional[discord.Member] = None):
     await do_userinfo(i.guild, member or i.user, i.response.send_message)
 
-@bot.tree.command(name="avatar", description="Lihat avatar member.")
-@app_commands.describe(member="Member yang ingin dilihat avatarnya")
+@bot.tree.command(name="avatar", description="View a member's avatar.")
+@app_commands.describe(member="The member whose avatar you want to view")
 async def slash_avatar(i: discord.Interaction, member: Optional[discord.Member] = None):
     await do_avatar(member or i.user, i.response.send_message)
 
-@bot.tree.command(name="serverinfo", description="Lihat info server.")
+@bot.tree.command(name="serverinfo", description="View this server's info.")
 async def slash_serverinfo(i: discord.Interaction):
     g = i.guild
     embed = discord.Embed(title=g.name, description=g.description or "", color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
@@ -3476,12 +3411,12 @@ async def slash_serverinfo(i: discord.Interaction):
     embed.set_footer(text=f"{BOT_NAME} • ID: {g.id}")
     await i.response.send_message(embed=embed)
 
-@bot.tree.command(name="boostconfig", description="Atur notifikasi server boost.")
+@bot.tree.command(name="boostconfig", description="Configure the server boost notification.")
 @app_commands.describe(
-    channel="Channel buat kirim notifikasi boost",
-    title="Judul custom (opsional, default: 'New Server Boost!')",
-    emoji="Emoji custom di depan judul (opsional, default: 🎉)",
-    description="Deskripsi custom (opsional). Placeholder: {mention} {user} {server} {count} {tier}"
+    channel="The channel where boost notifications should be sent",
+    title="Custom title (optional, default: 'New Server Boost!')",
+    emoji="Custom emoji shown before the title (optional, default: 🎉)",
+    description="Custom description (optional). Placeholders: {mention} {user} {server} {count} {tier}"
 )
 async def slash_boostconfig(
     i: discord.Interaction,
@@ -3491,7 +3426,7 @@ async def slash_boostconfig(
     description: Optional[str] = None
 ):
     if not (i.user.id == bot.owner_id or i.user.guild_permissions.manage_guild):
-        return await i.response.send_message(embed=error_embed(t(cfg, i.guild.id, "no_perm")), ephemeral=True)
+        return await i.response.send_message(embed=error_embed("You don't have permission to use this command."), ephemeral=True)
 
     gc = guild_cfg(cfg, i.guild.id)
     bc = gc.setdefault("boost", {})
@@ -3516,20 +3451,20 @@ async def slash_boostconfig(
         timestamp=discord.utils.utcnow()
     )
     preview.set_thumbnail(url=i.user.display_avatar.url)
-    preview.set_footer(text=f"{i.guild.name} • Preview — begini nanti tampilannya")
+    preview.set_footer(text=f"{i.guild.name} • Preview — this is what it'll look like")
 
     await i.response.send_message(
-        embed=success_embed(f"Notifikasi boost sekarang dikirim ke {channel.mention} setiap ada member baru boost."),
+        embed=success_embed(f"Boost notifications will now be sent to {channel.mention} whenever a member boosts."),
         ephemeral=True
     )
     await i.followup.send(embed=preview, ephemeral=True)
 
-@bot.tree.command(name="ping", description="Cek latency bot.")
+@bot.tree.command(name="ping", description="Check the bot's latency.")
 async def slash_ping(i: discord.Interaction):
     lat = round(bot.latency * 1000)
     await i.response.send_message(embed=base_embed("Pong!", f"Latency: **{lat}ms**", COLOR_SUCCESS if lat < 100 else COLOR_WARNING))
 
-@bot.tree.command(name="help", description="Lihat semua command VALLENT EXS.")
+@bot.tree.command(name="help", description="View every VALLENT EXS command.")
 async def slash_help(i: discord.Interaction):
     has_np = user_has_no_prefix(i.guild, i.user)
     view   = HelpView(i.user.id, i.user.id == bot.owner_id, has_np)
@@ -3544,7 +3479,7 @@ async def on_member_join(member: discord.Member):
     if member.guild.id != support_server_id or member.bot:
         return
     uid = member.id
-    # Grant badge USER saat join support server
+    # Grant the USER badge when joining the support server
     support_members = cfg.setdefault("support_server_members", [])
     if uid not in support_members:
         support_members.append(uid)
@@ -3553,12 +3488,12 @@ async def on_member_join(member: discord.Member):
     badges = get_user_badges(uid)
     role   = get_bot_role(uid)
     embed  = discord.Embed(
-        title="Selamat datang di " + member.guild.name + "!",
+        title="Welcome to " + member.guild.name + "!",
         description=(
-            "Halo " + member.mention + "!\n\n"
-            "Kamu baru saja mendapatkan badge **USER**!\n"
-            "Bonus: **+10% XP Boost** aktif selama **60 menit** di semua server yang pakai " + BOT_NAME + "!\n\n"
-            "Ketik `profile` untuk lihat badge kamu.\n\nKetik `help` untuk lihat semua command."
+            "Hey " + member.mention + "!\n\n"
+            "You just earned the **USER** badge!\n"
+            "Bonus: **+10% XP Boost** active for **60 minutes** on every server using " + BOT_NAME + "!\n\n"
+            "Type `profile` to see your badges.\n\nType `help` to see every command."
         ),
         color=COLOR_PRIMARY,
         timestamp=discord.utils.utcnow()
@@ -3582,7 +3517,7 @@ async def on_member_join(member: discord.Member):
     if main_ch_id:
         ch = member.guild.get_channel(main_ch_id)
         if ch:
-            w = discord.Embed(description=member.mention + " bergabung!", color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
+            w = discord.Embed(description=member.mention + " has joined!", color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
             w.set_author(name=str(member), icon_url=member.display_avatar.url)
             w.set_footer(text=BOT_NAME)
             try:
@@ -3594,7 +3529,7 @@ async def on_member_join(member: discord.Member):
 async def on_app_command_error(i: discord.Interaction, error: app_commands.AppCommandError):
     msg = str(error)
     if isinstance(error, app_commands.MissingPermissions):
-        msg = t(cfg, i.guild.id if i.guild else 0, "no_perm")
+        msg = "You don't have permission to use this command."
     try:
         await i.response.send_message(embed=error_embed(msg), ephemeral=True)
     except discord.InteractionResponded:
@@ -3608,13 +3543,13 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
     if isinstance(error, commands.CheckFailure):
-        await ctx.send(embed=error_embed("Kamu tidak punya akses ke command ini."), delete_after=5)
+        await ctx.send(embed=error_embed("You don't have access to this command."), delete_after=5)
         return
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(embed=error_embed(f"Argumen kurang: `{error.param.name}`"), delete_after=5)
+        await ctx.send(embed=error_embed(f"Missing argument: `{error.param.name}`"), delete_after=5)
         return
     if isinstance(error, commands.BadArgument):
-        await ctx.send(embed=error_embed(f"Argumen tidak valid: {error}"), delete_after=5)
+        await ctx.send(embed=error_embed(f"Invalid argument: {error}"), delete_after=5)
         return
     logging.error(f"[{BOT_NAME}] Command error: {error}")
 
