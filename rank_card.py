@@ -301,7 +301,7 @@ def render_rank_card(
 # LEVEL-UP CARD — dipakai di notifikasi level up otomatis
 # ══════════════════════════════════════════════════════════════════
 
-def render_levelup_card(avatar_bytes: bytes, username: str, new_level: int, is_premium: bool = False, role_names: list | None = None) -> io.BytesIO:
+def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_level: int, is_premium: bool = False, role_names: list | None = None) -> io.BytesIO:
     W, H = 934, 282
     card = _vertical_gradient((W, H), (18, 4, 6), (48, 6, 10)).convert("RGBA")
 
@@ -326,17 +326,21 @@ def render_levelup_card(avatar_bytes: bytes, username: str, new_level: int, is_p
     text_x = ax + avatar_ring.width + 50
     max_w  = W - text_x - 40
 
-    f_tag  = _font(F_BOLD, 26)
-    f_huge = _font(F_DISPLAY, 84)
-
+    f_tag = _font(F_BOLD, 26)
     draw.text((text_x, 46), "LEVEL UP", font=f_tag, fill=(*CRIMSON, 255))
-    draw.text((text_x, 82), f"LEVEL {new_level}", font=f_huge, fill=WHITE)
+
+    # Level progression, e.g. "LEVEL 6  ➔  LEVEL 7" — auto-shrinks to fit
+    prog_txt = f"LEVEL {old_level}  \u2794  LEVEL {new_level}"
+    size = 64
+    while text_width(draw, prog_txt, F_DISPLAY, size) > max_w and size > 30:
+        size -= 2
+    draw_text(draw, (text_x, 82), prog_txt, F_DISPLAY, size, WHITE)
 
     sub  = f"{username} reached a new level!"
-    size = 30
-    while text_width(draw, sub, F_BOLD, size) > max_w and size > 16:
-        size -= 2
-    draw_text(draw, (text_x, 190), sub, F_BOLD, size, MUTED)
+    ssize = 30
+    while text_width(draw, sub, F_BOLD, ssize) > max_w and ssize > 16:
+        ssize -= 2
+    draw_text(draw, (text_x, 190), sub, F_BOLD, ssize, MUTED)
 
     if role_names:
         role_txt = "\U0001F381 Unlocked: " + ", ".join(role_names)  # 🎁
@@ -345,6 +349,7 @@ def render_levelup_card(avatar_bytes: bytes, username: str, new_level: int, is_p
             rsize -= 2
         draw_text(draw, (text_x, 226), role_txt, F_BOLD, rsize, GOLD)
 
+    draw = ImageDraw.Draw(card)
     _watermark(draw, card.size)
 
     buf = io.BytesIO()
