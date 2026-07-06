@@ -392,6 +392,50 @@ bot = commands.Bot(
     tree_cls=VallentTree,
 )
 
+def bot_invite_url() -> Optional[str]:
+    """Build the bot's OAuth2 invite URL. Returns None if the bot hasn't
+    logged in yet (bot.user unavailable)."""
+    if not bot.user:
+        return None
+    perms = discord.Permissions(
+        kick_members=True, ban_members=True, moderate_members=True,
+        manage_roles=True, manage_channels=True, manage_messages=True,
+        manage_guild=True, manage_webhooks=True, manage_emojis=True,
+        view_audit_log=True, mention_everyone=True, embed_links=True,
+        attach_files=True, read_message_history=True, send_messages=True,
+        add_reactions=True, connect=True, move_members=True,
+        use_external_emojis=True,
+    )
+    return discord.utils.oauth_url(bot.user.id, permissions=perms, scopes=("bot", "applications.commands"))
+
+def invite_support_view() -> discord.ui.View:
+    """Shared 'Invite Me' / 'Support' link-button row — used by the mention
+    auto-reply and the help menu. Support button only appears if SUPPORT_INVITE
+    is configured and looks like a real URL."""
+    view = discord.ui.View()
+    invite_url = bot_invite_url()
+    if invite_url:
+        view.add_item(discord.ui.Button(label="Invite Me", style=discord.ButtonStyle.link, url=invite_url))
+    if SUPPORT_INVITE and SUPPORT_INVITE.startswith(("http://", "https://")):
+        view.add_item(discord.ui.Button(label="Support", style=discord.ButtonStyle.link, url=SUPPORT_INVITE))
+    return view
+
+def bot_info_embed(mention: str, guild_id: int) -> discord.Embed:
+    """The card shown when the bot is @mentioned directly in chat."""
+    embed = discord.Embed(
+        title=f"{BOT_NAME} — INFO",
+        description=(
+            f"Hey {mention},\n"
+            f"My prefix here is: `!vx` (`!v` also works)\n"
+            f"Server ID: `{guild_id}`\n\n"
+            f"Type `!vx help` to see the command list."
+        ),
+        color=COLOR_PRIMARY,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_footer(text=BOT_TAGLINE)
+    return embed
+
 # ══════════════════════════════════════════════════════════════════
 # PREMIUM HELPERS
 # ══════════════════════════════════════════════════════════════════
@@ -560,13 +604,13 @@ BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "dev
 
 BOT_ROLE_BADGES = {
     # Emoji sourced from emoji_config.py — edit that file to set the emoji IDs
-    "founder":        {"label": "• Founder",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
-    "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
+    "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "developer":      {"label": "• DEVELOPER",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
     "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
-    "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
-    "premium":        {"label": "• Prefix",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
+    "staff":          {"label": "• STAFF",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
+    "premium":        {"label": "• Premium",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
     "noprefix":       {"label": "• No Prefix",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
     "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
 }
@@ -1545,6 +1589,11 @@ async def on_message(message: discord.Message):
                 await _antispam_log(message.guild, gc, message.author, "Cross-Channel Spam",
                                      f"The same message/link appeared in {len(entry['channels'])} channels within {window} seconds.", result)
                 return
+
+    # ── Bot mention auto-reply — only when the message is JUST the mention ──
+    stripped = message.content.replace(f"<@{bot.user.id}>", "").replace(f"<@!{bot.user.id}>", "").strip()
+    if bot.user in message.mentions and not stripped:
+        return await message.reply(embed=bot_info_embed(message.author.mention, message.guild.id), view=invite_support_view(), mention_author=False)
 
     # ── Prefix routing + no-prefix ───────────────────────────────────────
     low = message.content.lower().strip()
@@ -3310,6 +3359,9 @@ class HelpView(discord.ui.View):
         select = discord.ui.Select(placeholder="Pick a command category...", options=options)
         select.callback = self.on_select
         self.add_item(select)
+
+        for item in invite_support_view().children:
+            self.add_item(item)
 
     def home_embed(self) -> discord.Embed:
         embed = discord.Embed(
