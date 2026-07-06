@@ -128,6 +128,10 @@ def _init_guild(gc: dict):
     gc.setdefault("announce_channel",  None)
     gc.setdefault("level_channel",     None)
     gc.setdefault("levelup_message",   "{mention} just leveled up to **Level {level}**! Keep chatting in {server} to climb even higher. {roles}")
+    # Migration: kalau nilai yang kesimpen masih PERSIS default lama (artinya
+    # user belum pernah custom manual), upgrade otomatis ke default baru.
+    if gc.get("levelup_message") == "{mention} leveled up to **Level {level}**!":
+        gc["levelup_message"] = "{mention} just leveled up to **Level {level}**! Keep chatting in {server} to climb even higher. {roles}"
     gc.setdefault("antispam", {
         "trap_channel": None,
         "log_channel":  None,
@@ -562,7 +566,7 @@ BOT_ROLE_BADGES = {
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
     "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
     "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
-    "premium":        {"label": "• Premium",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
+    "premium":        {"label": "• Prefix",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
     "noprefix":       {"label": "• No Prefix",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
     "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
 }
