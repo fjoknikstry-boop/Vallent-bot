@@ -23,9 +23,10 @@ dibiarkan tofu (kasus sangat jarang — misal aksara langka).
 
 import io
 import logging
+import math
 import os
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 log = logging.getLogger("rank_card")
 
@@ -212,6 +213,122 @@ def _draw_progress_bar(card_img: Image.Image, x, y, w, h, pct, track_color, fill
         card_img.paste(grad, (x, y), mask)
 
 # ══════════════════════════════════════════════════════════════════
+# TACTICAL-CARD PRIMITIVES — distinctive shapes so cards don't read as a
+# generic template: angled corner cut, hex avatar frame, HUD corner ticks,
+# a huge low-opacity "VX" wordmark, and a fine grain texture for depth.
+# ══════════════════════════════════════════════════════════════════
+
+BLOOD  = (90, 4, 12)
+SILVER = (192, 192, 200)
+BRONZE = (205, 127, 50)
+
+def _noise_texture(size, opacity: int = 8) -> Image.Image:
+    w, h = size
+    n = Image.effect_noise((w, h), 24).convert("L")
+    alpha = Image.new("L", (w, h), opacity)
+    return Image.merge("RGBA", (n, n, n, alpha))
+
+def _hex_mask(size: int) -> Image.Image:
+    mask = Image.new("L", (size, size), 0)
+    d = ImageDraw.Draw(mask)
+    cx = cy = size / 2
+    r = size / 2
+    pts = [(cx + r * math.cos(math.radians(60 * i - 90)), cy + r * math.sin(math.radians(60 * i - 90))) for i in range(6)]
+    d.polygon(pts, fill=255)
+    return mask
+
+def _hex_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_width: int = 6) -> Image.Image:
+    """Hexagonal avatar frame — distinctive alternative to the standard
+    circle-crop every rank-card bot uses."""
+    avatar_img = avatar_img.convert("RGBA").resize((diameter, diameter), Image.LANCZOS)
+    inner_mask = _hex_mask(diameter)
+    inner = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
+    inner.paste(avatar_img, (0, 0), inner_mask)
+
+    ring_size  = diameter + ring_width * 2
+    outer_mask = _hex_mask(ring_size)
+    ring_layer = Image.new("RGBA", (ring_size, ring_size), (*ring_color, 255))
+    ring_layer.putalpha(outer_mask)
+
+    hole_mask = Image.new("L", (ring_size, ring_size), 0)
+    hole_mask.paste(inner_mask, (ring_width, ring_width))
+    ring_alpha = ring_layer.split()[3]
+    ring_layer.putalpha(ImageChops.subtract(ring_alpha, hole_mask))
+
+    final = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
+    final.paste(ring_layer, (0, 0), ring_layer)
+    final.paste(inner, (ring_width, ring_width), inner)
+    return final
+
+def _corner_bracket(draw: ImageDraw.ImageDraw, x, y, size, color, flip_x=False, flip_y=False, width=3):
+    dx = -1 if flip_x else 1
+    dy = -1 if flip_y else 1
+    draw.line([(x, y), (x + dx * size, y)], fill=color, width=width)
+    draw.line([(x, y), (x, y + dy * size)], fill=color, width=width)
+
+def _diagonal_clip_mask(w: int, h: int, cut: int = 46) -> Image.Image:
+    """Card silhouette with the top-right corner sliced off at an angle —
+    breaks up the 'plain rounded rectangle' silhouette every card uses."""
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).polygon([(0, 0), (w - cut, 0), (w, cut), (w, h), (0, h)], fill=255)
+    return mask
+
+def _vx_watermark(size, opacity: int = 15) -> Image.Image:
+    """Huge, faint 'VX' wordmark bleeding off the top-right — a branding
+    fingerprint unique to this bot rather than a generic gradient card."""
+    w, h = size
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    f = _font(F_DISPLAY, int(h * 0.9))
+    txt = "VX"
+    tw = d.textlength(txt, font=f)
+    d.text((w - tw * 0.55, -h * 0.22), txt, font=f, fill=(255, 255, 255, opacity))
+    return layer.rotate(-8, resample=Image.BICUBIC)
+
+def _segmented_bar(draw: ImageDraw.ImageDraw, x, y, w, h, pct, segments, track_color, fill_color, gap=3):
+    """HUD-style tick-segmented bar instead of a plain smooth gradient pill."""
+    seg_w  = (w - gap * (segments - 1)) / segments
+    filled = max(0.0, min(pct, 1.0)) * segments
+    for i in range(segments):
+        sx = x + i * (seg_w + gap)
+        draw.rectangle([sx, y, sx + seg_w, y + h], fill=track_color)
+        amt = max(0.0, min(1.0, filled - i))
+        if amt > 0:
+            draw.rectangle([sx, y, sx + seg_w * amt, y + h], fill=fill_color)
+
+def _card_base(W: int, H: int, cut: int = 48, blood_xy=None) -> Image.Image:
+    """Shared background stack for both cards: gradient + blood glow +
+    VX watermark + grain texture, clipped to the angled card silhouette."""
+    base = _vertical_gradient((W, H), BG_TOP, BG_BOTTOM).convert("RGBA")
+    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    bx, by = blood_xy or (-180, H - 220)
+    gd.ellipse([bx, by, bx + 560, by + 460], fill=(*BLOOD, 80))
+    base = Image.alpha_composite(base, glow)
+    base = Image.alpha_composite(base, _vx_watermark((W, H)))
+    base = Image.alpha_composite(base, _noise_texture((W, H)))
+    clip = _diagonal_clip_mask(W, H, cut=cut)
+    canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    canvas.paste(base, (0, 0), clip)
+    draw = ImageDraw.Draw(canvas)
+    draw.line([(0, 0), (W - cut, 0)], fill=(*DARK_RED, 255), width=3)
+    draw.line([(W - cut, 0), (W, cut)], fill=(*DARK_RED, 255), width=3)
+    draw.line([(W, cut), (W, H)], fill=(*DARK_RED, 255), width=3)
+    draw.line([(W, H), (0, H)], fill=(*DARK_RED, 255), width=3)
+    draw.line([(0, H), (0, 0)], fill=(*DARK_RED, 255), width=3)
+    _corner_bracket(draw, 16, 16, 24, (*CRIMSON, 220))
+    _corner_bracket(draw, 16, H - 16, 24, (*CRIMSON, 220), flip_y=True)
+    return canvas
+
+def _flatten(canvas: Image.Image) -> io.BytesIO:
+    out = Image.new("RGB", canvas.size, (8, 4, 5))
+    out.paste(canvas, (0, 0), canvas)
+    buf = io.BytesIO()
+    out.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+# ══════════════════════════════════════════════════════════════════
 # RANK CARD — dipakai di command `rank` / `/rank`
 # ══════════════════════════════════════════════════════════════════
 
@@ -226,76 +343,63 @@ def render_rank_card(
     is_premium: bool = False,
     messages: int = 0,
 ) -> io.BytesIO:
-    W, H = 934, 282
-    card = _vertical_gradient((W, H), BG_TOP, BG_BOTTOM).convert("RGBA")
-
-    # aksen garis diagonal tipis di sisi kanan
-    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    od = ImageDraw.Draw(overlay)
-    for i in range(-2, 6):
-        xx = W - 60 + i * 70
-        od.polygon([(xx, 0), (xx + 30, 0), (xx - 60, H), (xx - 90, H)], fill=(139, 0, 0, 16))
-    card = Image.alpha_composite(card, overlay)
-
-    draw = ImageDraw.Draw(card)
-    draw.rounded_rectangle([2, 2, W - 3, H - 3], radius=22, outline=(*DARK_RED, 255), width=3)
+    W, H = 934, 300
+    cut  = 50
+    canvas = _card_base(W, H, cut=cut)
+    draw   = ImageDraw.Draw(canvas)
 
     av = _safe_avatar(avatar_bytes)
-    ring_color = (*GOLD, 255) if is_premium else (*CRIMSON, 255)
+    ring_color = GOLD if is_premium else CRIMSON
     avatar_d = 168
-    avatar_ring = _circle_avatar(av, avatar_d, ring_color, ring_width=6)
-    ax, ay = 46, (H - avatar_ring.height) // 2
-    card.paste(avatar_ring, (ax, ay), avatar_ring)
+    hexring  = _hex_avatar(av, avatar_d, ring_color, ring_width=6)
+    ax, ay = 50, (H - hexring.height) // 2
+    canvas.paste(hexring, (ax, ay), hexring)
 
-    draw = ImageDraw.Draw(card)
-    text_x = ax + avatar_ring.width + 36
+    draw = ImageDraw.Draw(canvas)
+    text_x = ax + hexring.width + 40
+    max_w  = W - text_x - 70
 
-    f_small = _font(F_BOLD, 24)
-    f_tiny  = _font(F_REG, 20)
-    f_xp    = _font(F_BOLD, 22)
+    f_small = _font(F_BOLD, 22)
+    f_tiny  = _font(F_REG, 18)
+    f_xp    = _font(F_BOLD, 20)
 
-    name_y = 40
-    uname  = username.upper()
-    max_w  = W - text_x - 56
-    size   = 52
+    uname   = username.upper()
+    name_y  = 36
+    size    = 50
     while text_width(draw, uname, F_DISPLAY, size) > max_w and size > 26:
         size -= 2
     draw_text(draw, (text_x, name_y), uname, F_DISPLAY, size, WHITE)
+    draw.rectangle([text_x, name_y + size + 2, text_x + 50, name_y + size + 6], fill=(*CRIMSON, 255))
 
-    sub_y = name_y + 60
+    sub_y = name_y + size + 16
     if is_premium:
-        _draw_diamond(draw, text_x + 8, sub_y + 15, 9, GOLD)
-        draw.text((text_x + 24, sub_y), "PREMIUM MEMBER", font=f_small, fill=GOLD)
-        sub_y += 30
+        _draw_diamond(draw, text_x + 7, sub_y + 11, 8, GOLD)
+        draw.text((text_x + 20, sub_y), "PREMIUM MEMBER", font=f_small, fill=GOLD)
+        sub_y += 28
 
-    rl_y = sub_y + 4
+    rl_y = sub_y + 6
     draw.text((text_x, rl_y), "RANK", font=f_tiny, fill=MUTED)
     rank_w = draw.textlength("RANK ", font=f_tiny)
     draw.text((text_x + rank_w, rl_y - 3), f"#{rank}", font=f_small, fill=WHITE)
-    lvl_x = text_x + rank_w + draw.textlength(f"#{rank}", font=f_small) + 40
+    lvl_x = text_x + rank_w + draw.textlength(f"#{rank}", font=f_small) + 36
     draw.text((lvl_x, rl_y), "LEVEL", font=f_tiny, fill=MUTED)
     lvl_w = draw.textlength("LEVEL ", font=f_tiny)
     draw.text((lvl_x + lvl_w, rl_y - 3), str(level), font=f_small, fill=(*CRIMSON, 255))
 
-    bar_y = rl_y + 46
-    bar_w = W - text_x - 56
-    bar_h = 26
-    _draw_progress_bar(card, text_x, bar_y, bar_w, bar_h, cur_xp / max(need_xp, 1), (40, 18, 20), DARK_RED, CRIMSON)
+    bar_y = rl_y + 42
+    bar_w = W - text_x - 90
+    bar_h = 22
+    _segmented_bar(draw, text_x, bar_y, bar_w, bar_h, cur_xp / max(need_xp, 1), 20, (35, 16, 18), CRIMSON, gap=3)
 
-    draw = ImageDraw.Draw(card)
     xp_text = f"{cur_xp:,} / {need_xp:,} XP"
     xp_w = draw.textlength(xp_text, font=f_xp)
-    draw.text((text_x + bar_w - xp_w, bar_y - 30), xp_text, font=f_xp, fill=WHITE)
+    draw.text((text_x + bar_w - xp_w, bar_y - 26), xp_text, font=f_xp, fill=WHITE)
 
-    footer = f"Total XP: {total_xp:,} • Messages: {messages:,}"
-    draw.text((text_x, bar_y + bar_h + 14), footer, font=f_tiny, fill=MUTED)
+    footer = f"TOTAL XP {total_xp:,}   //   MESSAGES {messages:,}"
+    draw.text((text_x, bar_y + bar_h + 16), footer, font=f_tiny, fill=MUTED)
 
-    _watermark(draw, card.size)
-
-    buf = io.BytesIO()
-    card.convert("RGB").save(buf, format="PNG")
-    buf.seek(0)
-    return buf
+    _watermark(draw, canvas.size)
+    return _flatten(canvas)
 
 # ══════════════════════════════════════════════════════════════════
 # LEVEL-UP CARD — dipakai di notifikasi level up otomatis
@@ -368,9 +472,6 @@ def _watermark(draw: ImageDraw.ImageDraw, size):
 # LEADERBOARD CARD — dipakai di command `leaderboard` / `/leaderboard`
 # ══════════════════════════════════════════════════════════════════
 
-SILVER = (192, 192, 200)
-BRONZE = (205, 127, 50)
-
 def _truncate(draw: ImageDraw.ImageDraw, text: str, path: str, size: int, max_w: int) -> str:
     if text_width(draw, text, path, size) <= max_w:
         return text
@@ -381,64 +482,62 @@ def _truncate(draw: ImageDraw.ImageDraw, text: str, path: str, size: int, max_w:
 def render_leaderboard_card(guild_name: str, entries: list) -> io.BytesIO:
     """entries: list of dict {rank, avatar_bytes, name, level, xp} — urut dari #1,
     maksimal ditampilin 10 baris."""
-    entries = entries[:10]
-    W = 760
-    row_h = 68
-    header_h = 96
-    H = header_h + row_h * max(len(entries), 1) + 24
+    entries  = entries[:10]
+    W        = 800
+    row_h    = 66
+    header_h = 100
+    cut      = 44
+    H = header_h + row_h * max(len(entries), 1) + 30
 
-    card = _vertical_gradient((W, H), BG_TOP, BG_BOTTOM).convert("RGBA")
-    draw = ImageDraw.Draw(card)
-    draw.rounded_rectangle([2, 2, W - 3, H - 3], radius=22, outline=(*DARK_RED, 255), width=3)
+    canvas = _card_base(W, H, cut=cut, blood_xy=(-180, -180))
+    draw   = ImageDraw.Draw(canvas)
 
-    f_meta  = _font(F_REG, 16)
-    f_rank  = _font(F_DISPLAY, 26)
+    f_meta = _font(F_REG, 15)
+    f_rank = _font(F_DISPLAY, 24)
 
-    title = _truncate(draw, "XP LEADERBOARD", F_DISPLAY, 36, W - 60)
-    draw_text(draw, (30, 22), title, F_DISPLAY, 36, WHITE)
-    sub = _truncate(draw, guild_name, F_REG, 18, W - 60)
-    draw_text(draw, (30, 64), sub, F_REG, 18, MUTED, bold=False)
+    title = _truncate(draw, "XP LEADERBOARD", F_DISPLAY, 34, W - 64)
+    draw_text(draw, (32, 24), title, F_DISPLAY, 34, WHITE)
+    draw.rectangle([33, 62, 90, 65], fill=(*CRIMSON, 255))
+    sub = _truncate(draw, guild_name.upper(), F_REG, 17, W - 64)
+    draw_text(draw, (32, 72), sub, F_REG, 17, MUTED, bold=False)
 
     if not entries:
         f_empty = _font(F_REG, 22)
-        draw.text((30, header_h + 10), "Belum ada data XP.", font=f_empty, fill=MUTED)
+        draw.text((32, header_h + 10), "No XP data yet.", font=f_empty, fill=MUTED)
 
     rank_colors = {1: GOLD, 2: SILVER, 3: BRONZE}
     y = header_h
-    name_max_w = W - 90 - 66 - 18 - 140  # sisa ruang setelah avatar & sebelum angka XP
+    name_max_w = W - 86 - 62 - 16 - 130
     for e in entries:
         rank   = e["rank"]
         accent = rank_colors.get(rank, CRIMSON)
         if rank <= 3:
-            draw.rounded_rectangle([16, y + 4, W - 16, y + row_h - 4], radius=14, fill=(*accent, 26))
+            draw.rectangle([14, y + 3, W - 14, y + row_h - 3], fill=(*accent, 22))
+            draw.rectangle([14, y + 3, 18, y + row_h - 3], fill=(*accent, 255))
 
         rank_str = f"#{rank}"
         rw = draw.textlength(rank_str, font=f_rank)
-        draw.text((60 - rw / 2, y + row_h / 2 - 16), rank_str, font=f_rank, fill=accent if rank <= 3 else MUTED)
+        draw.text((56 - rw / 2, y + row_h / 2 - 14), rank_str, font=f_rank, fill=accent if rank <= 3 else MUTED)
 
         av = _safe_avatar(e["avatar_bytes"])
-        avatar_d = 48
-        ring_color = (*accent, 255) if rank <= 3 else (*CRIMSON, 180)
-        ring = _circle_avatar(av, avatar_d, ring_color, ring_width=3)
-        ax = 90
-        ay = y + (row_h - ring.height) // 2
-        card.paste(ring, (ax, ay), ring)
+        ring_color = accent if rank <= 3 else CRIMSON
+        avatar_d = 46
+        hexring  = _hex_avatar(av, avatar_d, ring_color, ring_width=3)
+        ax = 86
+        ay = y + (row_h - hexring.height) // 2
+        canvas.paste(hexring, (ax, ay), hexring)
 
-        name_x = ax + ring.width + 18
-        name_txt = _truncate(draw, e["name"], F_BOLD, 22, name_max_w)
-        draw_text(draw, (name_x, y + 10), name_txt, F_BOLD, 22, WHITE)
-        draw.text((name_x, y + 38), f"Level {e['level']}", font=f_meta, fill=MUTED)
+        name_x   = ax + hexring.width + 16
+        name_txt = _truncate(draw, e["name"], F_BOLD, 21, name_max_w)
+        draw_text(draw, (name_x, y + 9), name_txt, F_BOLD, 21, WHITE)
+        draw.text((name_x, y + 35), f"LVL {e['level']}", font=f_meta, fill=MUTED)
 
         xp_str = f"{e['xp']:,} XP"
-        xp_w = text_width(draw, xp_str, F_BOLD, 22)
-        draw_text(draw, (W - 30 - xp_w, y + row_h / 2 - 12), xp_str, F_BOLD, 22, WHITE)
+        xp_w = text_width(draw, xp_str, F_BOLD, 21)
+        draw_text(draw, (W - 32 - xp_w - cut * 0.3, y + row_h / 2 - 11), xp_str, F_BOLD, 21, WHITE)
 
         y += row_h
 
-    draw = ImageDraw.Draw(card)
-    _watermark(draw, card.size)
-
-    buf = io.BytesIO()
-    card.convert("RGB").save(buf, format="PNG")
-    buf.seek(0)
-    return buf
+    draw = ImageDraw.Draw(canvas)
+    _watermark(draw, canvas.size)
+    return _flatten(canvas)
