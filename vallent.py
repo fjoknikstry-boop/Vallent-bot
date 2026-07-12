@@ -27,6 +27,7 @@ import json
 import os
 import re
 import asyncio
+import time
 import datetime
 import logging
 import pytz
@@ -604,12 +605,12 @@ BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "dev
 
 BOT_ROLE_BADGES = {
     # Emoji sourced from emoji_config.py — edit that file to set the emoji IDs
-    "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
-    "developer":      {"label": "• DEVELOPER",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
+    "founder":        {"label": "• Founder",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
     "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
-    "staff":          {"label": "• STAFF",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
+    "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
     "premium":        {"label": "• Premium",        "color": 0xF59E0B, "emoji": BADGE_PREMIUM},
     "noprefix":       {"label": "• No Prefix",      "color": 0x22C55E, "emoji": BADGE_NOPREFIX},
     "user":           {"label": "• User",           "color": 0x6B7280, "emoji": BADGE_USER},
@@ -1279,6 +1280,11 @@ async def cleanup_spam_cache():
     stale_flood = [key for key, ts in flood_tracker.items() if not ts or now - ts[-1] > 120]
     for key in stale_flood:
         flood_tracker.pop(key, None)
+    now_mono = time.monotonic()
+    for gid, entries in list(_recent_boost_starts.items()):
+        entries[:] = [(uid, ts) for uid, ts in entries if now_mono - ts < 60]
+        if not entries:
+            _recent_boost_starts.pop(gid, None)
 
 @tasks.loop(minutes=5)
 async def rotate_status():
@@ -1629,26 +1635,34 @@ async def on_member_remove(member: discord.Member):
         support_members.remove(member.id)
         save_config(cfg)
 
-async def handle_new_boost(member: discord.Member):
-    """Send a notification to the channel configured via /boostconfig when a
-    member starts boosting this server."""
-    gc    = guild_cfg(cfg, member.guild.id)
+_recent_boost_starts: dict = defaultdict(list)  # guild_id -> [(member_id, monotonic_ts), ...]
+
+async def handle_new_boost(guild: discord.Guild, member: Optional[discord.Member], boost_number: int):
+    """Send a notification for ONE individual boost. Fires once per boost,
+    even if the same member contributes multiple boosts to the same server
+    (Discord only exposes a per-member 'started boosting' transition once —
+    guild.premium_subscription_count is the reliable signal that counts
+    every single boost, which is why detection is driven from there)."""
+    gc    = guild_cfg(cfg, guild.id)
     bc    = gc.get("boost", {})
     ch_id = bc.get("channel")
     if not ch_id:
         return
-    channel = member.guild.get_channel(ch_id)
+    channel = guild.get_channel(ch_id)
     if not channel:
         return
 
-    count = member.guild.premium_subscription_count or 0
+    mention_txt = member.mention if member else "Someone"
+    name_txt    = member.display_name if member else "Someone"
+    avatar_url  = member.display_avatar.url if member else guild.icon.url if guild.icon else None
+
     def fill(template: str) -> str:
         return (template
-                .replace("{mention}", member.mention)
-                .replace("{user}",    member.display_name)
-                .replace("{server}",  member.guild.name)
-                .replace("{count}",   str(count))
-                .replace("{tier}",    str(member.guild.premium_tier)))
+                .replace("{mention}", mention_txt)
+                .replace("{user}",    name_txt)
+                .replace("{server}",  guild.name)
+                .replace("{count}",   str(boost_number))
+                .replace("{tier}",    str(guild.premium_tier)))
 
     title = fill(bc.get("title") or "New Server Boost!")
     emoji_str = bc.get("emoji") or e(ICON_BOOST, "🎉")
@@ -1660,18 +1674,50 @@ async def handle_new_boost(member: discord.Member):
         color=0xF47FFF,
         timestamp=discord.utils.utcnow()
     )
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text=f"{member.guild.name} • Boost #{count}")
+    if avatar_url:
+        embed.set_thumbnail(url=avatar_url)
+    embed.set_footer(text=f"{guild.name} • Boost #{boost_number}")
     try:
         await channel.send(embed=embed)
     except Exception:
         pass
 
 @bot.event
+async def on_guild_update(before: discord.Guild, after: discord.Guild):
+    """Authoritative trigger for boost notifications. guild.premium_subscription_count
+    increments by exactly 1 for EVERY individual boost — including a repeat
+    boost from someone who's already boosting, unlike member.premium_since
+    which only transitions once per member. This guarantees one notification
+    per boost, professionally handling Discord's API limitation on
+    per-member repeat-boost attribution."""
+    before_count = before.premium_subscription_count or 0
+    after_count  = after.premium_subscription_count or 0
+    diff = after_count - before_count
+    if diff <= 0:
+        return
+
+    # Give a slightly-delayed on_member_update a moment to land so we can
+    # attribute the boost to whoever actually triggered it when possible.
+    await asyncio.sleep(1.5)
+
+    now = time.monotonic()
+    pending = _recent_boost_starts.get(after.id, [])
+    pending[:] = [(uid, ts) for uid, ts in pending if now - ts < 15]
+
+    for i in range(diff):
+        member = None
+        if pending:
+            uid, _ts = pending.pop(0)
+            member = after.get_member(uid)
+        await handle_new_boost(after, member, boost_number=before_count + i + 1)
+
+@bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-    # ── Server boost notification — runs on every guild that has it configured ─
+    # ── Server boost attribution cache — the actual notification is fired
+    # from on_guild_update (see above); this just records WHO started
+    # boosting so that event can credit the right member. ──────────────────
     if not before.premium_since and after.premium_since:
-        await handle_new_boost(after)
+        _recent_boost_starts[after.guild.id].append((after.id, time.monotonic()))
 
     # ── Badge role-sync is computed live (straight from the Discord role every
     # time get_bot_role() is called), so nothing needs updating here. This is
