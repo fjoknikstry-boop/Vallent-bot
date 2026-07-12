@@ -605,7 +605,7 @@ BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "dev
 
 BOT_ROLE_BADGES = {
     # Emoji sourced from emoji_config.py — edit that file to set the emoji IDs
-    "founder":        {"label": "• Founder",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
     "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
@@ -2788,8 +2788,19 @@ async def pfx_automod(ctx, sub: str = "", *, rest: str = ""):
             rules = []
         if not rules:
             return await ctx.send(embed=info_embed("AutoMod Rules", "No AutoMod rules exist in this server yet."))
-        lines = [f"**{r.name}** — {'enabled' if r.enabled else 'disabled'} (`{r.id}`)" for r in rules]
-        await ctx.send(embed=info_embed("AutoMod Rules", "\n".join(lines)))
+        mine   = [r for r in rules if r.creator_id == bot.user.id]
+        others = [r for r in rules if r.creator_id != bot.user.id]
+        embed  = base_embed("AutoMod Rules", None)
+        if mine:
+            embed.add_field(name=f"Created by {BOT_NAME}", value="\n".join(
+                f"**{r.name}** — {'enabled' if r.enabled else 'disabled'} (`{r.id}`)" for r in mine
+            ), inline=False)
+        if others:
+            embed.add_field(name="Other rules in this server (not made by this bot)", value="\n".join(
+                f"**{r.name}** — {'enabled' if r.enabled else 'disabled'} (`{r.id}`) · creator: <@{r.creator_id}>" for r in others
+            ), inline=False)
+            embed.set_footer(text="These weren't created by this bot — they're Discord defaults, another bot, or set up manually via Server Settings.")
+        await ctx.send(embed=embed)
 
     elif sub == "remove":
         rule_id = rest.strip()
@@ -2800,6 +2811,11 @@ async def pfx_automod(ctx, sub: str = "", *, rest: str = ""):
             rule = next((r for r in rules if r.id == int(rule_id)), None)
             if not rule:
                 return await ctx.send(embed=error_embed("Rule not found."))
+            if rule.creator_id != bot.user.id:
+                return await ctx.send(embed=error_embed(
+                    f"**{rule.name}** wasn't created by this bot (creator: <@{rule.creator_id}>), "
+                    "so it won't be removed from here — manage it directly in Server Settings > AutoMod instead."
+                ))
             await rule.delete(reason=f"[{BOT_NAME}] Removed via automod remove")
             await ctx.send(embed=success_embed(f"AutoMod rule **{rule.name}** removed."))
         except Exception as e:
@@ -2809,8 +2825,8 @@ async def pfx_automod(ctx, sub: str = "", *, rest: str = ""):
         await ctx.send(embed=info_embed("AutoMod", (
             "`automod setup` — create a native Discord AutoMod rule (blocks profanity/sexual content/slurs) "
             "and unlocks the bot's \"Uses AutoMod\" profile badge\n"
-            "`automod list` — view every AutoMod rule in this server\n"
-            "`automod remove <rule_id>` — delete a rule\n\n"
+            "`automod list` — view every AutoMod rule in this server (including ones not made by this bot)\n"
+            "`automod remove <rule_id>` — delete a rule this bot created\n\n"
             "This is different from `antispam`/`antinuke` — those are the bot's own custom detection. "
             "This uses Discord's built-in AutoMod system directly."
         )))
