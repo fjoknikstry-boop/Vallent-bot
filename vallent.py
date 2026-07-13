@@ -161,6 +161,7 @@ def _init_guild(gc: dict):
     gc.setdefault("leveling_enabled",  True)
     gc.setdefault("xp_per_message",    [15, 25])
     gc.setdefault("xp_cooldown",       60)
+    gc.setdefault("xp_difficulty",     1.0)
     gc.setdefault("members_xp",        {})
     gc.setdefault("level_roles",       {})
     gc.setdefault("warnings",          {})
@@ -268,23 +269,23 @@ def info_embed(title: str, desc: str) -> discord.Embed:
 # XP / LEVELING
 # ══════════════════════════════════════════════════════════════════
 
-def xp_for_level(level: int) -> int:
-    return 5 * (level ** 2) + 50 * level + 100
+def xp_for_level(level: int, difficulty: float = 1.0) -> int:
+    return round((5 * (level ** 2) + 50 * level + 100) * difficulty)
 
-def level_from_xp(xp: int) -> int:
+def level_from_xp(xp: int, difficulty: float = 1.0) -> int:
     level = 0
-    while xp >= xp_for_level(level):
-        xp -= xp_for_level(level)
+    while xp >= xp_for_level(level, difficulty):
+        xp -= xp_for_level(level, difficulty)
         level += 1
     return level
 
-def xp_progress(total_xp: int):
+def xp_progress(total_xp: int, difficulty: float = 1.0):
     level = 0
     xp    = total_xp
-    while xp >= xp_for_level(level):
-        xp -= xp_for_level(level)
+    while xp >= xp_for_level(level, difficulty):
+        xp -= xp_for_level(level, difficulty)
         level += 1
-    return level, xp, xp_for_level(level)
+    return level, xp, xp_for_level(level, difficulty)
 
 def get_member_xp(gc: dict, uid: str) -> dict:
     data = gc["members_xp"].setdefault(uid, {"xp": 0, "level": 0, "last_msg_ts": 0.0, "messages": 0})
@@ -1501,7 +1502,7 @@ async def on_message(message: discord.Message):
             gain           = round(random.randint(xp_min, xp_max) * get_xp_multiplier(message.author.id))
             old_level      = data["level"]
             data["xp"]    += gain
-            data["level"]  = level_from_xp(data["xp"])
+            data["level"]  = level_from_xp(data["xp"], gc.get("xp_difficulty", 1.0))
             data["last_msg_ts"] = now
             data["messages"]    = data.get("messages", 0) + 1
             save_config(cfg)
@@ -2034,7 +2035,7 @@ async def pfx_rank(ctx, member: discord.Member = None):
     target      = member or ctx.author
     gc          = guild_cfg(cfg, ctx.guild.id)
     data        = get_member_xp(gc, str(target.id))
-    lvl, cx, nx = xp_progress(data["xp"])
+    lvl, cx, nx = xp_progress(data["xp"], gc.get("xp_difficulty", 1.0))
     all_m       = sorted(gc["members_xp"].items(), key=lambda x: x[1].get("xp", 0), reverse=True)
     rank        = next((i+1 for i, (uid, _) in enumerate(all_m) if uid == str(target.id)), 1)
     is_prem     = user_has_premium(ctx.guild, target)
@@ -2171,6 +2172,61 @@ async def pfx_level(ctx, sub: str = "", *args):
         await ctx.send(embed=base_embed("Leveling System",
             "The leveling system is now **" + state + "** in this server.", color=color))
 
+    elif sub == "xp":
+        if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
+        parts = list(args)
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            cur_min, cur_max = gc.get("xp_per_message", [15, 25])
+            return await ctx.send(embed=error_embed(
+                f"Usage: `level xp <min> <max>`\nCurrent: **{cur_min}-{cur_max} XP** per message"))
+        xp_min, xp_max = int(parts[0]), int(parts[1])
+        if xp_min < 1 or xp_max < xp_min or xp_max > 1000:
+            return await ctx.send(embed=error_embed("Values must be positive, min ≤ max, and max ≤ 1000."))
+        gc["xp_per_message"] = [xp_min, xp_max]
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"XP per message set to **{xp_min}-{xp_max} XP**."))
+
+    elif sub == "cooldown":
+        if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
+        if not args or not args[0].isdigit():
+            return await ctx.send(embed=error_embed(
+                f"Usage: `level cooldown <seconds>`\nCurrent: **{gc.get('xp_cooldown', 60)}s** between XP gains"))
+        seconds = int(args[0])
+        if not 0 <= seconds <= 3600:
+            return await ctx.send(embed=error_embed("Must be between 0 and 3600 seconds."))
+        gc["xp_cooldown"] = seconds
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"XP cooldown set to **{seconds} seconds** between messages that count."))
+
+    elif sub == "difficulty":
+        if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
+        if not args:
+            cur = gc.get("xp_difficulty", 1.0)
+            return await ctx.send(embed=info_embed("Level Difficulty", (
+                f"Current multiplier: **{cur}x**\n\n"
+                "`level difficulty <number>` — scales how much XP every level requires.\n"
+                "`1.0` = default · `2.0` = twice as slow · `0.5` = twice as fast\n\n"
+                f"Example at 1.0x: Level 10 needs {xp_for_level(9, 1.0):,} XP for that step.\n"
+                f"At **{cur}x**: Level 10 needs {xp_for_level(9, cur):,} XP for that step."
+            )))
+        try:
+            mult = float(args[0])
+        except ValueError:
+            return await ctx.send(embed=error_embed("Must be a number, e.g. `1.5`."))
+        if not 0.1 <= mult <= 10:
+            return await ctx.send(embed=error_embed("Must be between 0.1 and 10."))
+        gc["xp_difficulty"] = mult
+        for uid, data in gc["members_xp"].items():
+            data["level"] = level_from_xp(data["xp"], mult)
+        save_config(cfg)
+        await ctx.send(embed=success_embed(
+            f"Level difficulty set to **{mult}x**. Everyone's level has been recalculated to match "
+            f"(their XP totals are untouched — only how much XP each level requires changed)."
+        ))
+
     elif sub == "setchannel":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
             return await ctx.send(embed=error_embed("You don't have permission to use this command."))
@@ -2242,11 +2298,13 @@ async def pfx_level(ctx, sub: str = "", *args):
         lvl_ch   = ctx.guild.get_channel(gc["level_channel"]) if gc.get("level_channel") else None
         xp_range = gc.get("xp_per_message", [15, 25])
         cooldown = gc.get("xp_cooldown", 60)
+        difficulty = gc.get("xp_difficulty", 1.0)
         embed = base_embed("Leveling Status", None, COLOR_SUCCESS if enabled else COLOR_ERROR)
         embed.add_field(name="Status",     value="Enabled" if enabled else "Disabled",             inline=True)
         embed.add_field(name="Channel",    value=lvl_ch.mention if lvl_ch else "Current channel",  inline=True)
         embed.add_field(name="XP/Message", value=str(xp_range[0]) + "-" + str(xp_range[1]) + " XP", inline=True)
         embed.add_field(name="Cooldown",   value=str(cooldown) + " seconds",                       inline=True)
+        embed.add_field(name="Difficulty", value=f"{difficulty}x",                                 inline=True)
         await ctx.send(embed=embed)
 
     else:
@@ -2257,6 +2315,9 @@ async def pfx_level(ctx, sub: str = "", *args):
             "`level toggle` - turn leveling on/off\n"
             "`level setchannel #channel` - set the notification channel\n"
             "`level setchannel` - disable the channel override\n"
+            "`level xp <min> <max>` - set XP earned per message\n"
+            "`level cooldown <seconds>` - set time between XP gains\n"
+            "`level difficulty <multiplier>` - scale how much XP each level needs\n"
             "`level role set/remove/list` - manage per-level role rewards\n"
             "`level message set/show/reset` - customize the level-up notification\n"
             "`level status` - view current configuration\n"
@@ -2289,24 +2350,25 @@ async def pfx_xp(ctx, sub: str = "", *args):
         amount = int(args[1])
     except ValueError:
         return await ctx.send(embed=error_embed("Amount must be a number."))
+    diff = gc.get("xp_difficulty", 1.0)
     if sub == "add":
         data["xp"] = max(0, data["xp"] + amount)
-        data["level"] = level_from_xp(data["xp"])
+        data["level"] = level_from_xp(data["xp"], diff)
         save_config(cfg)
         await ctx.send(embed=success_embed(f"+{amount} XP to {member.mention} (Total: {data['xp']:,} · Level {data['level']})"))
     elif sub == "remove":
         data["xp"] = max(0, data["xp"] - amount)
-        data["level"] = level_from_xp(data["xp"])
+        data["level"] = level_from_xp(data["xp"], diff)
         save_config(cfg)
         await ctx.send(embed=success_embed(f"-{amount} XP from {member.mention} (Total: {data['xp']:,} · Level {data['level']})"))
     elif sub == "set":
         data["xp"] = max(0, amount)
-        data["level"] = level_from_xp(data["xp"])
+        data["level"] = level_from_xp(data["xp"], diff)
         save_config(cfg)
         await ctx.send(embed=success_embed(f"XP {member.mention} → {amount:,} (Level {data['level']})"))
     elif sub == "setlevel":
         if not 0 <= amount <= 999: return await ctx.send(embed=error_embed("Level must be between 0 and 999."))
-        total = sum(xp_for_level(lv) for lv in range(amount))
+        total = sum(xp_for_level(lv, diff) for lv in range(amount))
         data["xp"] = total; data["level"] = amount
         save_config(cfg)
         await ctx.send(embed=success_embed(f"Level {member.mention} → **{amount}** ({total:,} XP)"))
@@ -3505,7 +3567,7 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
     target      = member or i.user
     gc          = guild_cfg(cfg, i.guild.id)
     data        = get_member_xp(gc, str(target.id))
-    lvl, cx, nx = xp_progress(data["xp"])
+    lvl, cx, nx = xp_progress(data["xp"], gc.get("xp_difficulty", 1.0))
     all_m       = sorted(gc["members_xp"].items(), key=lambda x: x[1].get("xp",0), reverse=True)
     rank        = next((idx+1 for idx,(uid,_) in enumerate(all_m) if uid == str(target.id)), 1)
     is_prem     = user_has_premium(i.guild, target)
