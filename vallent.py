@@ -205,6 +205,7 @@ def _init_guild(gc: dict):
             "max_tickets":  legacy_max or 1,
             "title":        "Support Tickets",
             "description":  "Click the button below to open a support ticket.",
+            "welcome_message": "Thanks for reaching out, {user}! Our support team has been notified and will be with you shortly. Please describe your issue in as much detail as you can.",
             "message_id":   None,
             "channel_id":   None,
         }
@@ -215,12 +216,16 @@ def _init_guild(gc: dict):
         p.setdefault("max_tickets",  1)
         p.setdefault("title",        "Support Tickets")
         p.setdefault("description",  "Click the button below to open a support ticket.")
+        p.setdefault("welcome_message", "Thanks for reaching out, {user}! Our support team has been notified and will be with you shortly. Please describe your issue in as much detail as you can.")
         p.setdefault("message_id",   None)
         p.setdefault("channel_id",   None)
     # Migrate the old active_tickets format (uid -> single channel_id int) to the new format (uid -> list).
     for uid, val in list(gc["active_tickets"].items()):
         if isinstance(val, int):
-            gc["active_tickets"][uid] = [{"channel_id": val, "panel_id": "default", "opened_at": None}]
+            gc["active_tickets"][uid] = [{"channel_id": val, "panel_id": "default", "opened_at": None, "claimed_by": None}]
+        else:
+            for tk in val:
+                tk.setdefault("claimed_by", None)
 
 def save_config(cfg: dict):
     os.makedirs("data", exist_ok=True)
@@ -606,7 +611,7 @@ BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "dev
 
 BOT_ROLE_BADGES = {
     # Emoji sourced from emoji_config.py — edit that file to set the emoji IDs
-    "founder":        {"label": "• FOUNDER",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
+    "founder":        {"label": "• Founder",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
     "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
@@ -1056,15 +1061,21 @@ async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
         "channel_id": ch.id,
         "panel_id":   panel_id,
         "opened_at":  discord.utils.utcnow().isoformat(),
+        "claimed_by": None,
     })
     save_config(cfg)
 
+    welcome_text = (panel.get("welcome_message") or "Thanks for reaching out, {user}! Our support team will be with you shortly.")
+    welcome_text = (welcome_text
+                    .replace("{user}",   interaction.user.mention)
+                    .replace("{server}", interaction.guild.name)
+                    .replace("{panel}",  panel.get("title") or panel_id))
     welcome_embed = base_embed(
         panel.get("title") or f"Ticket — {interaction.user.display_name}",
-        panel.get("description") or "Our support team will be with you shortly. Please describe your issue here.",
+        welcome_text,
         color=COLOR_PRIMARY
     )
-    await ch.send(content=interaction.user.mention, embed=welcome_embed, view=TicketCloseView())
+    await ch.send(content=interaction.user.mention, embed=welcome_embed, view=TicketControlView())
 
     log_id = panel.get("log_channel")
     if log_id:
@@ -1123,9 +1134,12 @@ async def close_ticket_channel(guild: discord.Guild, channel: discord.abc.GuildC
             except Exception:
                 pass
             owner_member = guild.get_member(int(uid))
+            claimed_by   = tk.get("claimed_by")
+            claimer      = guild.get_member(claimed_by) if claimed_by else None
             log_emb = base_embed("Ticket Closed", None, color=COLOR_ERROR)
             log_emb.add_field(name="Ticket Owner", value=f"{owner_member.mention if owner_member else '<@'+uid+'>'} (`{uid}`)", inline=True)
             log_emb.add_field(name="Closed By",    value=closer.mention, inline=True)
+            log_emb.add_field(name="Claimed By",   value=claimer.mention if claimer else "*(unclaimed)*", inline=True)
             log_emb.add_field(name="Panel",        value=panel.get("title") or tk.get("panel_id", "?"), inline=True)
             log_emb.add_field(name="Duration",     value=duration_str, inline=True)
             log_emb.add_field(name="Reason",       value=reason, inline=False)
@@ -1141,11 +1155,42 @@ async def close_ticket_channel(guild: discord.Guild, channel: discord.abc.GuildC
         pass
     return True
 
-class TicketCloseView(discord.ui.View):
+class TicketControlView(discord.ui.View):
     """Persistent, static view — one custom_id shared by every ticket, safe to use
-    across bot restarts via bot.add_view() in on_ready."""
+    across bot restarts via bot.add_view() in on_ready. Holds both Claim and
+    Close so staff always have both actions in the same place."""
     def __init__(self):
         super().__init__(timeout=None)
+
+    @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary,
+                        emoji="🙋", custom_id="vx_ticket_claim")
+    async def claim_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        gc = guild_cfg(cfg, interaction.guild.id)
+        uid, tk, panel = _find_active_ticket(gc, interaction.channel.id)
+        if not tk:
+            return await interaction.response.send_message(embed=error_embed("This channel isn't an active ticket."), ephemeral=True)
+
+        is_owner_ = interaction.user.id == bot.owner_id
+        role_id   = panel.get("support_role")
+        has_role  = bool(role_id and interaction.guild.get_role(role_id) in interaction.user.roles)
+        can_claim = is_owner_ or interaction.user.guild_permissions.manage_channels or has_role
+        if not can_claim:
+            return await interaction.response.send_message(embed=error_embed("Only support staff can claim tickets."), ephemeral=True)
+
+        claimed_by = tk.get("claimed_by")
+        if claimed_by and claimed_by == interaction.user.id:
+            tk["claimed_by"] = None
+            save_config(cfg)
+            return await interaction.response.send_message(embed=success_embed(f"🙋 {interaction.user.mention} unclaimed this ticket."))
+        if claimed_by:
+            claimer = interaction.guild.get_member(claimed_by)
+            return await interaction.response.send_message(
+                embed=error_embed(f"This ticket is already claimed by {claimer.mention if claimer else 'someone else'}."),
+                ephemeral=True)
+
+        tk["claimed_by"] = interaction.user.id
+        save_config(cfg)
+        await interaction.response.send_message(embed=success_embed(f"🙋 Ticket claimed by {interaction.user.mention} — they'll be handling this from here."))
 
     @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger,
                         emoji=ICON_TICKET_CLOSE if ICON_TICKET_CLOSE else "🔒",
@@ -1352,7 +1397,7 @@ async def on_ready():
         print(f"[{BOT_NAME}] Sync error: {e}")
 
     # Re-register persistent views (tickets) so buttons keep working after a restart.
-    bot.add_view(TicketCloseView())
+    bot.add_view(TicketControlView())
     panel_ids = {pid for gcfg in cfg.get("guilds", {}).values() for pid in gcfg.get("ticket", {}).get("panels", {}).keys()}
     for pid in panel_ids:
         bot.add_view(TicketOpenView(pid))
@@ -2474,6 +2519,33 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
         note = "The panel message was updated too." if edited else "Config saved, but the old panel message wasn't found/was deleted — resend it with `ticket panel`."
         await ctx.send(embed=success_embed(f"Panel `{panel_id}` updated.\n{note}"))
 
+    elif sub == "welcome":
+        if not is_manager():
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
+        parts = rest.split(maxsplit=1)
+        if len(parts) < 2:
+            panel_id = parts[0].lower() if parts else ""
+            panel    = panels.get(panel_id)
+            current  = panel.get("welcome_message") if panel else None
+            return await ctx.send(embed=info_embed("Ticket Welcome Message", (
+                "Usage: `ticket welcome <panel_id> <message>`\n\n"
+                "This is shown INSIDE the ticket channel once it's opened — separate from the panel's "
+                "public description, so you're not stuck repeating the same text twice.\n"
+                "Placeholders: `{user}` `{server}` `{panel}`\n\n"
+                + (f"Current for `{panel_id}`:\n```{current}```" if current else "")
+            )))
+        panel_id = parts[0].lower()
+        panel    = panels.get(panel_id)
+        if not panel:
+            return await ctx.send(embed=error_embed(f"Panel `{panel_id}` not found."))
+        panel["welcome_message"] = parts[1].strip()
+        save_config(cfg)
+        preview = (parts[1]
+                   .replace("{user}", ctx.author.mention)
+                   .replace("{server}", ctx.guild.name)
+                   .replace("{panel}", panel.get("title") or panel_id))
+        await ctx.send(embed=success_embed(f"Welcome message for `{panel_id}` updated.\n\n**Preview:**\n{preview}"))
+
     elif sub == "list":
         if not panels:
             return await ctx.send(embed=info_embed("Ticket Panels", "No panels have been set up yet."))
@@ -2508,11 +2580,13 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
             "`ticket setup <panel_id> <cat_id> <log_id> [role_id] [max]`\n"
             "`ticket panel <panel_id> <title> | <description>`\n"
             "`ticket edit <panel_id> <title> | <description>`\n"
+            "`ticket welcome <panel_id> <message>` — customize the message shown INSIDE the ticket (separate from the panel's public description)\n"
             "`ticket list`\n"
             "`ticket delete <panel_id>`\n"
             "`ticket close [reason]`\n\n"
             "Each panel has its own category, log channel, and support role — "
-            "so every ticket type can have its logs kept separate."
+            "so every ticket type can have its logs kept separate.\n"
+            "Every ticket has **Claim** and **Close** buttons, so staff can mark who's handling it."
         )))
 
 # ── GIVEAWAY ─────────────────────────────────────────────────────
@@ -3445,7 +3519,7 @@ HELP_CATEGORIES = [
     )),
     ("role_voice", "Role & Voice", ICON_ROLE, "🎭", "`addrole` · `removerole` · `move`"),
     ("info", "Info", ICON_INFO, "ℹ️", "`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`"),
-    ("ticket", "Ticket", ICON_TICKET, "🎫", "`ticket setup` · `ticket panel` · `ticket edit` · `ticket list` · `ticket delete` · `ticket close`"),
+    ("ticket", "Ticket", ICON_TICKET, "🎫", "`ticket setup` · `ticket panel` · `ticket edit` · `ticket welcome` · `ticket list` · `ticket delete` · `ticket close`\nEach ticket has Claim + Close buttons."),
     ("level", "Level & XP", ICON_LEVEL, "📈", "`rank` · `leaderboard` (alias `lb`) · `level toggle/setchannel/status` · `xp`"),
     ("giveaway", "Giveaway", ICON_GIVEAWAY, "🎉", "`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`"),
     ("antispam", "Antispam", ICON_ANTISPAM, "🛡️", "`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`"),
