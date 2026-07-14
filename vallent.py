@@ -162,6 +162,7 @@ def _init_guild(gc: dict):
     gc.setdefault("xp_per_message",    [15, 25])
     gc.setdefault("xp_cooldown",       60)
     gc.setdefault("xp_difficulty",     1.0)
+    gc.setdefault("xp_ignore_roles",   [])   # role IDs that never gain XP
     gc.setdefault("members_xp",        {})
     gc.setdefault("level_roles",       {})
     gc.setdefault("warnings",          {})
@@ -1538,7 +1539,9 @@ async def on_message(message: discord.Message):
 
     # ── XP system ────────────────────────────────────────────────────────
     gc = guild_cfg(cfg, message.guild.id)
-    if gc.get("leveling_enabled", True):
+    ignore_role_ids = set(gc.get("xp_ignore_roles", []))
+    author_role_ids = {r.id for r in message.author.roles} if isinstance(message.author, discord.Member) else set()
+    if gc.get("leveling_enabled", True) and not (ignore_role_ids & author_role_ids):
         import time
         uid  = str(message.author.id)
         data = get_member_xp(gc, uid)
@@ -2293,6 +2296,37 @@ async def pfx_level(ctx, sub: str = "", *args):
             f"(their XP totals are untouched — only how much XP each level requires changed)."
         ))
 
+    elif sub == "noxp":
+        if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+            return await ctx.send(embed=error_embed("You don't have permission to use this command."))
+        ignore_roles = gc.setdefault("xp_ignore_roles", [])
+        action = args[0].lower() if args else ""
+        if action == "add" and ctx.message.role_mentions:
+            r = ctx.message.role_mentions[0]
+            if r.id not in ignore_roles:
+                ignore_roles.append(r.id)
+                save_config(cfg)
+            await ctx.send(embed=success_embed(f"Members with {r.mention} will no longer gain XP or level up."))
+        elif action == "remove" and ctx.message.role_mentions:
+            r = ctx.message.role_mentions[0]
+            if r.id in ignore_roles:
+                ignore_roles.remove(r.id)
+                save_config(cfg)
+            await ctx.send(embed=success_embed(f"{r.mention} can gain XP again."))
+        elif action == "list":
+            lines = []
+            for rid in ignore_roles:
+                role = ctx.guild.get_role(rid)
+                lines.append(role.mention if role else f"`{rid}` (role no longer exists)")
+            await ctx.send(embed=info_embed("No-XP Roles", "\n".join(lines) or "*(none — everyone gains XP normally)*"))
+        else:
+            await ctx.send(embed=info_embed("No-XP Roles", (
+                "`level noxp add @role` — members with this role never gain XP or level up\n"
+                "`level noxp remove @role` — let them gain XP again\n"
+                "`level noxp list` — view all no-XP roles\n\n"
+                "Useful for muted/timeout roles, bot-adjacent roles, or a dedicated \"NOXP\" role for people who opt out."
+            )))
+
     elif sub == "setchannel":
         if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
             return await ctx.send(embed=error_embed("You don't have permission to use this command."))
@@ -2371,6 +2405,7 @@ async def pfx_level(ctx, sub: str = "", *args):
         embed.add_field(name="XP/Message", value=str(xp_range[0]) + "-" + str(xp_range[1]) + " XP", inline=True)
         embed.add_field(name="Cooldown",   value=str(cooldown) + " seconds",                       inline=True)
         embed.add_field(name="Difficulty", value=f"{difficulty}x",                                 inline=True)
+        embed.add_field(name="No-XP Roles", value=str(len(gc.get("xp_ignore_roles", []))) + " role(s)", inline=True)
         await ctx.send(embed=embed)
 
     else:
@@ -2384,6 +2419,7 @@ async def pfx_level(ctx, sub: str = "", *args):
             "`level xp <min> <max>` - set XP earned per message\n"
             "`level cooldown <seconds>` - set time between XP gains\n"
             "`level difficulty <multiplier>` - scale how much XP each level needs\n"
+            "`level noxp add/remove/list @role` - exclude a role from gaining XP entirely\n"
             "`level role set/remove/list` - manage per-level role rewards\n"
             "`level message set/show/reset` - customize the level-up notification\n"
             "`level status` - view current configuration\n"
