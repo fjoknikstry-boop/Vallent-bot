@@ -56,7 +56,7 @@ import antinuke
 # ══════════════════════════════════════════════════════════════════
 
 BOT_NAME      = "VALLENT EXS"
-BOT_TAGLINE   = "No mercy. No limits. Full control."
+BOT_TAGLINE   = "Nocturne Development."
 BOT_VERSION   = "1.0.0"
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
