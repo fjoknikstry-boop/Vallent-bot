@@ -376,12 +376,15 @@ class VallentTree(app_commands.CommandTree):
         # ── Premium-locked command ──────────────────────────────────────
         if cmd_name in cfg.get("premium_commands", []) and not is_owner_ and not user_has_premium(interaction.guild, interaction.user):
             try:
-                await interaction.response.send_message(
-                    embed=warning_embed(
-                        "Premium Required",
-                        f"Command `/{cmd_name}` is for **Premium** users only.\n"
-                        "Contact the owner or join the support server to subscribe."
-                    ), ephemeral=True)
+                kwargs = {"embed": warning_embed(
+                    "Premium Required",
+                    f"Command `/{cmd_name}` is for **Premium** users only.\n"
+                    "Contact the owner or join the support server to subscribe."
+                ), "ephemeral": True}
+                view = premium_upsell_view()
+                if view:
+                    kwargs["view"] = view
+                await interaction.response.send_message(**kwargs)
             except discord.InteractionResponded:
                 pass
             return False
@@ -428,6 +431,16 @@ def invite_support_view() -> discord.ui.View:
         view.add_item(discord.ui.Button(label="Invite Me", style=discord.ButtonStyle.link, url=invite_url))
     if SUPPORT_INVITE and SUPPORT_INVITE.startswith(("http://", "https://")):
         view.add_item(discord.ui.Button(label="Support", style=discord.ButtonStyle.link, url=SUPPORT_INVITE))
+    return view
+
+def premium_upsell_view() -> Optional[discord.ui.View]:
+    """Single 'Get Premium' link button pointing at the support server —
+    shown whenever someone hits a Premium-locked command. Returns None if
+    SUPPORT_INVITE isn't configured, so callers can skip attaching a view."""
+    if not (SUPPORT_INVITE and SUPPORT_INVITE.startswith(("http://", "https://"))):
+        return None
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(label="Get Premium", style=discord.ButtonStyle.link, url=SUPPORT_INVITE, emoji="💎"))
     return view
 
 def bot_info_embed(mention: str, guild_id: int) -> discord.Embed:
@@ -847,11 +860,15 @@ async def global_prefix_premium_check(ctx: commands.Context) -> bool:
         return True
     if user_has_premium(ctx.guild, ctx.author):
         return True
-    await ctx.send(embed=warning_embed(
+    kwargs = {"embed": warning_embed(
         "Premium Required",
         f"Command `{cmd}` is for **Premium** users only.\n"
-        "Contact the owner to subscribe."
-    ))
+        "Contact the owner or join the support server to subscribe."
+    )}
+    view = premium_upsell_view()
+    if view:
+        kwargs["view"] = view
+    await ctx.send(**kwargs)
     return False
 
 # ══════════════════════════════════════════════════════════════════
