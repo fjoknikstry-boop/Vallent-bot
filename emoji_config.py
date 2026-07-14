@@ -49,6 +49,7 @@ ICON_BOOST       = "<:emoji_56:1522694857913667684>"   # Icon default notifikasi
 ICON_ANTINUKE    = "<:emoji_59:1522400572228108389>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
 ICON_IGNORE      = "<:emoji_55:1522411835725185186>"
 ICON_AUTOMOD     = "<:emoji_56:1523362034169675898>"
+ICON_AUTORESPONSE = "<:emoji_60:1522400613160456242>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
 # Status / result icons
 ICON_SUCCESS     = "<:emoji_59:1522429663690100756>"   # Icon sukses (checklist, dll)
 ICON_ERROR       = "<:emoji_60:1522431940492398754>"   # Icon error / gagal
