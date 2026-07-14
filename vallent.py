@@ -44,7 +44,7 @@ from emoji_config import (
     ICON_SUCCESS, ICON_ERROR, ICON_WARNING, ICON_LOADING,
     ICON_PROFILE, ICON_BADGES, ICON_COMMANDS, ICON_PREMIUM_TAG,
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
-    ICON_BOOST, ICON_ANTINUKE, ICON_IGNORE, ICON_AUTOMOD,
+    ICON_BOOST, ICON_ANTINUKE, ICON_IGNORE, ICON_AUTOMOD, ICON_AUTORESPONSE,
     e
 )
 import rank_card
@@ -56,7 +56,7 @@ import antinuke
 # ══════════════════════════════════════════════════════════════════
 
 BOT_NAME      = "VALLENT EXS"
-BOT_TAGLINE   = "Nocturne Development."
+BOT_TAGLINE   = "No mercy. No limits. Full control."
 BOT_VERSION   = "1.0.0"
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -178,6 +178,8 @@ def _init_guild(gc: dict):
     gc.setdefault("active_tickets",    {})   # uid(str) -> [{"channel_id","panel_id","opened_at"}, ...]
     gc.setdefault("mod_log_channel",   None)
     gc.setdefault("ignored_channels",  [])   # channel ID -> bot stays fully silent (no commands, no XP)
+    gc.setdefault("autoresponses_enabled", True)
+    gc.setdefault("autoresponses", {})   # trigger(lower) -> {"trigger","response","match","case_sensitive"}
     gc.setdefault("antinuke", {
         "enabled":     False,
         "log_channel": None,
@@ -1647,6 +1649,25 @@ async def on_message(message: discord.Message):
     if bot.user in message.mentions and not stripped:
         return await message.reply(embed=bot_info_embed(message.author.mention, message.guild.id), view=invite_support_view(), mention_author=False)
 
+    # ── Keyword auto-responses ────────────────────────────────────────────
+    if gc.get("autoresponses_enabled", True) and gc.get("autoresponses"):
+        content_lower = message.content.lower()
+        for entry in gc["autoresponses"].values():
+            trigger = entry["trigger"] if entry.get("case_sensitive") else entry["trigger"].lower()
+            haystack = message.content if entry.get("case_sensitive") else content_lower
+            match_type = entry.get("match", "contains")
+            hit = (
+                (match_type == "contains"   and trigger in haystack) or
+                (match_type == "exact"      and haystack == trigger) or
+                (match_type == "startswith" and haystack.startswith(trigger))
+            )
+            if hit:
+                try:
+                    await message.channel.send(entry["response"], reference=message, mention_author=False)
+                except Exception:
+                    pass
+                break
+
     # ── Prefix routing + no-prefix ───────────────────────────────────────
     low = message.content.lower().strip()
     if low.startswith("!vx ") or low == "!vx":
@@ -2701,6 +2722,71 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
 
 # ── ANTISPAM HONEYPOT ─────────────────────────────────────────────
 
+@bot.command(name="autoresponse", aliases=["arp", "autoreply"])
+async def pfx_autoresponse(ctx, action: str = "", *, rest: str = ""):
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
+    gc      = guild_cfg(cfg, ctx.guild.id)
+    entries = gc.setdefault("autoresponses", {})
+    action  = action.lower()
+
+    if action == "add":
+        parts = rest.split(maxsplit=1)
+        if len(parts) < 2 or "|" not in parts[1]:
+            return await ctx.send(embed=error_embed(
+                "Usage: `autoresponse add <trigger> | <response>`\n"
+                "Example: `autoresponse add discord.gg/ | Please don't post invite links here.`"
+            ))
+        trigger_raw = parts[0]
+        response    = parts[1].split("|", 1)[1].strip()
+        if not response:
+            return await ctx.send(embed=error_embed("The response text can't be empty."))
+        key = trigger_raw.lower()
+        entries[key] = {"trigger": trigger_raw, "response": response, "match": "contains", "case_sensitive": False}
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Auto-response added for trigger `{trigger_raw}`."))
+
+    elif action == "remove":
+        key = rest.strip().lower()
+        if key not in entries:
+            return await ctx.send(embed=error_embed(f"No auto-response found for trigger `{rest.strip()}`. Check `autoresponse list` for exact triggers."))
+        del entries[key]
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Auto-response for `{rest.strip()}` removed."))
+
+    elif action == "match":
+        parts = rest.split()
+        if len(parts) != 2 or parts[1].lower() not in ("contains", "exact", "startswith"):
+            return await ctx.send(embed=error_embed("Usage: `autoresponse match <trigger> <contains/exact/startswith>`"))
+        key = parts[0].lower()
+        if key not in entries:
+            return await ctx.send(embed=error_embed(f"No auto-response found for trigger `{parts[0]}`."))
+        entries[key]["match"] = parts[1].lower()
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Match type for `{parts[0]}` set to **{parts[1].lower()}**."))
+
+    elif action == "list":
+        if not entries:
+            return await ctx.send(embed=info_embed("Auto-Responses", "No auto-responses configured yet."))
+        lines = [f"**`{v['trigger']}`** ({v.get('match','contains')}) → {v['response'][:80]}" for v in entries.values()]
+        await ctx.send(embed=info_embed(f"Auto-Responses ({len(entries)})", "\n".join(lines)))
+
+    elif action == "toggle":
+        gc["autoresponses_enabled"] = not gc.get("autoresponses_enabled", True)
+        save_config(cfg)
+        state = "enabled" if gc["autoresponses_enabled"] else "disabled"
+        await ctx.send(embed=success_embed(f"Auto-responses are now **{state}** in this server."))
+
+    else:
+        await ctx.send(embed=info_embed("Auto-Response", (
+            "`autoresponse add <trigger> | <response>` — reply automatically when a message contains the trigger\n"
+            "`autoresponse remove <trigger>` — delete one\n"
+            "`autoresponse match <trigger> <contains/exact/startswith>` — change how it matches (default: contains)\n"
+            "`autoresponse list` — view all configured triggers\n"
+            "`autoresponse toggle` — turn the whole system on/off\n\n"
+            "Matching is case-insensitive by default and checks every message (not just commands)."
+        )))
+
 @bot.command(name="ignorechannel", aliases=["ignorech", "ic"])
 async def pfx_ignorechannel(ctx, action: str = "", *, rest: str = ""):
     if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
@@ -3526,6 +3612,7 @@ HELP_CATEGORIES = [
     ("antinuke", "Anti-Nuke", ICON_ANTINUKE, "🛡️", "`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`"),
     ("automod", "AutoMod", ICON_AUTOMOD, "🤖", "`automod setup` — creates a native Discord AutoMod rule (blocks profanity/sexual content/slurs)\n`automod list` · `automod remove <rule_id>`"),
     ("ignore", "Ignore Channel", ICON_IGNORE, "🔇", "`ignorechannel add/remove/list [#channel]` — makes the bot completely silent in a specific channel"),
+    ("autoresponse", "Auto-Response", ICON_AUTORESPONSE, "💬", "`autoresponse add <trigger> | <response>` · `remove` · `match` · `list` · `toggle`"),
     ("boost", "Server Boost", ICON_BOOST, "🎉", "`/boostconfig` (slash only) — configure the server boost notification channel & appearance"),
 ]
 
