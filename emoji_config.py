@@ -39,7 +39,7 @@ BADGE_USER       = "<:emoji_55:1527095812763549766>"   # Emoji untuk badge USER
 # Section headers di !vx help
 ICON_MODERATION  = "<:emoji_38:1527089831618805770>"   # Icon untuk section Moderation
 ICON_ROLE        = "<:emoji_53:1527091577661689957>"   # Icon untuk section Role & Voice
-ICON_INFO        = "<:emoji_20:1527088916266487848>"   # Icon untuk section Info
+ICON_INFO        = "<:emoji_54:1527099482750320750>"   # Icon untuk section Info
 ICON_TICKET      = "<:emoji_27:1527089156516352132>"   # Icon untuk section Ticket
 ICON_LEVEL       = "<:emoji_55:1527093348517548044>"   # Icon untuk section Level & XP
 ICON_GIVEAWAY    = "<:emoji_14:1527088695688302732>"   # Icon untuk section Giveaway
