@@ -28,7 +28,7 @@ BADGE_MANAGEMENT = "<:emoji_12:1527088640449056870>"   # Emoji untuk badge MANAG
 BADGE_MODERATOR       = "<:emoji_28:1527089200871116820>"   # Emoji untuk badge MODERATOR — isi ID emoji lu di sini
 BADGE_SERVER_MANAGER  = "<:emoji_15:1527088729682874439>"   # Emoji untuk badge SERVER MANAGER — isi ID emoji lu di sini
 BADGE_STAFF      = "<:emoji_39:1527089881333891153>"   # Emoji untuk badge STAFF
-BADGE_PREMIUM    = "<:emoji_63:1522588934498943016>"   # Emoji untuk badge PREMIUM
+BADGE_PREMIUM    = "<:emoji_17:1527088794602442832>"   # Emoji untuk badge PREMIUM
 BADGE_NOPREFIX   = "<:emoji_24:1527089054204694618>"   # Emoji untuk badge NO PREFIX
 BADGE_USER       = "<:emoji_55:1527095812763549766>"   # Emoji untuk badge USER
 
