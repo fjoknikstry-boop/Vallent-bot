@@ -1579,12 +1579,14 @@ async def on_message(message: discord.Message):
                 afk_hits.append((m, entry))
                 seen_ids.add(m.id)
         if afk_hits:
-            emb = base_embed(_title_with_icon(ICON_AFK, "💤", "AFK"), None, color=COLOR_WARNING)
+            emb = base_embed(_title_with_icon(ICON_AFK, "💤", "AFK"), None, color=COLOR_PRIMARY)
             for m, entry in afk_hits[:5]:
-                reason    = entry.get("reason") or "AFK"
-                since_ts  = entry.get("since")
-                since_txt = f" · since <t:{since_ts}:R>" if since_ts else ""
-                emb.add_field(name=m.display_name, value=f"{reason}{since_txt}", inline=False)
+                reason   = entry.get("reason") or "AFK"
+                since_ts = entry.get("since")
+                value    = f"**Reason:** {reason}"
+                if since_ts:
+                    value += f"\n**Since:** <t:{since_ts}:R>"
+                emb.add_field(name=f"{m.display_name} is AFK", value=value, inline=False)
             try:
                 await message.channel.send(embed=emb, reference=message, mention_author=False)
             except Exception:
