@@ -45,6 +45,7 @@ from emoji_config import (
     ICON_PROFILE, ICON_BADGES, ICON_COMMANDS, ICON_PREMIUM_TAG,
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
     ICON_BOOST, ICON_ANTINUKE, ICON_IGNORE, ICON_AUTOMOD, ICON_AUTORESPONSE,
+    ICON_AFK,
     e
 )
 import rank_card
@@ -181,6 +182,7 @@ def _init_guild(gc: dict):
     gc.setdefault("ignored_channels",  [])   # channel ID -> bot stays fully silent (no commands, no XP)
     gc.setdefault("autoresponses_enabled", True)
     gc.setdefault("autoresponses", {})   # trigger(lower) -> {"trigger","response","match","case_sensitive"}
+    gc.setdefault("afk_users", {})   # uid(str) -> {"reason": str, "since": unix_ts}
     gc.setdefault("antinuke", {
         "enabled":     False,
         "log_channel": None,
@@ -984,6 +986,20 @@ async def do_ping(reply_fn):
     embed = base_embed("Pong!", f"Latency: **{lat}ms**", COLOR_SUCCESS if lat < 100 else COLOR_WARNING)
     await reply_fn(embed=embed)
 
+async def do_afk_set(guild: discord.Guild, author: discord.abc.User, reason: str, reply_fn):
+    """Mark `author` as AFK in this guild. Any message they send afterwards
+    (other than re-running `afk`) automatically clears it — see on_message.
+    Anyone who @mentions them while AFK gets an embed with their reason."""
+    gc      = guild_cfg(cfg, guild.id)
+    afk_map = gc.setdefault("afk_users", {})
+    reason  = (reason or "").strip()[:200] or "AFK"
+    afk_map[str(author.id)] = {"reason": reason, "since": int(discord.utils.utcnow().timestamp())}
+    save_config(cfg)
+    await reply_fn(embed=success_embed(
+        f"{author.mention} is now **AFK**: {reason}\n"
+        "-# Sending any message will automatically clear this."
+    ))
+
 async def do_addemoji(guild, emoji_or_url: str, name: str):
     import aiohttp, io
     try:
@@ -1522,6 +1538,58 @@ async def on_message(message: discord.Message):
     if message.channel.id in gc_ignore.get("ignored_channels", []):
         return
 
+    # ── AFK system ───────────────────────────────────────────────────────────
+    gc_afk  = guild_cfg(cfg, message.guild.id)
+    afk_map = gc_afk.get("afk_users", {})
+
+    # -- Returning from AFK: any message from a currently-AFK member clears
+    #    their status, EXCEPT when the message is them re-running the `afk`
+    #    command itself (that's setting a new status, not "coming back").
+    author_key = str(message.author.id)
+    if author_key in afk_map:
+        low_afk = message.content.strip().lower()
+        is_afk_cmd = (
+            low_afk in ("!vx afk", "!v afk") or
+            low_afk.startswith(("!vx afk ", "!v afk ")) or
+            (user_has_no_prefix(message.guild, message.author) and (low_afk == "afk" or low_afk.startswith("afk ")))
+        )
+        if not is_afk_cmd:
+            entry = afk_map.pop(author_key, None)
+            save_config(cfg)
+            if entry:
+                since_ts = entry.get("since")
+                since_txt = f" (AFK since <t:{since_ts}:R>)" if since_ts else ""
+                try:
+                    await message.channel.send(
+                        embed=success_embed(f"Welcome back, {message.author.mention}! Your AFK status has been removed{since_txt}."),
+                        delete_after=8
+                    )
+                except Exception:
+                    pass
+
+    # -- Notify the sender if this message @mentions someone who is AFK
+    if message.mentions:
+        afk_hits = []
+        seen_ids = set()
+        for m in message.mentions:
+            if m.id == message.author.id or m.bot or m.id in seen_ids:
+                continue
+            entry = afk_map.get(str(m.id))
+            if entry:
+                afk_hits.append((m, entry))
+                seen_ids.add(m.id)
+        if afk_hits:
+            emb = base_embed(_title_with_icon(ICON_AFK, "💤", "AFK"), None, color=COLOR_WARNING)
+            for m, entry in afk_hits[:5]:
+                reason    = entry.get("reason") or "AFK"
+                since_ts  = entry.get("since")
+                since_txt = f" · since <t:{since_ts}:R>" if since_ts else ""
+                emb.add_field(name=m.display_name, value=f"{reason}{since_txt}", inline=False)
+            try:
+                await message.channel.send(embed=emb, reference=message, mention_author=False)
+            except Exception:
+                pass
+
     # ── Honeypot channel check ──────────────────────────────────────────────
     gc_trap  = guild_cfg(cfg, message.guild.id)
     ac_trap  = gc_trap.get("antispam", {})
@@ -2048,6 +2116,10 @@ async def pfx_avatar(ctx, member: discord.Member = None):
 @bot.command(name="ping", aliases=["pong", "latency"])
 async def pfx_ping(ctx):
     await do_ping(ctx.send)
+
+@bot.command(name="afk", aliases=["away"])
+async def pfx_afk(ctx, *, reason: str = ""):
+    await do_afk_set(ctx.guild, ctx.author, reason, ctx.send)
 
 @bot.command(name="addemoji", aliases=["ae"])
 async def pfx_addemoji(ctx, emoji_or_url: str = "", *, name: str = ""):
@@ -3658,6 +3730,11 @@ HELP_CATEGORIES = [
     )),
     ("role_voice", "Role & Voice", ICON_ROLE, "🎭", "`addrole` · `removerole` · `move`"),
     ("info", "Info", ICON_INFO, "ℹ️", "`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`"),
+    ("afk", "AFK System", ICON_AFK, "💤", (
+        "`afk [reason]` (alias `away`) · `/afk` — set yourself as AFK\n"
+        "Sending any message automatically clears your AFK status.\n"
+        "Anyone who @mentions you while you're AFK gets notified with your reason."
+    )),
     ("ticket", "Ticket", ICON_TICKET, "🎫", "`ticket setup` · `ticket panel` · `ticket edit` · `ticket welcome` · `ticket list` · `ticket delete` · `ticket close`\nEach ticket has Claim + Close buttons."),
     ("level", "Level & XP", ICON_LEVEL, "📈", "`rank` · `leaderboard` (alias `lb`) · `level toggle/setchannel/status` · `xp`"),
     ("giveaway", "Giveaway", ICON_GIVEAWAY, "🎉", "`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`"),
@@ -3933,6 +4010,11 @@ async def slash_boostconfig(
 async def slash_ping(i: discord.Interaction):
     lat = round(bot.latency * 1000)
     await i.response.send_message(embed=base_embed("Pong!", f"Latency: **{lat}ms**", COLOR_SUCCESS if lat < 100 else COLOR_WARNING))
+
+@bot.tree.command(name="afk", description="Set yourself as AFK — anyone who mentions you will be notified.")
+@app_commands.describe(reason="Optional reason shown to people who mention you (default: 'AFK')")
+async def slash_afk(i: discord.Interaction, reason: Optional[str] = None):
+    await do_afk_set(i.guild, i.user, reason or "", i.response.send_message)
 
 @bot.tree.command(name="help", description="View every VALLENT EXS command.")
 async def slash_help(i: discord.Interaction):
