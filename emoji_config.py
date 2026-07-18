@@ -58,7 +58,7 @@ ICON_LOADING     = "<:emoji_51:1527836192572178512>"   # Icon loading / proses
 
 # Profile card icons
 ICON_PROFILE     = "<:emoji_12:1527829243495452732>"   # Icon di header profile
-ICON_BADGES      = "<:emoji_13:1527829266019127486>"   # Icon di ALL BADGES
+ICON_BADGES      = "<a:emoji_47:1528089656783142993>"   # Icon di ALL BADGES
 ICON_COMMANDS    = "<:emoji_47:1527831886225997884>"   # Icon di Commands Runned
 ICON_PREMIUM_TAG = "<:emoji_15:1527829369559453937>"   # Icon di keterangan premium
 
