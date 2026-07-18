@@ -46,7 +46,7 @@ from emoji_config import (
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
     ICON_BOOST, ICON_ANTINUKE, ICON_IGNORE, ICON_AUTOMOD, ICON_AUTORESPONSE,
     ICON_AFK,
-    
+    e
 )
 import rank_card
 import antinuke
