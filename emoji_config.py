@@ -50,6 +50,7 @@ ICON_ANTINUKE    = "<:emoji_19:1527829486576472186>"   # Icon untuk section & al
 ICON_IGNORE      = "<:emoji_28:1527829762884767936>"
 ICON_AUTOMOD     = "<:emoji_24:1527829666428223679>"
 ICON_AUTORESPONSE = "<:emoji_44:1527831691706634481>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
+ICON_AFK          = "<:emoji_48:1528101527670227074>"   # Icon untuk section & notifikasi AFK — isi ID emoji lu di sini (fallback: 💤)
 # Status / result icons
 ICON_SUCCESS     = "<:emoji_27:1527829730181775481>"   # Icon sukses (checklist, dll)
 ICON_ERROR       = "<:emoji_35:1527830232281645217>"   # Icon error / gagal
