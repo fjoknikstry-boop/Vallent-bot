@@ -22,53 +22,53 @@ Contoh:
 # BADGE EMOJI
 # ══════════════════════════════════════════════════════════════════
 
-BADGE_FOUNDER    = "<:emoji_55:1527095333992140920>"   # Emoji untuk badge FOUNDER
-BADGE_DEVELOPER  = "<:emoji_10:1527088574330048544>"   # Emoji untuk badge DEVELOPER
-BADGE_MANAGEMENT = "<:emoji_12:1527088640449056870>"   # Emoji untuk badge MANAGEMENT
-BADGE_MODERATOR       = "<:emoji_28:1527089200871116820>"   # Emoji untuk badge MODERATOR — isi ID emoji lu di sini
-BADGE_SERVER_MANAGER  = "<:emoji_15:1527088729682874439>"   # Emoji untuk badge SERVER MANAGER — isi ID emoji lu di sini
-BADGE_STAFF      = "<:emoji_39:1527089881333891153>"   # Emoji untuk badge STAFF
-BADGE_PREMIUM    = "<:emoji_17:1527088794602442832>"   # Emoji untuk badge PREMIUM
-BADGE_NOPREFIX   = "<:emoji_24:1527089054204694618>"   # Emoji untuk badge NO PREFIX
-BADGE_USER       = "<:emoji_55:1527095812763549766>"   # Emoji untuk badge USER
+BADGE_FOUNDER    = "<:emoji_32:1527830120008515715>"   # Emoji untuk badge FOUNDER
+BADGE_DEVELOPER  = "<:emoji_8:1527829144333979679>"   # Emoji untuk badge DEVELOPER
+BADGE_MANAGEMENT = "<:emoji_25:1527829696471896105>"   # Emoji untuk badge MANAGEMENT
+BADGE_MODERATOR       = "<:emoji_50:1527832954624147608>"   # Emoji untuk badge MODERATOR — isi ID emoji lu di sini
+BADGE_SERVER_MANAGER  = "<:emoji_48:1527832768254443588>"   # Emoji untuk badge SERVER MANAGER — isi ID emoji lu di sini
+BADGE_STAFF      = "<:emoji_50:1527834360970084573>"   # Emoji untuk badge STAFF
+BADGE_PREMIUM    = "<:emoji_10:1527829194879275158>"   # Emoji untuk badge PREMIUM
+BADGE_NOPREFIX   = "<:emoji_41:1527831613533065457>"   # Emoji untuk badge NO PREFIX
+BADGE_USER       = "<:emoji_9:1527829167490732155>"   # Emoji untuk badge USER
 
 # ══════════════════════════════════════════════════════════════════
 # UI / SECTION EMOJI (untuk help, info, dll)
 # ══════════════════════════════════════════════════════════════════
 
 # Section headers di !vx help
-ICON_MODERATION  = "<:emoji_38:1527089831618805770>"   # Icon untuk section Moderation
-ICON_ROLE        = "<:emoji_53:1527091577661689957>"   # Icon untuk section Role & Voice
-ICON_INFO        = "<:emoji_54:1527099482750320750>"   # Icon untuk section Info
-ICON_TICKET      = "<:emoji_27:1527089156516352132>"   # Icon untuk section Ticket
-ICON_LEVEL       = "<:emoji_55:1527093348517548044>"   # Icon untuk section Level & XP
-ICON_GIVEAWAY    = "<:emoji_14:1527088695688302732>"   # Icon untuk section Giveaway
-ICON_ANTISPAM    = "<:emoji_30:1527089301052063835>"   # Icon untuk section Antispam
-ICON_OWNER       = "<:emoji_11:1527088601240961094>"   # Icon untuk section Owner Only
-ICON_BOOST       = "<:emoji_50:1527090427793117315>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
-ICON_ANTINUKE    = "<:emoji_18:1527088833634631911>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
-ICON_IGNORE      = "<:emoji_55:1527094266453823560>"
-ICON_AUTOMOD     = "<:emoji_40:1527089925046931516>"
-ICON_AUTORESPONSE = "<:emoji_13:1527088666269192317>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
+ICON_MODERATION  = "<:emoji_42:1527831657376387182>"   # Icon untuk section Moderation
+ICON_ROLE        = "<:emoji_55:1527837668652749002>"   # Icon untuk section Role & Voice
+ICON_INFO        = "<:emoji_37:1527830297151016960>"   # Icon untuk section Info
+ICON_TICKET      = "<:emoji_42:1527831634714562651>"   # Icon untuk section Ticket
+ICON_LEVEL       = "<:emoji_18:1527829456071168191>"   # Icon untuk section Level & XP
+ICON_GIVEAWAY    = "<:emoji_46:1527831774036496567>"   # Icon untuk section Giveaway
+ICON_ANTISPAM    = "<:emoji_24:1527829637697110096>"   # Icon untuk section Antispam
+ICON_OWNER       = "<:emoji_40:1527830518115336313>"   # Icon untuk section Owner Only
+ICON_BOOST       = "<:emoji_51:1527836174331150407>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
+ICON_ANTINUKE    = "<:emoji_19:1527829486576472186>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
+ICON_IGNORE      = "<:emoji_28:1527829762884767936>"
+ICON_AUTOMOD     = "<:emoji_24:1527829666428223679>"
+ICON_AUTORESPONSE = "<:emoji_44:1527831691706634481>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
 # Status / result icons
-ICON_SUCCESS     = "<:emoji_22:1527088976635363469>"   # Icon sukses (checklist, dll)
-ICON_ERROR       = "<:emoji_52:1527091518073081927>"   # Icon error / gagal
-ICON_WARNING     = "<:emoji_23:1527089024454623326>"   # Icon warning / peringatan
-ICON_LOADING     = "<:emoji_45:1527090183772831865>"   # Icon loading / proses
+ICON_SUCCESS     = "<:emoji_27:1527829730181775481>"   # Icon sukses (checklist, dll)
+ICON_ERROR       = "<:emoji_35:1527830232281645217>"   # Icon error / gagal
+ICON_WARNING     = "<:emoji_39:1527830327945592912>"   # Icon warning / peringatan
+ICON_LOADING     = "<:emoji_51:1527836192572178512>"   # Icon loading / proses
 
 # Profile card icons
-ICON_PROFILE     = "<:emoji_44:1527090110422585484>"   # Icon di header profile
-ICON_BADGES      = "<:emoji_55:1527094599368179722>"   # Icon di ALL BADGES
-ICON_COMMANDS    = "<:emoji_36:1527089697409601748>"   # Icon di Commands Runned
-ICON_PREMIUM_TAG = "<:emoji_29:1527089263861043240>"   # Icon di keterangan premium
+ICON_PROFILE     = "<:emoji_12:1527829243495452732>"   # Icon di header profile
+ICON_BADGES      = "<:emoji_13:1527829266019127486>"   # Icon di ALL BADGES
+ICON_COMMANDS    = "<:emoji_47:1527831886225997884>"   # Icon di Commands Runned
+ICON_PREMIUM_TAG = "<:emoji_15:1527829369559453937>"   # Icon di keterangan premium
 
 # Ticket icons
 ICON_TICKET_OPEN  = "<:emoji_43:1527090067535954152>"  # Icon tombol Open Ticket
-ICON_TICKET_CLOSE = "<:emoji_42:1527090028541509722>"  # Icon tombol Close Ticket
+ICON_TICKET_CLOSE = "<:emoji_54:1527837640576077875>"  # Icon tombol Close Ticket
 
 # Giveaway icons
-ICON_GIVEAWAY_REACT = "<:emoji_25:1527089098513191053>" # Icon reaksi giveaway (default 🎉 kalau kosong)
-ICON_WINNER          = "<a:emoji_53:1522406976632389855>" # Icon pengumuman pemenang
+ICON_GIVEAWAY_REACT = "<:emoji_14:1527088695688302732>" # Icon reaksi giveaway (default 🎉 kalau kosong)
+ICON_WINNER          = "<:emoji_11:1527088601240961094>" # Icon pengumuman pemenang
 
 # ══════════════════════════════════════════════════════════════════
 # HELPER FUNCTION
