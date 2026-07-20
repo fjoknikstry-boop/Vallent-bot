@@ -119,6 +119,7 @@ def load_config() -> dict:
     data.setdefault("support_server_members", [])  # user IDs who have joined the support server
     data.setdefault("commands_run",           {})  # uid -> number of commands run
     data.setdefault("xp_boost",                {})  # uid(str) -> {"expiry": iso, "multiplier": float}
+    data.setdefault("join_boost_last_grant",    {})  # uid(str) -> iso timestamp of last support-server-join XP boost grant (anti leave/rejoin farm)
     data.setdefault("maintenance", {"enabled": False, "reason": "", "since": None})
     for gid, gc in data.get("guilds", {}).items():
         _init_guild(gc)
@@ -585,6 +586,27 @@ def grant_xp_boost(uid: int, minutes: int = 60, multiplier: float = 1.10):
     reward, not a server setting."""
     expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
     cfg.setdefault("xp_boost", {})[str(uid)] = {"expiry": expiry.isoformat(), "multiplier": multiplier}
+    save_config(cfg)
+
+def can_receive_join_boost(uid: int, cooldown_hours: int = 24) -> bool:
+    """Anti-farm guard for the support-server join XP boost. Without this,
+    someone could leave and rejoin the support server on repeat to keep
+    resetting the boost's 60-minute timer and hold +10% XP indefinitely for
+    free. Limits a fresh grant to once per `cooldown_hours` per user —
+    genuine returning members still get it, repeat leave/rejoin spam doesn't."""
+    last = cfg.setdefault("join_boost_last_grant", {}).get(str(uid))
+    if not last:
+        return True
+    try:
+        last_dt = datetime.datetime.fromisoformat(last)
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=datetime.timezone.utc)
+    except Exception:
+        return True
+    return datetime.datetime.now(datetime.timezone.utc) - last_dt >= datetime.timedelta(hours=cooldown_hours)
+
+def mark_join_boost_granted(uid: int):
+    cfg.setdefault("join_boost_last_grant", {})[str(uid)] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     save_config(cfg)
 
 def get_xp_multiplier(uid: int) -> float:
@@ -1579,14 +1601,12 @@ async def on_message(message: discord.Message):
                 afk_hits.append((m, entry))
                 seen_ids.add(m.id)
         if afk_hits:
-            emb = base_embed(_title_with_icon(ICON_AFK, "💤", "AFK"), None, color=COLOR_PRIMARY)
+            emb = base_embed(_title_with_icon(ICON_AFK, "💤", "AFK"), None, color=COLOR_WARNING)
             for m, entry in afk_hits[:5]:
-                reason   = entry.get("reason") or "AFK"
-                since_ts = entry.get("since")
-                value    = f"**Reason:** {reason}"
-                if since_ts:
-                    value += f"\n**Since:** <t:{since_ts}:R>"
-                emb.add_field(name=f"{m.display_name} is AFK", value=value, inline=False)
+                reason    = entry.get("reason") or "AFK"
+                since_ts  = entry.get("since")
+                since_txt = f" · since <t:{since_ts}:R>" if since_ts else ""
+                emb.add_field(name=m.display_name, value=f"{reason}{since_txt}", inline=False)
             try:
                 await message.channel.send(embed=emb, reference=message, mention_author=False)
             except Exception:
@@ -4038,15 +4058,24 @@ async def on_member_join(member: discord.Member):
     if uid not in support_members:
         support_members.append(uid)
         save_config(cfg)
-    grant_xp_boost(uid, minutes=60, multiplier=1.10)
+
+    boosted = can_receive_join_boost(uid)
+    if boosted:
+        grant_xp_boost(uid, minutes=60, multiplier=1.10)
+        mark_join_boost_granted(uid)
+
     badges = get_user_badges(uid)
     role   = get_bot_role(uid)
+    bonus_line = (
+        "Bonus: **+10% XP Boost** active for **60 minutes** on every server using " + BOT_NAME + "!\n\n"
+        if boosted else ""
+    )
     embed  = discord.Embed(
         title="Welcome to " + member.guild.name + "!",
         description=(
             "Hey " + member.mention + "!\n\n"
             "You just earned the **USER** badge!\n"
-            "Bonus: **+10% XP Boost** active for **60 minutes** on every server using " + BOT_NAME + "!\n\n"
+            + bonus_line +
             "Type `profile` to see your badges.\n\nType `help` to see every command."
         ),
         color=COLOR_PRIMARY,
