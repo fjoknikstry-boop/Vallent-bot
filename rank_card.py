@@ -283,33 +283,33 @@ def _flame_tongue(draw: ImageDraw.ImageDraw, cx: float, cy: float, angle_deg: fl
     draw.polygon([base_l, mid_l, tip, mid_r, base_r], fill=(*color, alpha))
 
 def _fire_aura(diameter: int, ring_width: int) -> Image.Image:
-    """Stylized static flame aura radiating from a premium avatar's ring —
-    a ring of overlapping tongues (deep red outer layer, orange mid layer,
-    yellow-white inner tip), then Gaussian-blurred so it reads as a soft
-    fiery glow instead of hard vector spikes. Deterministic (no randomness)
-    so re-rendering the same card looks the same every time."""
-    pad  = int(diameter * 0.55)
+    """Stylized static flame flicker hugging a premium avatar's ring — short
+    tongues (deep red outer layer, orange mid layer, yellow-white inner tip)
+    kept tight to the border, then lightly Gaussian-blurred so it reads as
+    fire licking the edge rather than a big radiating sunburst. Deterministic
+    (no randomness) so re-rendering the same card looks the same every time."""
+    pad  = max(int(diameter * 0.16), 14)
     size = diameter + ring_width * 2 + pad * 2
     layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
     cx = cy = size / 2
-    base_r = diameter / 2 + ring_width + 3
+    base_r = diameter / 2 + ring_width + 2
 
-    n = 18
+    n = 30
     for i in range(n):
         angle = 360 / n * i
         # smooth deterministic variation (harmonics) so tongues differ in
-        # length/width without looking like a perfectly uniform sunburst
+        # length/width without looking like a perfectly uniform ring
         wobble = (math.sin(i * 2.7) + math.sin(i * 1.3) * 0.6 + 1.6) / 3.2
-        length = base_r * (0.6 + 0.55 * wobble)
-        width  = base_r * (0.24 + 0.14 * ((math.cos(i * 1.9) + 1) / 2))
+        length = base_r * (0.14 + 0.16 * wobble)
+        width  = base_r * (0.11 + 0.05 * ((math.cos(i * 1.9) + 1) / 2))
         sx = cx + math.cos(math.radians(angle)) * base_r
         sy = cy + math.sin(math.radians(angle)) * base_r
-        _flame_tongue(draw, sx, sy, angle, length * 1.15, width * 1.6, (120, 10, 0), 95)   # outer red
-        _flame_tongue(draw, sx, sy, angle, length * 0.82, width * 1.05, (255, 90, 10), 140)  # mid orange
-        _flame_tongue(draw, sx, sy, angle, length * 0.5,  width * 0.55, (255, 205, 70), 175)  # inner yellow tip
+        _flame_tongue(draw, sx, sy, angle, length * 1.1,  width * 1.5,  (120, 10, 0),   80)   # outer red
+        _flame_tongue(draw, sx, sy, angle, length * 0.8,  width * 1.0,  (255, 90, 10),  120)  # mid orange
+        _flame_tongue(draw, sx, sy, angle, length * 0.5,  width * 0.55, (255, 205, 70), 160)  # inner yellow tip
 
-    return layer.filter(ImageFilter.GaussianBlur(5))
+    return layer.filter(ImageFilter.GaussianBlur(2.5))
 
 def _corner_bracket(draw: ImageDraw.ImageDraw, x, y, size, color, flip_x=False, flip_y=False, width=3):
 
