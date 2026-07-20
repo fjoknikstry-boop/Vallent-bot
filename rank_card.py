@@ -26,7 +26,7 @@ import logging
 import math
 import os
 
-from PIL import Image, ImageChops, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 log = logging.getLogger("rank_card")
 
@@ -267,7 +267,52 @@ def _hex_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_width: 
     final.paste(inner, (ring_width, ring_width), inner)
     return final
 
+def _flame_tongue(draw: ImageDraw.ImageDraw, cx: float, cy: float, angle_deg: float, length: float, width: float, color, alpha: int) -> None:
+    """Draw one teardrop-shaped 'flame tongue' rooted at (cx, cy), pointing
+    outward at angle_deg. Layering several of these at different lengths
+    and colors (dark red outer -> orange -> yellow tip) and blurring the
+    result is what sells the 'fire' look without needing an animated GIF."""
+    ang = math.radians(angle_deg)
+    dx, dy = math.cos(ang), math.sin(ang)
+    px, py = -dy, dx  # perpendicular unit vector, for the tongue's base width
+    tip    = (cx + dx * length, cy + dy * length)
+    base_l = (cx + px * width / 2, cy + py * width / 2)
+    base_r = (cx - px * width / 2, cy - py * width / 2)
+    mid_l  = (cx + dx * length * 0.35 + px * width * 0.6, cy + dy * length * 0.35 + py * width * 0.6)
+    mid_r  = (cx + dx * length * 0.35 - px * width * 0.6, cy + dy * length * 0.35 - py * width * 0.6)
+    draw.polygon([base_l, mid_l, tip, mid_r, base_r], fill=(*color, alpha))
+
+def _fire_aura(diameter: int, ring_width: int) -> Image.Image:
+    """Stylized static flame aura radiating from a premium avatar's ring —
+    a ring of overlapping tongues (deep red outer layer, orange mid layer,
+    yellow-white inner tip), then Gaussian-blurred so it reads as a soft
+    fiery glow instead of hard vector spikes. Deterministic (no randomness)
+    so re-rendering the same card looks the same every time."""
+    pad  = int(diameter * 0.55)
+    size = diameter + ring_width * 2 + pad * 2
+    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    cx = cy = size / 2
+    base_r = diameter / 2 + ring_width + 3
+
+    n = 18
+    for i in range(n):
+        angle = 360 / n * i
+        # smooth deterministic variation (harmonics) so tongues differ in
+        # length/width without looking like a perfectly uniform sunburst
+        wobble = (math.sin(i * 2.7) + math.sin(i * 1.3) * 0.6 + 1.6) / 3.2
+        length = base_r * (0.6 + 0.55 * wobble)
+        width  = base_r * (0.24 + 0.14 * ((math.cos(i * 1.9) + 1) / 2))
+        sx = cx + math.cos(math.radians(angle)) * base_r
+        sy = cy + math.sin(math.radians(angle)) * base_r
+        _flame_tongue(draw, sx, sy, angle, length * 1.15, width * 1.6, (120, 10, 0), 95)   # outer red
+        _flame_tongue(draw, sx, sy, angle, length * 0.82, width * 1.05, (255, 90, 10), 140)  # mid orange
+        _flame_tongue(draw, sx, sy, angle, length * 0.5,  width * 0.55, (255, 205, 70), 175)  # inner yellow tip
+
+    return layer.filter(ImageFilter.GaussianBlur(5))
+
 def _corner_bracket(draw: ImageDraw.ImageDraw, x, y, size, color, flip_x=False, flip_y=False, width=3):
+
     dx = -1 if flip_x else 1
     dy = -1 if flip_y else 1
     draw.line([(x, y), (x + dx * size, y)], fill=color, width=width)
@@ -370,6 +415,10 @@ def render_rank_card(
     avatar_d = 168
     hexring  = _hex_avatar(av, avatar_d, ring_color, ring_width=6)
     ax, ay = 50, (H - hexring.height) // 2
+    if is_premium:
+        aura = _fire_aura(avatar_d, ring_width=6)
+        aura_pos = (int(ax + hexring.width / 2 - aura.width / 2), int(ay + hexring.height / 2 - aura.height / 2))
+        canvas.paste(aura, aura_pos, aura)
     canvas.paste(hexring, (ax, ay), hexring)
 
     draw = ImageDraw.Draw(canvas)
@@ -446,6 +495,10 @@ def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_
     avatar_d = 176
     avatar_ring = _circle_avatar(av, avatar_d, ring_color, ring_width=7)
     ax, ay = 60, (H - avatar_ring.height) // 2
+    if is_premium:
+        aura = _fire_aura(avatar_d, ring_width=7)
+        aura_pos = (int(ax + avatar_ring.width / 2 - aura.width / 2), int(ay + avatar_ring.height / 2 - aura.height / 2))
+        card.paste(aura, aura_pos, aura)
     card.paste(avatar_ring, (ax, ay), avatar_ring)
 
     draw = ImageDraw.Draw(card)
