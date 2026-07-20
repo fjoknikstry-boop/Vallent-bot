@@ -267,49 +267,43 @@ def _hex_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_width: 
     final.paste(inner, (ring_width, ring_width), inner)
     return final
 
-def _flame_tongue(draw: ImageDraw.ImageDraw, cx: float, cy: float, angle_deg: float, length: float, width: float, color, alpha: int) -> None:
-    """Draw one teardrop-shaped 'flame tongue' rooted at (cx, cy), pointing
-    outward at angle_deg. Layering several of these at different lengths
-    and colors (dark red outer -> orange -> yellow tip) and blurring the
-    result is what sells the 'fire' look without needing an animated GIF."""
-    ang = math.radians(angle_deg)
-    dx, dy = math.cos(ang), math.sin(ang)
-    px, py = -dy, dx  # perpendicular unit vector, for the tongue's base width
-    tip    = (cx + dx * length, cy + dy * length)
-    base_l = (cx + px * width / 2, cy + py * width / 2)
-    base_r = (cx - px * width / 2, cy - py * width / 2)
-    mid_l  = (cx + dx * length * 0.35 + px * width * 0.6, cy + dy * length * 0.35 + py * width * 0.6)
-    mid_r  = (cx + dx * length * 0.35 - px * width * 0.6, cy + dy * length * 0.35 - py * width * 0.6)
-    draw.polygon([base_l, mid_l, tip, mid_r, base_r], fill=(*color, alpha))
-
 def _fire_aura(diameter: int, ring_width: int) -> Image.Image:
-    """Stylized static flame flicker hugging a premium avatar's ring — short
-    tongues (deep red outer layer, orange mid layer, yellow-white inner tip)
-    kept tight to the border, then lightly Gaussian-blurred so it reads as
-    fire licking the edge rather than a big radiating sunburst. Deterministic
-    (no randomness) so re-rendering the same card looks the same every time."""
-    pad  = max(int(diameter * 0.16), 14)
+    """A soft, irregular 'blaze' licking up from behind a premium avatar's
+    ring. Instead of sharp radiating spikes, this builds a few overlapping
+    wavy coronas (uneven, flame-like bumps around the circumference) —
+    a deep-gold outer glow, a mid-gold layer, and a bright inner-gold lick
+    — each blurred by a different amount so the inner layer reads sharper
+    ("closer to the fire") and the outer layer reads softer (glow bleeding
+    outward). Every layer stays in the same gold family as the rest of the
+    premium theme (no orange/red) so nothing clashes. Deterministic (no
+    randomness) so re-rendering the same card looks the same every time."""
+    pad  = max(int(diameter * 0.24), 20)
     size = diameter + ring_width * 2 + pad * 2
-    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
     cx = cy = size / 2
-    base_r = diameter / 2 + ring_width + 2
+    base_r = diameter / 2 + ring_width
 
-    n = 30
-    for i in range(n):
-        angle = 360 / n * i
-        # smooth deterministic variation (harmonics) so tongues differ in
-        # length/width without looking like a perfectly uniform ring
-        wobble = (math.sin(i * 2.7) + math.sin(i * 1.3) * 0.6 + 1.6) / 3.2
-        length = base_r * (0.14 + 0.16 * wobble)
-        width  = base_r * (0.11 + 0.05 * ((math.cos(i * 1.9) + 1) / 2))
-        sx = cx + math.cos(math.radians(angle)) * base_r
-        sy = cy + math.sin(math.radians(angle)) * base_r
-        _flame_tongue(draw, sx, sy, angle, length * 1.1,  width * 1.5,  (120, 10, 0),   80)   # outer red
-        _flame_tongue(draw, sx, sy, angle, length * 0.8,  width * 1.0,  (255, 90, 10),  120)  # mid orange
-        _flame_tongue(draw, sx, sy, angle, length * 0.5,  width * 0.55, (255, 205, 70), 160)  # inner yellow tip
+    # (color, alpha, extra_radius, bump_amplitude, bump_count, phase, blur)
+    layers = [
+        ((90, 62, 4),    70,  pad * 0.95, pad * 0.55, 5, 0.4, 9),   # deep gold, outer glow
+        ((160, 108, 10), 105, pad * 0.55, pad * 0.40, 6, 2.1, 6),   # mid gold
+        ((245, 176, 60), 140, pad * 0.25, pad * 0.28, 7, 4.0, 3),   # bright gold, inner licks
+    ]
 
-    return layer.filter(ImageFilter.GaussianBlur(2.5))
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    n_pts = 96
+    for color, alpha, extra_r, amp, bumps, phase, blur in layers:
+        layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        pts = []
+        for i in range(n_pts):
+            t = i / n_pts * 2 * math.pi
+            wobble = math.sin(bumps * t + phase) * amp + math.sin(bumps * 2.3 * t + phase * 1.7) * amp * 0.3
+            r = base_r + extra_r + wobble
+            pts.append((cx + math.cos(t) * r, cy + math.sin(t) * r))
+        d.polygon(pts, fill=(*color, alpha))
+        layer = layer.filter(ImageFilter.GaussianBlur(blur))
+        out = Image.alpha_composite(out, layer)
+    return out
 
 def _corner_bracket(draw: ImageDraw.ImageDraw, x, y, size, color, flip_x=False, flip_y=False, width=3):
 
