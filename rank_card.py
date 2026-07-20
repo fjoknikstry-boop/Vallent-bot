@@ -148,6 +148,13 @@ WHITE     = (245, 245, 245)
 MUTED     = (170, 150, 150)
 GOLD      = (245, 158, 11)
 
+# Premium variants — swapped in wherever a normal card uses the crimson
+# palette, so a premium card reads as gold-themed top to bottom instead of
+# "red card with a gold ring slapped on".
+GOLD_DARK    = (110, 80, 8)     # premium equivalent of DARK_RED (border/blood)
+GOLD_BG_TOP  = (16, 12, 4)      # premium equivalent of BG_TOP
+GOLD_BG_BTM  = (42, 28, 4)      # premium equivalent of BG_BOTTOM
+
 # ══════════════════════════════════════════════════════════════════
 # PRIMITIVES
 # ══════════════════════════════════════════════════════════════════
@@ -296,14 +303,23 @@ def _segmented_bar(draw: ImageDraw.ImageDraw, x, y, w, h, pct, segments, track_c
         if amt > 0:
             draw.rectangle([sx, y, sx + seg_w * amt, y + h], fill=fill_color)
 
-def _card_base(W: int, H: int, cut: int = 48, blood_xy=None) -> Image.Image:
+def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = False) -> Image.Image:
     """Shared background stack for both cards: gradient + blood glow +
-    VX watermark + grain texture, clipped to the angled card silhouette."""
-    base = _vertical_gradient((W, H), BG_TOP, BG_BOTTOM).convert("RGBA")
+    VX watermark + grain texture, clipped to the angled card silhouette.
+    `premium=True` swaps the whole palette to gold instead of crimson, so
+    a premium card is unmistakably different at a glance, not just the
+    avatar ring."""
+    bg_top    = GOLD_BG_TOP if premium else BG_TOP
+    bg_bottom = GOLD_BG_BTM if premium else BG_BOTTOM
+    border    = GOLD_DARK   if premium else DARK_RED
+    corner    = GOLD        if premium else CRIMSON
+    blood     = GOLD_DARK   if premium else BLOOD
+
+    base = _vertical_gradient((W, H), bg_top, bg_bottom).convert("RGBA")
     glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
     bx, by = blood_xy or (-180, H - 220)
-    gd.ellipse([bx, by, bx + 560, by + 460], fill=(*BLOOD, 80))
+    gd.ellipse([bx, by, bx + 560, by + 460], fill=(*blood, 80))
     base = Image.alpha_composite(base, glow)
     base = Image.alpha_composite(base, _vx_watermark((W, H)))
     base = Image.alpha_composite(base, _noise_texture((W, H)))
@@ -311,13 +327,13 @@ def _card_base(W: int, H: int, cut: int = 48, blood_xy=None) -> Image.Image:
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     canvas.paste(base, (0, 0), clip)
     draw = ImageDraw.Draw(canvas)
-    draw.line([(0, 0), (W - cut, 0)], fill=(*DARK_RED, 255), width=3)
-    draw.line([(W - cut, 0), (W, cut)], fill=(*DARK_RED, 255), width=3)
-    draw.line([(W, cut), (W, H)], fill=(*DARK_RED, 255), width=3)
-    draw.line([(W, H), (0, H)], fill=(*DARK_RED, 255), width=3)
-    draw.line([(0, H), (0, 0)], fill=(*DARK_RED, 255), width=3)
-    _corner_bracket(draw, 16, 16, 24, (*CRIMSON, 220))
-    _corner_bracket(draw, 16, H - 16, 24, (*CRIMSON, 220), flip_y=True)
+    draw.line([(0, 0), (W - cut, 0)], fill=(*border, 255), width=3)
+    draw.line([(W - cut, 0), (W, cut)], fill=(*border, 255), width=3)
+    draw.line([(W, cut), (W, H)], fill=(*border, 255), width=3)
+    draw.line([(W, H), (0, H)], fill=(*border, 255), width=3)
+    draw.line([(0, H), (0, 0)], fill=(*border, 255), width=3)
+    _corner_bracket(draw, 16, 16, 24, (*corner, 220))
+    _corner_bracket(draw, 16, H - 16, 24, (*corner, 220), flip_y=True)
     return canvas
 
 def _flatten(canvas: Image.Image) -> io.BytesIO:
@@ -345,11 +361,12 @@ def render_rank_card(
 ) -> io.BytesIO:
     W, H = 934, 300
     cut  = 50
-    canvas = _card_base(W, H, cut=cut)
+    accent = GOLD if is_premium else CRIMSON
+    canvas = _card_base(W, H, cut=cut, premium=is_premium)
     draw   = ImageDraw.Draw(canvas)
 
     av = _safe_avatar(avatar_bytes)
-    ring_color = GOLD if is_premium else CRIMSON
+    ring_color = accent
     avatar_d = 168
     hexring  = _hex_avatar(av, avatar_d, ring_color, ring_width=6)
     ax, ay = 50, (H - hexring.height) // 2
@@ -369,7 +386,7 @@ def render_rank_card(
     while text_width(draw, uname, F_DISPLAY, size) > max_w and size > 26:
         size -= 2
     draw_text(draw, (text_x, name_y), uname, F_DISPLAY, size, WHITE)
-    draw.rectangle([text_x, name_y + size + 2, text_x + 50, name_y + size + 6], fill=(*CRIMSON, 255))
+    draw.rectangle([text_x, name_y + size + 2, text_x + 50, name_y + size + 6], fill=(*accent, 255))
 
     sub_y = name_y + size + 16
     if is_premium:
@@ -384,16 +401,17 @@ def render_rank_card(
     lvl_x = text_x + rank_w + draw.textlength(f"#{rank}", font=f_small) + 36
     draw.text((lvl_x, rl_y), "LEVEL", font=f_tiny, fill=MUTED)
     lvl_w = draw.textlength("LEVEL ", font=f_tiny)
-    draw.text((lvl_x + lvl_w, rl_y - 3), str(level), font=f_small, fill=(*CRIMSON, 255))
+    draw.text((lvl_x + lvl_w, rl_y - 3), str(level), font=f_small, fill=(*accent, 255))
 
     bar_y = rl_y + 42
     bar_w = W - text_x - 90
     bar_h = 22
-    _segmented_bar(draw, text_x, bar_y, bar_w, bar_h, cur_xp / max(need_xp, 1), 20, (35, 16, 18), CRIMSON, gap=3)
+    _segmented_bar(draw, text_x, bar_y, bar_w, bar_h, cur_xp / max(need_xp, 1), 20, (35, 16, 18), accent, gap=3)
 
     xp_text = f"{cur_xp:,} / {need_xp:,} XP"
     xp_w = draw.textlength(xp_text, font=f_xp)
     draw.text((text_x + bar_w - xp_w, bar_y - 26), xp_text, font=f_xp, fill=WHITE)
+
 
     footer = f"TOTAL XP {total_xp:,}   //   MESSAGES {messages:,}"
     draw.text((text_x, bar_y + bar_h + 16), footer, font=f_tiny, fill=MUTED)
@@ -407,20 +425,24 @@ def render_rank_card(
 
 def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_level: int, is_premium: bool = False, role_names: list | None = None) -> io.BytesIO:
     W, H = 934, 282
-    card = _vertical_gradient((W, H), (18, 4, 6), (48, 6, 10)).convert("RGBA")
+    bg_top    = GOLD_BG_TOP if is_premium else (18, 4, 6)
+    bg_bottom = GOLD_BG_BTM if is_premium else (48, 6, 10)
+    accent    = GOLD if is_premium else CRIMSON
+    border    = GOLD_DARK if is_premium else DARK_RED
+    card = _vertical_gradient((W, H), bg_top, bg_bottom).convert("RGBA")
 
     glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
     cx, cy = 160, H // 2
     for r, a in [(230, 26), (170, 40), (110, 60)]:
-        gd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(220, 20, 60, a))
+        gd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*accent, a))
     card = Image.alpha_composite(card, glow)
 
     draw = ImageDraw.Draw(card)
-    draw.rounded_rectangle([2, 2, W - 3, H - 3], radius=22, outline=(*DARK_RED, 255), width=3)
+    draw.rounded_rectangle([2, 2, W - 3, H - 3], radius=22, outline=(*border, 255), width=3)
 
     av = _safe_avatar(avatar_bytes)
-    ring_color = (*GOLD, 255) if is_premium else (*CRIMSON, 255)
+    ring_color = (*accent, 255)
     avatar_d = 176
     avatar_ring = _circle_avatar(av, avatar_d, ring_color, ring_width=7)
     ax, ay = 60, (H - avatar_ring.height) // 2
@@ -431,7 +453,8 @@ def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_
     max_w  = W - text_x - 40
 
     f_tag = _font(F_BOLD, 26)
-    draw.text((text_x, 46), "LEVEL UP", font=f_tag, fill=(*CRIMSON, 255))
+    tag_txt = "LEVEL UP  ·  PREMIUM" if is_premium else "LEVEL UP"
+    draw.text((text_x, 46), tag_txt, font=f_tag, fill=(*accent, 255))
 
     # Level progression, e.g. "LEVEL 6  ➔  LEVEL 7" — auto-shrinks to fit
     prog_txt = f"LEVEL {old_level}  \u2192  LEVEL {new_level}"
