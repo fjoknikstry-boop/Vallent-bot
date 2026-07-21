@@ -31,7 +31,7 @@ BADGE_STAFF      = "<:emoji_47:1528958989470269540>"   # Emoji untuk badge STAFF
 BADGE_PREMIUM    = "<:premium:1528961463094612110>"   # Emoji untuk badge PREMIUM
 BADGE_NOPREFIX   = "<:emoji_51:1528919382389035018>"   # Emoji untuk badge NO PREFIX
 BADGE_USER       = "<:emoji_52:1528959097259688006>"   # Emoji untuk badge USER
-BADGE_MOONKEEPER = "<:emoji_58:1528966956068376627>"   # Emoji untuk badge MOONKEEPER — isi ID emoji lu di sini (fallback: 🌙)
+BADGE_MOONKEEPER = "<a:emoji_55:1528919570918670396>"   # Emoji untuk badge MOONKEEPER — isi ID emoji lu di sini (fallback: 🌙)
 
 # ══════════════════════════════════════════════════════════════════
 # UI / SECTION EMOJI (untuk help, info, dll)
