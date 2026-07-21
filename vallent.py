@@ -39,6 +39,7 @@ logging.basicConfig(level=logging.INFO)
 from emoji_config import (
     BADGE_FOUNDER, BADGE_DEVELOPER, BADGE_MANAGEMENT, BADGE_STAFF,
     BADGE_PREMIUM, BADGE_NOPREFIX, BADGE_USER, BADGE_MODERATOR, BADGE_SERVER_MANAGER,
+    BADGE_MOONKEEPER,
     ICON_MODERATION, ICON_ROLE, ICON_INFO, ICON_TICKET, ICON_LEVEL,
     ICON_GIVEAWAY, ICON_ANTISPAM, ICON_OWNER,
     ICON_SUCCESS, ICON_ERROR, ICON_WARNING, ICON_LOADING,
@@ -647,13 +648,14 @@ def xp_boost_remaining(uid: int) -> Optional[datetime.datetime]:
 # BOT ROLES SYSTEM
 # ══════════════════════════════════════════════════════════════════
 
-BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "developer", "founder"]
+BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "moonkeeper", "management", "developer", "founder"]
 
 BOT_ROLE_BADGES = {
     # Emoji sourced from emoji_config.py — edit that file to set the emoji IDs
     "founder":        {"label": "• Founder",        "color": 0x8B0000, "emoji": BADGE_FOUNDER},
     "developer":      {"label": "• Developer",      "color": 0xDC143C, "emoji": BADGE_DEVELOPER},
     "management":     {"label": "• Management",     "color": 0xB22222, "emoji": BADGE_MANAGEMENT},
+    "moonkeeper":     {"label": "• Moonkeeper",      "color": 0x6366F1, "emoji": e(BADGE_MOONKEEPER, "🌙")},
     "server_manager": {"label": "• Server Manager", "color": 0xE67E22, "emoji": e(BADGE_SERVER_MANAGER, "🗂️")},
     "moderator":      {"label": "• Moderator",      "color": 0xC97C3D, "emoji": e(BADGE_MODERATOR, "🛡️")},
     "staff":          {"label": "• Staff",          "color": 0xCD5C5C, "emoji": BADGE_STAFF},
@@ -856,6 +858,27 @@ OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiu
 def is_owner():
     async def predicate(ctx: commands.Context) -> bool:
         return ctx.author.id == bot.owner_id
+    return commands.check(predicate)
+
+def can_manage_access(uid: int) -> bool:
+    """True for the bot owner, or anyone currently holding the 'Moonkeeper'
+    bot role — a dedicated tier for this one power, separate from the
+    moderation tiers (staff/moderator/server_manager/management/developer)
+    so day-to-day staff can't cascade this access to others. Moonkeepers
+    can grant/revoke no-prefix and premium on the owner's behalf, treated
+    exactly as if the owner did it. Because this is driven entirely by
+    `get_bot_role()`, revoking it is instant and total: `botrole remove
+    @user` for a manual assignment, or removing the Discord role /
+    `botrole sync remove moonkeeper` for a synced one — either way the
+    person loses this power the moment their bot role changes, no separate
+    permission list to clean up."""
+    if uid == bot.owner_id:
+        return True
+    return get_bot_role(uid) == "moonkeeper"
+
+def is_owner_or_staff():
+    async def predicate(ctx: commands.Context) -> bool:
+        return can_manage_access(ctx.author.id)
     return commands.check(predicate)
 
 def is_staff_or_above(uid: int) -> bool:
@@ -3368,7 +3391,7 @@ async def pfx_premiumlock(ctx, action: str = "", *, cmd_name: str = ""):
             "Use the command's slash name, e.g. for a subcommand: `ticket setup`."))
 
 @bot.command(name="noprefix", aliases=["np"])
-@is_owner()
+@is_owner_or_staff()
 async def pfx_noprefix(ctx, action: str = "", *, rest: str = ""):
     action     = action.lower()
     np_users   = cfg.setdefault("no_prefix_users",  [])
@@ -3476,7 +3499,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
     action    = action.lower()
     bot_roles = cfg.setdefault("bot_roles", {})
     role_sync = cfg.setdefault("role_sync", {})
-    valid_tiers = ("staff", "moderator", "server_manager", "management", "developer")
+    valid_tiers = ("staff", "moderator", "server_manager", "moonkeeper", "management", "developer")
 
     if action == "list":
         if not bot_roles: return await ctx.send(embed=info_embed("Bot Roles (Manual)", "No manual assignments yet."))
@@ -3504,14 +3527,14 @@ async def pfx_botrole(ctx, action: str = "", *args):
         if sub == "remove":
             tier = args[1].lower() if len(args) > 1 else ""
             if tier not in valid_tiers:
-                return await ctx.send(embed=error_embed("Valid tiers: `staff`, `moderator`, `server_manager`, `management`, `developer`."))
+                return await ctx.send(embed=error_embed("Valid tiers: `staff`, `moderator`, `server_manager`, `moonkeeper`, `management`, `developer`."))
             role_sync.pop(tier, None)
             save_config(cfg)
             return await ctx.send(embed=success_embed(f"Sync role for **{tier.capitalize()}** removed."))
         # botrole sync <tier> <role_id/mention>
         if len(args) < 2:
             return await ctx.send(embed=info_embed("Bot Role Sync", (
-                "`botrole sync <staff/moderator/server_manager/management/developer> <role_id or @role>` — link a Discord role in the support server to a badge\n"
+                "`botrole sync <staff/moderator/server_manager/moonkeeper/management/developer> <role_id or @role>` — link a Discord role in the support server to a badge\n"
                 "`botrole sync remove <tier>` — unlink it\n"
                 "`botrole sync list` — view the current mapping\n\n"
                 "Once set, anyone with that role in the support server automatically gets the badge "
@@ -3519,7 +3542,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
             )))
         tier = args[0].lower()
         if tier not in valid_tiers:
-            return await ctx.send(embed=error_embed("Valid tiers: `staff`, `moderator`, `server_manager`, `management`, `developer`."))
+            return await ctx.send(embed=error_embed("Valid tiers: `staff`, `moderator`, `server_manager`, `moonkeeper`, `management`, `developer`."))
         role_match = re.match(r"<@&(\d+)>|(\d{17,20})", args[1].strip())
         if not role_match:
             return await ctx.send(embed=error_embed("Provide a valid role ID or role mention."))
@@ -3541,7 +3564,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
 
     if not args:
         return await ctx.send(embed=info_embed("Bot Role", (
-            "`botrole set @user <staff/moderator/server_manager/management/developer>` — manual assignment (for people outside the support server)\n"
+            "`botrole set @user <staff/moderator/server_manager/moonkeeper/management/developer>` — manual assignment (for people outside the support server)\n"
             "`botrole remove @user` — remove a manual assignment\n"
             "`botrole list` — view manual assignments\n"
             "`botrole sync <tier> <role_id>` — auto-sync from a Discord role in the support server"
@@ -3560,7 +3583,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
 
     if action == "set":
         if role not in valid_tiers:
-            return await ctx.send(embed=error_embed("Valid roles: `staff`, `moderator`, `server_manager`, `management`, `developer`"))
+            return await ctx.send(embed=error_embed("Valid roles: `staff`, `moderator`, `server_manager`, `moonkeeper`, `management`, `developer`"))
         bot_roles[str(member.id)] = role
         save_config(cfg)
         info = BOT_ROLE_BADGES[role]
@@ -3579,7 +3602,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
         await ctx.send(embed=success_embed(f"Manual bot role **{removed.capitalize()}** removed from {member.mention}."))
 
 @bot.command(name="grantpremium", aliases=["gp"])
-@is_owner()
+@is_owner_or_staff()
 async def pfx_grantpremium(ctx, member: discord.Member = None, duration: str = ""):
     if not member:
         return await ctx.send(embed=info_embed("Grant Premium", "`grantpremium @user <7d/30d/permanent>` · `grantpremium @user revoke`"))
@@ -3779,6 +3802,14 @@ OWNER_HELP_CATEGORY = ("owner", "Owner Only", ICON_OWNER, "👑", (
     "`vxleave <guild_id>`"
 ))
 
+DELEGATED_HELP_CATEGORY = ("delegated_access", "Access Management", "", "🌙", (
+    "You're a **Moonkeeper** — you can grant/revoke access on " + BOT_NAME + "'s behalf, "
+    "same as if the owner ran it themselves:\n\n"
+    "`noprefix grant @user [duration]` / `noprefix revoke @user` / `noprefix list`\n"
+    "`grantpremium @user <duration>` / `grantpremium @user revoke`\n\n"
+    "-# The owner can remove this access at any time by changing your bot role."
+))
+
 class HelpView(discord.ui.View):
     """Help navigation dropdown — every person who runs `help` gets their own
     View instance, so the 'Owner Only' option automatically only shows up in
@@ -3788,7 +3819,10 @@ class HelpView(discord.ui.View):
         self.invoker_id = invoker_id
         self.has_np     = has_np
         self.message: Optional[discord.Message] = None
-        self.categories = list(HELP_CATEGORIES) + ([OWNER_HELP_CATEGORY] if is_owner_user else [])
+        self.categories = list(HELP_CATEGORIES) + (
+            [OWNER_HELP_CATEGORY] if is_owner_user else
+            ([DELEGATED_HELP_CATEGORY] if can_manage_access(invoker_id) else [])
+        )
 
         options = [discord.SelectOption(label="Overview", value="_home", emoji="🏠", description="Home page")]
         for key, label, icon_var, fallback, _ in self.categories:
