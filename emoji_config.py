@@ -43,10 +43,10 @@ ICON_ROLE        = "<:emoji_33:1528929910100463666>"   # Icon untuk section Role
 ICON_INFO        = "<:emoji_49:1528947364189049012>"   # Icon untuk section Info
 ICON_TICKET      = "<:emoji_47:1528941765749510284>"   # Icon untuk section Ticket
 ICON_LEVEL       = "<:emoji_35:1528930032989372708>"   # Icon untuk section Level & XP
-ICON_GIVEAWAY    = "<:emoji_41:1528941125438541904>"   # Icon untuk section Giveaway
+ICON_GIVEAWAY    = "<a:emoji_51:1529240194920874164>"   # Icon untuk section Giveaway
 ICON_ANTISPAM    = "<:emoji_44:1528941241453252638>"   # Icon untuk section Antispam
 ICON_OWNER       = "<:emoji_11:1527088601240961094>"   # Icon untuk section Owner Only
-ICON_BOOST       = "<:emoji_42:1528941192493142107>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
+ICON_BOOST       = "<a:emoji_50:1529240171311009802>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
 ICON_ANTINUKE    = "<:emoji_31:1528929865267544164>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
 ICON_IGNORE      = "<:emoji_50:1528948003484864643>"
 ICON_AUTOMOD     = "<:emoji_51:1528948381559296061>"
@@ -56,13 +56,13 @@ ICON_AFK          = "<:emoji_36:1528930072386338926>"   # Icon untuk section & n
 ICON_SUCCESS     = "<:emoji_37:1528930134349058248>"   # Icon sukses (checklist, dll)
 ICON_ERROR       = "<:emoji_38:1528930169950310441>"   # Icon error / gagal
 ICON_WARNING     = "<:emoji_32:1528929890038972466>"   # Icon warning / peringatan
-ICON_LOADING     = "<:emoji_29:1528929806392229929>"   # Icon loading / proses
+ICON_LOADING     = "<a:emoji_53:1529240301539954778>"   # Icon loading / proses
 
 # Profile card icons
 ICON_PROFILE     = "<:emoji_52:1528948967314817024>"   # Icon di header profile
 ICON_BADGES      = "<a:emoji_47:1528089656783142993>"   # Icon di ALL BADGES
 ICON_COMMANDS    = "<a:music_2:1528961515879927949>"   # Icon di Commands Runned
-ICON_PREMIUM_TAG = "<a:emoji_56:1528919602699047062>"   # Icon di keterangan premium
+ICON_PREMIUM_TAG = "<a:emoji_52:1529240243167826021>"   # Icon di keterangan premium
 
 # Ticket icons
 ICON_TICKET_OPEN  = "<:emoji_53:1528949967207534702>"  # Icon tombol Open Ticket
