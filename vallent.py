@@ -115,6 +115,8 @@ def load_config() -> dict:
     data.setdefault("no_prefix_guilds", [])
     data.setdefault("no_prefix_expiry", {})
     data.setdefault("bot_roles",        {})
+    data.setdefault("moonkeeper_users",     [])   # uid list — manual Moonkeeper grants (independent of bot_roles hierarchy)
+    data.setdefault("moonkeeper_sync_role", None)  # single Discord role ID synced to Moonkeeper, if any
     data.setdefault("role_sync",        {})
     data.setdefault("votes",            {})
     data.setdefault("support_server_members", [])  # user IDs who have joined the support server
@@ -648,7 +650,7 @@ def xp_boost_remaining(uid: int) -> Optional[datetime.datetime]:
 # BOT ROLES SYSTEM
 # ══════════════════════════════════════════════════════════════════
 
-BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "moonkeeper", "management", "developer", "founder"]
+BOT_ROLE_HIERARCHY = ["staff", "moderator", "server_manager", "management", "developer", "founder"]
 
 BOT_ROLE_BADGES = {
     # Emoji sourced from emoji_config.py — edit that file to set the emoji IDs
@@ -705,6 +707,8 @@ def get_user_badges(uid: int) -> list:
     is_prem = uid in cfg.get("premium_users", [])
     if role != "user":
         badges.append(role)
+    if is_moonkeeper(uid):
+        badges.append("moonkeeper")
     if uid in cfg.get("no_prefix_users", []) or is_prem:
         badges.append("noprefix")
     if is_prem:
@@ -860,21 +864,37 @@ def is_owner():
         return ctx.author.id == bot.owner_id
     return commands.check(predicate)
 
+def is_moonkeeper(uid: int) -> bool:
+    """Independent of the staff hierarchy on purpose — Moonkeeper is a
+    standalone permission flag, not a rank on the same ladder as
+    staff/moderator/management/etc. That means holding a higher moderation
+    tier never silently suppresses Moonkeeper (or vice versa): someone can
+    be Management AND Moonkeeper at the same time, and both badges/both
+    powers show up. Checked two ways: a manual per-user grant, or a synced
+    Discord role in the support server (mirrors how the other tiers sync)."""
+    if uid in cfg.get("moonkeeper_users", []):
+        return True
+    role_id = cfg.get("moonkeeper_sync_role")
+    if role_id:
+        guild = get_support_guild()
+        member = guild.get_member(uid) if guild else None
+        if member and any(r.id == role_id for r in member.roles):
+            return True
+    return False
+
 def can_manage_access(uid: int) -> bool:
-    """True for the bot owner, or anyone currently holding the 'Moonkeeper'
-    bot role — a dedicated tier for this one power, separate from the
-    moderation tiers (staff/moderator/server_manager/management/developer)
-    so day-to-day staff can't cascade this access to others. Moonkeepers
-    can grant/revoke no-prefix and premium on the owner's behalf, treated
-    exactly as if the owner did it. Because this is driven entirely by
-    `get_bot_role()`, revoking it is instant and total: `botrole remove
-    @user` for a manual assignment, or removing the Discord role /
-    `botrole sync remove moonkeeper` for a synced one — either way the
-    person loses this power the moment their bot role changes, no separate
-    permission list to clean up."""
+    """True for the bot owner, or anyone currently flagged as Moonkeeper
+    (see `is_moonkeeper`) — a dedicated, standalone permission for this one
+    power, separate from the moderation tiers so day-to-day staff can't
+    cascade this access to others. Moonkeepers can grant/revoke no-prefix
+    and premium on the owner's behalf, treated exactly as if the owner did
+    it. Revoking it is instant and total: `botrole remove @user` for a
+    manual grant, or removing the Discord role / `botrole sync remove
+    moonkeeper` for a synced one — either way the person loses this power
+    immediately, no separate permission list to clean up."""
     if uid == bot.owner_id:
         return True
-    return get_bot_role(uid) == "moonkeeper"
+    return is_moonkeeper(uid)
 
 def is_owner_or_staff():
     async def predicate(ctx: commands.Context) -> bool:
@@ -3499,15 +3519,22 @@ async def pfx_botrole(ctx, action: str = "", *args):
     action    = action.lower()
     bot_roles = cfg.setdefault("bot_roles", {})
     role_sync = cfg.setdefault("role_sync", {})
-    valid_tiers = ("staff", "moderator", "server_manager", "moonkeeper", "management", "developer")
+    mk_users  = cfg.setdefault("moonkeeper_users", [])
+    valid_tiers = ("staff", "moderator", "server_manager", "management", "developer")
+    settable    = valid_tiers + ("moonkeeper",)  # moonkeeper accepted here, stored separately below
 
     if action == "list":
-        if not bot_roles: return await ctx.send(embed=info_embed("Bot Roles (Manual)", "No manual assignments yet."))
         lines = []
         for uid_str, r in bot_roles.items():
             user = bot.get_user(int(uid_str))
             name = user.display_name if user else f"ID {uid_str}"
             lines.append(f"**{name}** → {r.capitalize()}")
+        for uid in mk_users:
+            user = bot.get_user(uid)
+            name = user.display_name if user else f"ID {uid}"
+            lines.append(f"**{name}** → Moonkeeper")
+        if not lines:
+            return await ctx.send(embed=info_embed("Bot Roles (Manual)", "No manual assignments yet."))
         return await ctx.send(embed=info_embed("Bot Roles (Manual)", "\n".join(lines)))
 
     if action == "sync":
@@ -3522,27 +3549,39 @@ async def pfx_botrole(ctx, action: str = "", *args):
                     continue
                 role = guild.get_role(role_id) if guild else None
                 lines.append(f"**{tier.capitalize()}** → {role.mention if role else f'`{role_id}` (role not found)'}")
+            mk_role_id = cfg.get("moonkeeper_sync_role")
+            if mk_role_id:
+                mk_role = guild.get_role(mk_role_id) if guild else None
+                lines.append(f"**Moonkeeper** → {mk_role.mention if mk_role else f'`{mk_role_id}` (role not found)'}")
+            else:
+                lines.append("**Moonkeeper** → *(not set)*")
             note = "" if guild else "\n\n⚠️ `SUPPORT_SERVER_ID` isn't set in the environment, so sync won't work."
             return await ctx.send(embed=info_embed("Bot Role Sync", "\n".join(lines) + note))
         if sub == "remove":
             tier = args[1].lower() if len(args) > 1 else ""
+            if tier == "moonkeeper":
+                cfg.pop("moonkeeper_sync_role", None)
+                save_config(cfg)
+                return await ctx.send(embed=success_embed("Sync role for **Moonkeeper** removed."))
             if tier not in valid_tiers:
-                return await ctx.send(embed=error_embed("Valid tiers: `staff`, `moderator`, `server_manager`, `moonkeeper`, `management`, `developer`."))
+                return await ctx.send(embed=error_embed("Valid tiers: `staff`, `moderator`, `server_manager`, `management`, `developer`, `moonkeeper`."))
             role_sync.pop(tier, None)
             save_config(cfg)
             return await ctx.send(embed=success_embed(f"Sync role for **{tier.capitalize()}** removed."))
         # botrole sync <tier> <role_id/mention>
         if len(args) < 2:
             return await ctx.send(embed=info_embed("Bot Role Sync", (
-                "`botrole sync <staff/moderator/server_manager/moonkeeper/management/developer> <role_id or @role>` — link a Discord role in the support server to a badge\n"
+                "`botrole sync <staff/moderator/server_manager/management/developer/moonkeeper> <role_id or @role>` — link a Discord role in the support server to a badge\n"
                 "`botrole sync remove <tier>` — unlink it\n"
                 "`botrole sync list` — view the current mapping\n\n"
                 "Once set, anyone with that role in the support server automatically gets the badge "
-                "on `profile` — no need for manual `botrole set` anymore."
+                "on `profile` — no need for manual `botrole set` anymore.\n\n"
+                "-# Moonkeeper is independent of the other tiers — it stacks alongside whatever "
+                "tier someone already has instead of competing with it."
             )))
         tier = args[0].lower()
-        if tier not in valid_tiers:
-            return await ctx.send(embed=error_embed("Valid tiers: `staff`, `moderator`, `server_manager`, `moonkeeper`, `management`, `developer`."))
+        if tier not in settable:
+            return await ctx.send(embed=error_embed("Valid tiers: `staff`, `moderator`, `server_manager`, `management`, `developer`, `moonkeeper`."))
         role_match = re.match(r"<@&(\d+)>|(\d{17,20})", args[1].strip())
         if not role_match:
             return await ctx.send(embed=error_embed("Provide a valid role ID or role mention."))
@@ -3553,7 +3592,10 @@ async def pfx_botrole(ctx, action: str = "", *args):
         disc_role = guild.get_role(role_id)
         if not disc_role:
             return await ctx.send(embed=error_embed("Role not found in the support server."))
-        role_sync[tier] = role_id
+        if tier == "moonkeeper":
+            cfg["moonkeeper_sync_role"] = role_id
+        else:
+            role_sync[tier] = role_id
         save_config(cfg)
         info = BOT_ROLE_BADGES[tier]
         badge_tag = (info["emoji"] + " ") if info.get("emoji") else ""
@@ -3564,7 +3606,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
 
     if not args:
         return await ctx.send(embed=info_embed("Bot Role", (
-            "`botrole set @user <staff/moderator/server_manager/moonkeeper/management/developer>` — manual assignment (for people outside the support server)\n"
+            "`botrole set @user <staff/moderator/server_manager/management/developer/moonkeeper>` — manual assignment (for people outside the support server)\n"
             "`botrole remove @user` — remove a manual assignment\n"
             "`botrole list` — view manual assignments\n"
             "`botrole sync <tier> <role_id>` — auto-sync from a Discord role in the support server"
@@ -3579,13 +3621,18 @@ async def pfx_botrole(ctx, action: str = "", *args):
             break
     if not member:
         return await ctx.send(embed=error_embed("User not found in this server."))
-    role = next((a.lower() for a in args if a.lower() in valid_tiers), "")
+    role = next((a.lower() for a in args if a.lower() in settable), "")
 
     if action == "set":
-        if role not in valid_tiers:
-            return await ctx.send(embed=error_embed("Valid roles: `staff`, `moderator`, `server_manager`, `moonkeeper`, `management`, `developer`"))
-        bot_roles[str(member.id)] = role
-        save_config(cfg)
+        if role not in settable:
+            return await ctx.send(embed=error_embed("Valid roles: `staff`, `moderator`, `server_manager`, `management`, `developer`, `moonkeeper`"))
+        if role == "moonkeeper":
+            if member.id not in mk_users:
+                mk_users.append(member.id)
+                save_config(cfg)
+        else:
+            bot_roles[str(member.id)] = role
+            save_config(cfg)
         info = BOT_ROLE_BADGES[role]
         badge_tag = (info["emoji"] + " ") if info.get("emoji") else ""
         embed = discord.Embed(title="Bot Role Assigned", description=f"{member.mention} → {badge_tag}**{info['label']}**", color=info["color"], timestamp=discord.utils.utcnow())
@@ -3596,10 +3643,16 @@ async def pfx_botrole(ctx, action: str = "", *args):
         except Exception: pass
         await ctx.send(embed=embed)
     elif action == "remove":
-        if str(member.id) not in bot_roles: return await ctx.send(embed=error_embed(f"{member.display_name} doesn't have a manual bot role."))
-        removed = bot_roles.pop(str(member.id))
+        removed = []
+        if str(member.id) in bot_roles:
+            removed.append(bot_roles.pop(str(member.id)).capitalize())
+        if member.id in mk_users:
+            mk_users.remove(member.id)
+            removed.append("Moonkeeper")
+        if not removed:
+            return await ctx.send(embed=error_embed(f"{member.display_name} doesn't have a manual bot role."))
         save_config(cfg)
-        await ctx.send(embed=success_embed(f"Manual bot role **{removed.capitalize()}** removed from {member.mention}."))
+        await ctx.send(embed=success_embed(f"Manual bot role(s) **{', '.join(removed)}** removed from {member.mention}."))
 
 @bot.command(name="grantpremium", aliases=["gp"])
 @is_owner_or_staff()
