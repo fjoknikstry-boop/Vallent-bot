@@ -22,15 +22,15 @@ Contoh:
 # BADGE EMOJI
 # ══════════════════════════════════════════════════════════════════
 
-BADGE_FOUNDER    = "<:emoji_22:1528921865773518848>"   # Emoji untuk badge FOUNDER
-BADGE_DEVELOPER  = "<:emoji_53:1528919486848172154>"   # Emoji untuk badge DEVELOPER
-BADGE_MANAGEMENT = "<:emoji_55:1528951862571827210>"   # Emoji untuk badge MANAGEMENT
-BADGE_MODERATOR       = "<:emoji_23:1528921912133288028>"   # Emoji untuk badge MODERATOR — isi ID emoji lu di sini
-BADGE_SERVER_MANAGER  = "<:emoji_56:1528951893198372874>"   # Emoji untuk badge SERVER MANAGER — isi ID emoji lu di sini
-BADGE_STAFF      = "<:emoji_52:1528919429717561354>"   # Emoji untuk badge STAFF
+BADGE_FOUNDER    = "<:emoji_46:1528958923472769186>"   # Emoji untuk badge FOUNDER
+BADGE_DEVELOPER  = "<:emoji_50:1528959036626567258>"   # Emoji untuk badge DEVELOPER
+BADGE_MANAGEMENT = "<:emoji_47:1528958972441137202>"   # Emoji untuk badge MANAGEMENT
+BADGE_MODERATOR       = "<:emoji_54:1528959142297997332>"   # Emoji untuk badge MODERATOR — isi ID emoji lu di sini
+BADGE_SERVER_MANAGER  = "<:emoji_49:1528959014304481311>"   # Emoji untuk badge SERVER MANAGER — isi ID emoji lu di sini
+BADGE_STAFF      = "<:emoji_47:1528958989470269540>"   # Emoji untuk badge STAFF
 BADGE_PREMIUM    = "<:emoji_40:1528941101543591998>"   # Emoji untuk badge PREMIUM
 BADGE_NOPREFIX   = "<:emoji_51:1528919382389035018>"   # Emoji untuk badge NO PREFIX
-BADGE_USER       = "<:emoji_20:1528921287043584092>"   # Emoji untuk badge USER
+BADGE_USER       = "<:emoji_52:1528959097259688006>"   # Emoji untuk badge USER
 
 # ══════════════════════════════════════════════════════════════════
 # UI / SECTION EMOJI (untuk help, info, dll)
