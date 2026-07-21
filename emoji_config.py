@@ -28,7 +28,7 @@ BADGE_MANAGEMENT = "<:emoji_47:1528958972441137202>"   # Emoji untuk badge MANAG
 BADGE_MODERATOR       = "<:emoji_54:1528959142297997332>"   # Emoji untuk badge MODERATOR — isi ID emoji lu di sini
 BADGE_SERVER_MANAGER  = "<:emoji_49:1528959014304481311>"   # Emoji untuk badge SERVER MANAGER — isi ID emoji lu di sini
 BADGE_STAFF      = "<:emoji_47:1528958989470269540>"   # Emoji untuk badge STAFF
-BADGE_PREMIUM    = "<:emoji_40:1528941101543591998>"   # Emoji untuk badge PREMIUM
+BADGE_PREMIUM    = "<:premium:1528961463094612110>"   # Emoji untuk badge PREMIUM
 BADGE_NOPREFIX   = "<:emoji_51:1528919382389035018>"   # Emoji untuk badge NO PREFIX
 BADGE_USER       = "<:emoji_52:1528959097259688006>"   # Emoji untuk badge USER
 
@@ -60,7 +60,7 @@ ICON_LOADING     = "<:emoji_29:1528929806392229929>"   # Icon loading / proses
 # Profile card icons
 ICON_PROFILE     = "<:emoji_52:1528948967314817024>"   # Icon di header profile
 ICON_BADGES      = "<a:emoji_47:1528089656783142993>"   # Icon di ALL BADGES
-ICON_COMMANDS    = "<a:emoji_58:1528919841660993648>"   # Icon di Commands Runned
+ICON_COMMANDS    = "<a:music_2:1528961515879927949>"   # Icon di Commands Runned
 ICON_PREMIUM_TAG = "<a:emoji_56:1528919602699047062>"   # Icon di keterangan premium
 
 # Ticket icons
