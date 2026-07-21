@@ -25,7 +25,7 @@ Contoh:
 BADGE_FOUNDER    = "<:emoji_22:1528921865773518848>"   # Emoji untuk badge FOUNDER
 BADGE_DEVELOPER  = "<:emoji_53:1528919486848172154>"   # Emoji untuk badge DEVELOPER
 BADGE_MANAGEMENT = "<:emoji_55:1528951862571827210>"   # Emoji untuk badge MANAGEMENT
-BADGE_MODERATOR       = "<:emoji_57:1528919682286092360>"   # Emoji untuk badge MODERATOR — isi ID emoji lu di sini
+BADGE_MODERATOR       = "<:emoji_23:1528921912133288028>"   # Emoji untuk badge MODERATOR — isi ID emoji lu di sini
 BADGE_SERVER_MANAGER  = "<:emoji_56:1528951893198372874>"   # Emoji untuk badge SERVER MANAGER — isi ID emoji lu di sini
 BADGE_STAFF      = "<:emoji_52:1528919429717561354>"   # Emoji untuk badge STAFF
 BADGE_PREMIUM    = "<:emoji_40:1528941101543591998>"   # Emoji untuk badge PREMIUM
@@ -43,8 +43,8 @@ ICON_INFO        = "<:emoji_49:1528947364189049012>"   # Icon untuk section Info
 ICON_TICKET      = "<:emoji_35:1528930032989372708>"   # Icon untuk section Ticket
 ICON_LEVEL       = "<:emoji_18:1527829456071168191>"   # Icon untuk section Level & XP
 ICON_GIVEAWAY    = "<:emoji_41:1528941125438541904>"   # Icon untuk section Giveaway
-ICON_ANTISPAM    = "<:emoji_48:1528942175545593967>"   # Icon untuk section Antispam
-ICON_OWNER       = "<:emoji_40:1527830518115336313>"   # Icon untuk section Owner Only
+ICON_ANTISPAM    = "<:emoji_44:1528941241453252638>"   # Icon untuk section Antispam
+ICON_OWNER       = "<:emoji_11:1527088601240961094>"   # Icon untuk section Owner Only
 ICON_BOOST       = "<:emoji_42:1528941192493142107>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
 ICON_ANTINUKE    = "<:emoji_31:1528929865267544164>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
 ICON_IGNORE      = "<:emoji_45:1528941265368907877>"
@@ -69,7 +69,7 @@ ICON_TICKET_CLOSE = "<:emoji_53:1528949983645138984>"  # Icon tombol Close Ticke
 
 # Giveaway icons
 ICON_GIVEAWAY_REACT = "<:emoji_14:1527088695688302732>" # Icon reaksi giveaway (default 🎉 kalau kosong)
-ICON_WINNER          = "<:emoji_11:1527088601240961094>" # Icon pengumuman pemenang
+ICON_WINNER          = "<a:emoji_53:1522406976632389855>" # Icon pengumuman pemenang
 
 # ══════════════════════════════════════════════════════════════════
 # HELPER FUNCTION
