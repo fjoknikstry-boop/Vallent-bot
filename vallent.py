@@ -2213,6 +2213,8 @@ async def on_member_remove(member: discord.Member):
         save_config(cfg)
 
 _recent_boost_starts: dict = defaultdict(list)  # guild_id -> [(member_id, monotonic_ts), ...]
+_last_attributed_booster: dict = {}  # guild_id -> (member_id, monotonic_ts) — see fallback below
+LAST_BOOSTER_FALLBACK_WINDOW = 600  # seconds (10 min)
 
 async def handle_new_boost(guild: discord.Guild, member: Optional[discord.Member], boost_number: int):
     """Send a notification for ONE individual boost. Fires once per boost,
@@ -2286,6 +2288,20 @@ async def on_guild_update(before: discord.Guild, after: discord.Guild):
         if pending:
             uid, _ts = pending.pop(0)
             member = after.get_member(uid)
+        if member is None:
+            # Discord only flips premium_since the very first time a member
+            # boosts — adding extra boost slots while already boosting (or
+            # boosting again later without ever un-boosting) never retriggers
+            # it, so there's no fresh on_member_update signal for those. The
+            # best available attribution is whoever we last confirmed
+            # boosting in this guild recently, since that's overwhelmingly
+            # the real explanation (same person contributing another slot),
+            # rather than silently falling back to an anonymous "Someone".
+            last = _last_attributed_booster.get(after.id)
+            if last and (now - last[1]) < LAST_BOOSTER_FALLBACK_WINDOW:
+                member = after.get_member(last[0])
+        if member is not None:
+            _last_attributed_booster[after.id] = (member.id, now)
         await handle_new_boost(after, member, boost_number=before_count + i + 1)
 
 @bot.event
