@@ -1600,11 +1600,30 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary,
                         emoji="🙋", custom_id="vx_ticket_claim")
-    async def claim_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+    async def claim_btn(self, interaction: discord.Interaction, btn: discord.ui.Button):
         gc = guild_cfg(cfg, interaction.guild.id)
         uid, tk, panel = _find_active_ticket(gc, interaction.channel.id)
         if not tk:
             return await interaction.response.send_message(embed=error_embed("This channel isn't an active ticket."), ephemeral=True)
+
+        claimed_by = tk.get("claimed_by")
+        if claimed_by:
+            # Already claimed. Re-lock the button on this message too, in case
+            # it's showing stale/clickable state (e.g. a bot restart happened
+            # before it got edited) — nobody, including the original claimer,
+            # should ever be able to click this again once it's claimed.
+            claimer = interaction.guild.get_member(claimed_by)
+            btn.disabled = True
+            btn.style    = discord.ButtonStyle.secondary
+            btn.label    = f"Claimed by {claimer.display_name}" if claimer else "Claimed"
+            try:
+                await interaction.response.edit_message(view=self)
+            except discord.InteractionResponded:
+                pass
+            return await interaction.followup.send(
+                embed=error_embed(f"This ticket is already claimed by {claimer.mention if claimer else 'someone else'}."),
+                ephemeral=True
+            )
 
         is_owner_ = interaction.user.id == bot.owner_id
         role_id   = panel.get("support_role")
@@ -1613,20 +1632,16 @@ class TicketControlView(discord.ui.View):
         if not can_claim:
             return await interaction.response.send_message(embed=error_embed("Only support staff can claim tickets."), ephemeral=True)
 
-        claimed_by = tk.get("claimed_by")
-        if claimed_by and claimed_by == interaction.user.id:
-            tk["claimed_by"] = None
-            save_config(cfg)
-            return await interaction.response.send_message(embed=success_embed(f"🙋 {interaction.user.mention} unclaimed this ticket."))
-        if claimed_by:
-            claimer = interaction.guild.get_member(claimed_by)
-            return await interaction.response.send_message(
-                embed=error_embed(f"This ticket is already claimed by {claimer.mention if claimer else 'someone else'}."),
-                ephemeral=True)
-
         tk["claimed_by"] = interaction.user.id
         save_config(cfg)
-        await interaction.response.send_message(embed=success_embed(f"🙋 Ticket claimed by {interaction.user.mention} — they'll be handling this from here."))
+
+        # One claim, permanently — disable + relabel the button right away so
+        # it can never be pressed again by anyone, staff or otherwise.
+        btn.disabled = True
+        btn.style    = discord.ButtonStyle.secondary
+        btn.label    = f"Claimed by {interaction.user.display_name}"
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send(embed=success_embed(f"🙋 Ticket claimed by {interaction.user.mention} — they'll be handling this from here."))
 
     @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger,
                         emoji=ICON_TICKET_CLOSE if ICON_TICKET_CLOSE else "🔒",
