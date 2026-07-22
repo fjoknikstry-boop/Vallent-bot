@@ -1125,15 +1125,24 @@ async def do_afk_set(guild: discord.Guild, author: discord.abc.User, reason: str
     """Mark `author` as AFK in this guild. Any message they send afterwards
     (other than re-running `afk`) automatically clears it — see on_message.
     Anyone who @mentions them while AFK gets an embed with their reason."""
-    gc      = guild_cfg(cfg, guild.id)
-    afk_map = gc.setdefault("afk_users", {})
-    reason  = (reason or "").strip()[:200] or "AFK"
-    afk_map[str(author.id)] = {"reason": reason, "since": int(discord.utils.utcnow().timestamp())}
+    gc       = guild_cfg(cfg, guild.id)
+    afk_map  = gc.setdefault("afk_users", {})
+    reason   = (reason or "").strip()[:200] or "AFK"
+    since_ts = int(discord.utils.utcnow().timestamp())
+    afk_map[str(author.id)] = {"reason": reason, "since": since_ts}
     save_config(cfg)
-    await reply_fn(embed=success_embed(
-        f"{author.mention} is now **AFK**: {reason}\n"
-        "-# Sending any message will automatically clear this."
-    ))
+
+    embed = base_embed(
+        _title_with_icon(ICON_AFK, "💤", "User is AFK"),
+        "-# Sending any message will automatically clear this status.",
+        color=COLOR_PRIMARY
+    )
+    embed.set_author(name=author.display_name, icon_url=author.display_avatar.url)
+    embed.add_field(name="Reason", value=reason, inline=True)
+    embed.add_field(name="Duration", value=f"<t:{since_ts}:R>", inline=True)
+    if bot.user:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    await reply_fn(embed=embed)
 
 async def do_addemoji(guild, emoji_or_url: str, name: str):
     import aiohttp, io
@@ -1714,12 +1723,14 @@ async def on_message(message: discord.Message):
                 afk_hits.append((m, entry))
                 seen_ids.add(m.id)
         if afk_hits:
-            emb = base_embed(_title_with_icon(ICON_AFK, "💤", "AFK"), None, color=COLOR_WARNING)
+            emb = base_embed(_title_with_icon(ICON_AFK, "💤", "AFK Notice"), color=COLOR_PRIMARY)
             for m, entry in afk_hits[:5]:
-                reason    = entry.get("reason") or "AFK"
-                since_ts  = entry.get("since")
-                since_txt = f" · since <t:{since_ts}:R>" if since_ts else ""
-                emb.add_field(name=m.display_name, value=f"{reason}{since_txt}", inline=False)
+                reason   = entry.get("reason") or "AFK"
+                since_ts = entry.get("since")
+                duration = f"<t:{since_ts}:R>" if since_ts else "Unknown"
+                emb.add_field(name=m.display_name, value=f"**Reason:** {reason}\n**Duration:** {duration}", inline=False)
+            if bot.user:
+                emb.set_thumbnail(url=bot.user.display_avatar.url)
             try:
                 await message.channel.send(embed=emb, reference=message, mention_author=False)
             except Exception:
