@@ -1114,7 +1114,20 @@ async def do_avatar(member, reply_fn):
     embed = discord.Embed(title=f"{member.display_name}'s Avatar", color=COLOR_PRIMARY)
     embed.set_image(url=member.display_avatar.url)
     embed.set_footer(text=BOT_NAME)
-    await reply_fn(embed=embed)
+
+    # Link buttons so the person can grab a full-res static copy straight
+    # away, without needing to right-click -> Open Image -> Save manually.
+    avatar = member.display_avatar
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(
+        label="Download PNG", style=discord.ButtonStyle.link,
+        url=avatar.with_format("png").with_size(1024).url
+    ))
+    view.add_item(discord.ui.Button(
+        label="Download JPG", style=discord.ButtonStyle.link,
+        url=avatar.with_format("jpg").with_size(1024).url
+    ))
+    await reply_fn(embed=embed, view=view)
 
 async def do_ping(reply_fn):
     lat = round(bot.latency * 1000)
