@@ -208,6 +208,8 @@ def _init_guild(gc: dict):
         "verified_role_id":   None,
         "log_channel_id":     None,
         "message_id":         None,
+        "panel_message":      "Click **Verify** below and solve a short captcha to unlock the rest of the server.",
+        "result_message":     "Thanks for verifying — enjoy your stay!",
     })
     gc["verification"].setdefault("enabled",            False)
     gc["verification"].setdefault("channel_id",         None)
@@ -215,6 +217,8 @@ def _init_guild(gc: dict):
     gc["verification"].setdefault("verified_role_id",   None)
     gc["verification"].setdefault("log_channel_id",     None)
     gc["verification"].setdefault("message_id",         None)
+    gc["verification"].setdefault("panel_message",      "Click **Verify** below and solve a short captcha to unlock the rest of the server.")
+    gc["verification"].setdefault("result_message",     "Thanks for verifying — enjoy your stay!")
     gc.setdefault("ticket", {"panels": {}})
     gc["ticket"].setdefault("panels", {})
     # Migrate the old ticket structure (single-config, panels as a list) to the multi-panel dict.
@@ -1455,6 +1459,29 @@ async def _complete_verification(member: discord.Member, gc: dict) -> bool:
             pass
     return True
 
+def _verification_result_embed(user: discord.abc.User, success: bool, gc: dict) -> discord.Embed:
+    """Detailed result card shown after a verification attempt concludes
+    (either passed, or exhausted its attempts/expired) — username, a clear
+    pass/fail status, the exact time, and the server's custom message.
+    Always dark red regardless of outcome, per how this bot's brand embeds
+    are themed."""
+    vc     = gc.get("verification", {})
+    words  = vc.get("result_message") or "Thanks for verifying — enjoy your stay!"
+    now_ts = int(discord.utils.utcnow().timestamp())
+    embed  = discord.Embed(
+        title=f"{e(ICON_VERIFICATION, '🔐')} Verification Result",
+        color=COLOR_PRIMARY,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Username", value=str(user), inline=True)
+    embed.add_field(name="Status", value="✅ Verified" if success else "❌ Failed", inline=True)
+    embed.add_field(name="Verification Time", value=f"<t:{now_ts}:F>", inline=False)
+    embed.add_field(name="Message", value=words, inline=False)
+    if bot.user:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    embed.set_footer(text=BOT_NAME)
+    return embed
+
 class CaptchaModal(discord.ui.Modal, title="Enter the Verification Code"):
     code_input = discord.ui.TextInput(
         label="Type the code shown in the image",
@@ -1466,6 +1493,7 @@ class CaptchaModal(discord.ui.Modal, title="Enter the Verification Code"):
         super().__init__(timeout=180)
 
     async def on_submit(self, interaction: discord.Interaction):
+        gc = guild_cfg(cfg, interaction.guild.id)
         pending = _PENDING_CAPTCHAS.get(interaction.user.id)
         if not pending or pending["guild_id"] != interaction.guild.id:
             return await interaction.response.send_message(
@@ -1475,7 +1503,7 @@ class CaptchaModal(discord.ui.Modal, title="Enter the Verification Code"):
         if time.monotonic() > pending["expires"]:
             _PENDING_CAPTCHAS.pop(interaction.user.id, None)
             return await interaction.response.send_message(
-                embed=error_embed("That code expired — click **Verify** again to get a new one."),
+                embed=_verification_result_embed(interaction.user, False, gc),
                 ephemeral=True
             )
         if self.code_input.value.strip().upper() != pending["code"]:
@@ -1483,7 +1511,7 @@ class CaptchaModal(discord.ui.Modal, title="Enter the Verification Code"):
             if pending["attempts"] >= CAPTCHA_MAX_TRY:
                 _PENDING_CAPTCHAS.pop(interaction.user.id, None)
                 return await interaction.response.send_message(
-                    embed=error_embed("Too many wrong attempts. Click **Verify** again to get a brand new code."),
+                    embed=_verification_result_embed(interaction.user, False, gc),
                     ephemeral=True
                 )
             left = CAPTCHA_MAX_TRY - pending["attempts"]
@@ -1493,11 +1521,10 @@ class CaptchaModal(discord.ui.Modal, title="Enter the Verification Code"):
             )
 
         _PENDING_CAPTCHAS.pop(interaction.user.id, None)
-        gc = guild_cfg(cfg, interaction.guild.id)
         ok = await _complete_verification(interaction.user, gc)
         if ok:
             await interaction.response.send_message(
-                embed=success_embed("You're verified! Welcome in — enjoy the server. 🎉"),
+                embed=_verification_result_embed(interaction.user, True, gc),
                 ephemeral=True
             )
         else:
@@ -1533,7 +1560,7 @@ class VerificationView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Verify", style=discord.ButtonStyle.success, emoji="✅", custom_id="vx_verify_start")
+    @discord.ui.button(label="Verify", style=discord.ButtonStyle.secondary, custom_id="vx_verify_start")
     async def verify_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
         gc = guild_cfg(cfg, interaction.guild.id)
         vc = gc.get("verification", {})
@@ -3694,6 +3721,8 @@ async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
     vc  = gc.setdefault("verification", {
         "enabled": False, "channel_id": None, "unverified_role_id": None,
         "verified_role_id": None, "log_channel_id": None, "message_id": None,
+        "panel_message": "Click **Verify** below and solve a short captcha to unlock the rest of the server.",
+        "result_message": "Thanks for verifying — enjoy your stay!",
     })
     sub = sub.lower()
 
@@ -3730,6 +3759,22 @@ async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
         vc["log_channel_id"] = ch.id
         save_config(cfg)
         await ctx.send(embed=success_embed(f"Verification logs will be sent to {ch.mention}."))
+
+    elif sub == "message":
+        text = rest.strip()
+        if not text:
+            return await ctx.send(embed=error_embed("Give me the text to show: `verification message <your text>`"))
+        vc["panel_message"] = text[:1000]
+        save_config(cfg)
+        await ctx.send(embed=success_embed("Verification panel message updated. Run `verification send` to repost it with the new text."))
+
+    elif sub == "resultmessage":
+        text = rest.strip()
+        if not text:
+            return await ctx.send(embed=error_embed("Give me the text to show: `verification resultmessage <your text>`"))
+        vc["result_message"] = text[:500]
+        save_config(cfg)
+        await ctx.send(embed=success_embed("Verification result message updated — shown on the detail embed members get after every attempt."))
 
     elif sub == "enable":
         missing = []
@@ -3778,7 +3823,7 @@ async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
             return await ctx.send(embed=error_embed("Verification channel isn't set — run `verification channel #channel` first."))
         embed = base_embed(
             f"{e(ICON_VERIFICATION, '🔐')} Verification Required",
-            "Click **Verify** below and solve a short captcha to unlock the rest of the server.",
+            vc.get("panel_message") or "Click **Verify** below and solve a short captcha to unlock the rest of the server.",
             color=COLOR_PRIMARY
         )
         embed.set_footer(text=BOT_NAME)
@@ -3802,6 +3847,10 @@ async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
         embed.add_field(name="Log Channel", value=lch.mention if lch else "*(not set)*", inline=True)
         embed.add_field(name="Unverified Role", value=urole.mention if urole else "*(not set)*", inline=True)
         embed.add_field(name="Verified Role", value=vrole.mention if vrole else "*(not set)*", inline=True)
+        panel_msg  = vc.get("panel_message")  or "*(default)*"
+        result_msg = vc.get("result_message") or "*(default)*"
+        embed.add_field(name="Panel Message", value=panel_msg[:200], inline=False)
+        embed.add_field(name="Result Message", value=result_msg[:200], inline=False)
         await ctx.send(embed=embed)
 
     else:
@@ -3810,6 +3859,8 @@ async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
             "`verification unverifiedrole @role` — role given to members automatically on join\n"
             "`verification verifiedrole @role` — role given once they solve the captcha\n"
             "`verification logchannel #channel` — *(optional)* log every successful verification\n"
+            "`verification message <text>` — custom text shown on the verification panel embed\n"
+            "`verification resultmessage <text>` — custom text shown on the pass/fail result embed\n"
             "`verification enable` — turn the feature on (needs the 3 items above set first)\n"
             "`verification disable` — turn it off (doesn't touch roles already given out)\n"
             "`verification send` — post/repost the Verify button in the configured channel\n"
