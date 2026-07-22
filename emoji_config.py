@@ -48,6 +48,7 @@ ICON_ANTISPAM    = "<:emoji_44:1528941241453252638>"   # Icon untuk section Anti
 ICON_OWNER       = "<:emoji_11:1527088601240961094>"   # Icon untuk section Owner Only
 ICON_BOOST       = "<a:emoji_50:1529240171311009802>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
 ICON_ANTINUKE    = "<:emoji_31:1528929865267544164>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
+ICON_VERIFICATION = "<:emoji_55:1529375595740397628>"   # Icon untuk section & panel Verifikasi (captcha) — isi ID emoji lu di sini (fallback: 🔐)
 ICON_IGNORE      = "<:emoji_50:1528948003484864643>"
 ICON_AUTOMOD     = "<:emoji_51:1528948381559296061>"
 ICON_AUTORESPONSE = "<:emoji_42:1528941215330992280>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
