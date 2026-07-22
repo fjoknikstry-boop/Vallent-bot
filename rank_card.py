@@ -662,37 +662,71 @@ def generate_captcha_code(length: int = 6) -> str:
 
 def render_captcha_image(code: str) -> io.BytesIO:
     """Render `code` jadi gambar captcha bergaya VALLENT EXS (dark red,
-    grain texture) dengan distorsi per-karakter + noise, siap dikirim
-    sebagai file attachment ke Discord."""
-    W, H = 320, 130
+    grain texture), dibikin sengaja susah buat OCR bot: ukuran huruf acak,
+    rotasi acak, sine-wave warp per karakter, spacing dirapetin/dibikin
+    dikit overlap biar gak gampang di-segmentasi kolom-per-kolom, plus
+    garis coretan yang nembus langsung tulisannya (bukan cuma nongkrong
+    di background) — tapi tetep kebaca jelas sama mata manusia."""
+    W, H = 340, 140
     img = _vertical_gradient((W, H), (26, 6, 8), (46, 10, 12)).convert("RGBA")
-    img = Image.alpha_composite(img, _noise_texture((W, H), opacity=26))
+    img = Image.alpha_composite(img, _noise_texture((W, H), opacity=34))
     draw = ImageDraw.Draw(img)
 
-    # garis coretan acak di belakang teks — bikin susah di-OCR otomatis
-    for _ in range(6):
+    # garis coretan acak DI BELAKANG teks — beda warna/ketebalan tiap garis
+    for _ in range(9):
         x1, y1 = random.randint(0, W), random.randint(0, H)
         x2, y2 = random.randint(0, W), random.randint(0, H)
-        draw.line([(x1, y1), (x2, y2)], fill=(*CRIMSON, 90), width=2)
+        col = random.choice([CRIMSON, (150, 40, 50), (200, 160, 60)])
+        draw.line([(x1, y1), (x2, y2)], fill=(*col, random.randint(70, 120)), width=random.randint(1, 3))
 
-    f = _font(F_DISPLAY, 54)
     n = max(len(code), 1)
-    spacing = W // (n + 1)
-    for i, ch in enumerate(code):
-        glyph = Image.new("RGBA", (80, 100), (0, 0, 0, 0))
-        gd = ImageDraw.Draw(glyph)
-        gd.text((12, 14), ch, font=f, fill=(255, 255, 255, 255))
-        angle = random.uniform(-22, 22)
-        glyph = glyph.rotate(angle, resample=Image.BICUBIC, expand=True)
-        px = spacing * (i + 1) - glyph.width // 2
-        py = H // 2 - glyph.height // 2 + random.randint(-8, 8)
-        img.alpha_composite(glyph, (px, py))
+    # spacing dirapetin (bahkan sengaja dikit overlap) — teknik standar
+    # anti-OCR biar bot yang nyoba "potong per kolom lalu tebak 1 huruf per
+    # potongan" gak bisa kerja bersih
+    spacing = W / (n + 0.6)
+    glyphs_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 
-    # speckle noise di atas teks buat tekstur anti-OCR tambahan
+    for i, ch in enumerate(code):
+        size = random.randint(44, 60)
+        f = _font(F_DISPLAY, size)
+        glyph = Image.new("RGBA", (96, 110), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glyph)
+        gd.text((16, 14), ch, font=f, fill=(255, 255, 255, 255))
+
+        angle = random.uniform(-30, 30)
+        glyph = glyph.rotate(angle, resample=Image.BICUBIC, expand=True)
+
+        # sine-wave warp per karakter: tiap kolom pixel digeser vertikal
+        # dikit sesuai gelombang sinus acak — bikin bentuk huruf gak
+        # "flat", jauh lebih ganggu buat template-matching OCR daripada
+        # rotasi doang, tapi manusia masih gampang baca
+        amp   = random.uniform(2, 5)
+        freq  = random.uniform(0.08, 0.18)
+        phase = random.uniform(0, math.tau)
+        warped = Image.new("RGBA", glyph.size, (0, 0, 0, 0))
+        for x in range(glyph.width):
+            offset = int(amp * math.sin(freq * x + phase))
+            warped.paste(glyph.crop((x, 0, x + 1, glyph.height)), (x, offset))
+        glyph = warped
+
+        px = int(spacing * (i + 0.8)) - glyph.width // 2 + random.randint(-4, 4)
+        py = H // 2 - glyph.height // 2 + random.randint(-10, 10)
+        glyphs_layer.alpha_composite(glyph, (px, py))
+
+    img = Image.alpha_composite(img, glyphs_layer)
     draw = ImageDraw.Draw(img)
-    for _ in range(160):
+
+    # garis coretan DI ATAS teks juga, motong sebagian bentuk huruf — ini
+    # yang paling efektif ngerusak akurasi OCR/segmentasi otomatis
+    for _ in range(4):
+        x1, y1 = random.randint(0, W), random.randint(int(H * 0.3), int(H * 0.7))
+        x2, y2 = random.randint(0, W), random.randint(int(H * 0.3), int(H * 0.7))
+        draw.line([(x1, y1), (x2, y2)], fill=(255, 255, 255, 90), width=2)
+
+    # speckle noise padat di lapisan paling atas
+    for _ in range(220):
         x, y = random.randint(0, W - 1), random.randint(0, H - 1)
-        draw.point((x, y), fill=(255, 255, 255, random.randint(20, 70)))
+        draw.point((x, y), fill=(255, 255, 255, random.randint(20, 90)))
 
     out = Image.new("RGB", (W, H), (20, 4, 6))
     out.paste(img, (0, 0), img)
