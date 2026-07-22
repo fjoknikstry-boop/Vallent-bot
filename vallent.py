@@ -1523,12 +1523,12 @@ class CaptchaModal(discord.ui.Modal, title="Enter the Verification Code"):
 
         if time.monotonic() > pending["expires"]:
             _PENDING_CAPTCHAS.pop(interaction.user.id, None)
-            return await interaction.response.send_message(embed=_verification_result_embed(member, False, gc))
+            return await interaction.response.send_message(embed=_verification_result_embed(member, False, gc), view=invite_support_view())
         if self.code_input.value.strip().upper() != pending["code"]:
             pending["attempts"] += 1
             if pending["attempts"] >= CAPTCHA_MAX_TRY:
                 _PENDING_CAPTCHAS.pop(interaction.user.id, None)
-                return await interaction.response.send_message(embed=_verification_result_embed(member, False, gc))
+                return await interaction.response.send_message(embed=_verification_result_embed(member, False, gc), view=invite_support_view())
             left = CAPTCHA_MAX_TRY - pending["attempts"]
             return await interaction.response.send_message(
                 embed=error_embed(f"That's not quite right. **{left}** attempt(s) left before you'll need a new code.")
@@ -1537,7 +1537,7 @@ class CaptchaModal(discord.ui.Modal, title="Enter the Verification Code"):
         _PENDING_CAPTCHAS.pop(interaction.user.id, None)
         ok = await _complete_verification(member, gc)
         if ok:
-            await interaction.response.send_message(embed=_verification_result_embed(member, True, gc))
+            await interaction.response.send_message(embed=_verification_result_embed(member, True, gc), view=invite_support_view())
         else:
             await interaction.response.send_message(
                 embed=error_embed(
