@@ -2284,6 +2284,32 @@ async def pfx_slowmode(ctx, seconds: int = 0, channel: discord.TextChannel = Non
     except discord.Forbidden:
         await ctx.send(embed=error_embed("The bot doesn't have permission."))
 
+@bot.command(name="hide", aliases=["hidechannel", "hc"])
+async def pfx_hide(ctx, channel: discord.TextChannel = None):
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_channels:
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
+    ch = channel or ctx.channel
+    ow = ch.overwrites_for(ctx.guild.default_role)
+    ow.view_channel = False
+    try:
+        await ch.set_permissions(ctx.guild.default_role, overwrite=ow, reason=f"Hidden by {ctx.author}")
+        await ctx.send(embed=success_embed(f"{ch.mention} has been hidden from everyone."))
+    except discord.Forbidden:
+        await ctx.send(embed=error_embed("The bot doesn't have permission."))
+
+@bot.command(name="unhide", aliases=["unhidechannel", "uhc", "showchannel"])
+async def pfx_unhide(ctx, channel: discord.TextChannel = None):
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_channels:
+        return await ctx.send(embed=error_embed("You don't have permission to use this command."))
+    ch = channel or ctx.channel
+    ow = ch.overwrites_for(ctx.guild.default_role)
+    ow.view_channel = None
+    try:
+        await ch.set_permissions(ctx.guild.default_role, overwrite=ow, reason=f"Unhidden by {ctx.author}")
+        await ctx.send(embed=success_embed(f"{ch.mention} is visible to everyone again."))
+    except discord.Forbidden:
+        await ctx.send(embed=error_embed("The bot doesn't have permission."))
+
 # ── ROLE & VOICE ──────────────────────────────────────────────────
 
 @bot.command(name="addrole", aliases=["ar"])
@@ -4099,7 +4125,7 @@ HELP_CATEGORIES = [
     ("moderation", "Moderation", ICON_MODERATION, "🛠️", (
         "`kick` · `ban` · `unban` · `timeout` · `untimeout`\n"
         "`warn` · `warnings` · `unwarn` · `clearwarnings`\n"
-        "`purge` · `lock` · `unlock` · `slowmode`"
+        "`purge` · `lock` · `unlock` · `slowmode` · `hide` · `unhide`"
     )),
     ("role_voice", "Role & Voice", ICON_ROLE, "🎭", "`addrole` · `removerole` · `move`"),
     ("info", "Info", ICON_INFO, "ℹ️", "`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`"),
