@@ -208,7 +208,7 @@ def _init_guild(gc: dict):
         "verified_role_id":   None,
         "log_channel_id":     None,
         "message_id":         None,
-        "panel_message":      "Click **Verify** below and solve a short captcha to unlock the rest of the server.",
+        "panel_message":      "Click **Verify** below — I'll DM you a short captcha to unlock the rest of the server. Make sure your DMs are open!",
         "result_message":     "Thanks for verifying — enjoy your stay!",
     })
     gc["verification"].setdefault("enabled",            False)
@@ -217,7 +217,7 @@ def _init_guild(gc: dict):
     gc["verification"].setdefault("verified_role_id",   None)
     gc["verification"].setdefault("log_channel_id",     None)
     gc["verification"].setdefault("message_id",         None)
-    gc["verification"].setdefault("panel_message",      "Click **Verify** below and solve a short captcha to unlock the rest of the server.")
+    gc["verification"].setdefault("panel_message",      "Click **Verify** below — I'll DM you a short captcha to unlock the rest of the server. Make sure your DMs are open!")
     gc["verification"].setdefault("result_message",     "Thanks for verifying — enjoy your stay!")
     gc.setdefault("ticket", {"panels": {}})
     gc["ticket"].setdefault("panels", {})
@@ -1493,51 +1493,61 @@ class CaptchaModal(discord.ui.Modal, title="Enter the Verification Code"):
         super().__init__(timeout=180)
 
     async def on_submit(self, interaction: discord.Interaction):
-        gc = guild_cfg(cfg, interaction.guild.id)
         pending = _PENDING_CAPTCHAS.get(interaction.user.id)
-        if not pending or pending["guild_id"] != interaction.guild.id:
+        if not pending:
             return await interaction.response.send_message(
-                embed=error_embed("That code expired or wasn't found — click **Verify** again to get a new one."),
-                ephemeral=True
+                embed=error_embed("That code expired or wasn't found — go back to the server and click **Verify** again to get a new one.")
             )
-        if time.monotonic() > pending["expires"]:
+
+        # This modal is submitted from a DM, where interaction.guild is
+        # always None — the guild/member have to be resolved from what we
+        # captured back when the Verify button was first clicked.
+        guild = bot.get_guild(pending["guild_id"])
+        if not guild:
             _PENDING_CAPTCHAS.pop(interaction.user.id, None)
             return await interaction.response.send_message(
-                embed=_verification_result_embed(interaction.user, False, gc),
-                ephemeral=True
+                embed=error_embed("Couldn't reach that server anymore — please try again from the server.")
             )
+        member = guild.get_member(interaction.user.id)
+        if not member:
+            try:
+                member = await guild.fetch_member(interaction.user.id)
+            except discord.NotFound:
+                member = None
+        if not member:
+            _PENDING_CAPTCHAS.pop(interaction.user.id, None)
+            return await interaction.response.send_message(
+                embed=error_embed("You don't appear to be a member of that server anymore.")
+            )
+        gc = guild_cfg(cfg, guild.id)
+
+        if time.monotonic() > pending["expires"]:
+            _PENDING_CAPTCHAS.pop(interaction.user.id, None)
+            return await interaction.response.send_message(embed=_verification_result_embed(member, False, gc))
         if self.code_input.value.strip().upper() != pending["code"]:
             pending["attempts"] += 1
             if pending["attempts"] >= CAPTCHA_MAX_TRY:
                 _PENDING_CAPTCHAS.pop(interaction.user.id, None)
-                return await interaction.response.send_message(
-                    embed=_verification_result_embed(interaction.user, False, gc),
-                    ephemeral=True
-                )
+                return await interaction.response.send_message(embed=_verification_result_embed(member, False, gc))
             left = CAPTCHA_MAX_TRY - pending["attempts"]
             return await interaction.response.send_message(
-                embed=error_embed(f"That's not quite right. **{left}** attempt(s) left before you'll need a new code."),
-                ephemeral=True
+                embed=error_embed(f"That's not quite right. **{left}** attempt(s) left before you'll need a new code.")
             )
 
         _PENDING_CAPTCHAS.pop(interaction.user.id, None)
-        ok = await _complete_verification(interaction.user, gc)
+        ok = await _complete_verification(member, gc)
         if ok:
-            await interaction.response.send_message(
-                embed=_verification_result_embed(interaction.user, True, gc),
-                ephemeral=True
-            )
+            await interaction.response.send_message(embed=_verification_result_embed(member, True, gc))
         else:
             await interaction.response.send_message(
                 embed=error_embed(
                     "The Verified role couldn't be applied — the bot may be missing permissions, its role "
                     "may be positioned too low, or the role was deleted. Please ping staff for help."
-                ),
-                ephemeral=True
+                )
             )
 
 class CaptchaEnterView(discord.ui.View):
-    """Ephemeral, one-off view attached to a single captcha image — not
+    """One-off view attached to a single captcha image sent via DM — not
     persistent (unlike VerificationView below), since it's only ever
     valid for the short life of that specific code anyway."""
     def __init__(self):
@@ -1546,10 +1556,9 @@ class CaptchaEnterView(discord.ui.View):
     @discord.ui.button(label="Enter Code", style=discord.ButtonStyle.success, emoji="⌨️")
     async def enter_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
         pending = _PENDING_CAPTCHAS.get(interaction.user.id)
-        if not pending or pending["guild_id"] != interaction.guild.id:
+        if not pending:
             return await interaction.response.send_message(
-                embed=error_embed("This code expired. Click **Verify** again in the verification channel."),
-                ephemeral=True
+                embed=error_embed("This code expired. Go back to the server and click **Verify** again.")
             )
         await interaction.response.send_modal(CaptchaModal())
 
@@ -1576,20 +1585,39 @@ class VerificationView(discord.ui.View):
             )
 
         code = rank_card.generate_captcha_code()
-        _PENDING_CAPTCHAS[interaction.user.id] = {
-            "code": code, "guild_id": interaction.guild.id,
-            "expires": time.monotonic() + CAPTCHA_TTL, "attempts": 0
-        }
         img  = rank_card.render_captcha_image(code)
         file = discord.File(img, filename="captcha.png")
         embed = base_embed(
             f"{e(ICON_VERIFICATION, '🔐')} Verify You're Human",
             "Type the code shown below, then hit **Enter Code**.\n"
-            f"-# This code expires in {CAPTCHA_TTL // 60} minutes.",
+            f"-# This code expires in {CAPTCHA_TTL // 60} minutes. Sent because you clicked Verify in "
+            f"**{interaction.guild.name}**.",
             color=COLOR_PRIMARY
         )
         embed.set_image(url="attachment://captcha.png")
-        await interaction.response.send_message(embed=embed, file=file, view=CaptchaEnterView(), ephemeral=True)
+
+        # DM-only by design — keeps the captcha off a public/verifiable
+        # channel entirely, out of reach of anything scraping messages in
+        # the server itself.
+        try:
+            await interaction.user.send(embed=embed, file=file, view=CaptchaEnterView())
+        except discord.Forbidden:
+            return await interaction.response.send_message(
+                embed=error_embed(
+                    "I couldn't DM you the captcha — please enable **Direct Messages from server members** "
+                    "in your Privacy Settings for this server, then click **Verify** again."
+                ),
+                ephemeral=True
+            )
+
+        _PENDING_CAPTCHAS[interaction.user.id] = {
+            "code": code, "guild_id": interaction.guild.id,
+            "expires": time.monotonic() + CAPTCHA_TTL, "attempts": 0
+        }
+        await interaction.response.send_message(
+            embed=success_embed("Check your DMs — I've sent you a captcha to complete verification."),
+            ephemeral=True
+        )
 
 class TicketControlView(discord.ui.View):
     """Persistent, static view — one custom_id shared by every ticket, safe to use
@@ -3752,7 +3780,7 @@ async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
     vc  = gc.setdefault("verification", {
         "enabled": False, "channel_id": None, "unverified_role_id": None,
         "verified_role_id": None, "log_channel_id": None, "message_id": None,
-        "panel_message": "Click **Verify** below and solve a short captcha to unlock the rest of the server.",
+        "panel_message": "Click **Verify** below — I'll DM you a short captcha to unlock the rest of the server. Make sure your DMs are open!",
         "result_message": "Thanks for verifying — enjoy your stay!",
     })
     sub = sub.lower()
@@ -3854,7 +3882,7 @@ async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
             return await ctx.send(embed=error_embed("Verification channel isn't set — run `verification channel #channel` first."))
         embed = base_embed(
             f"{e(ICON_VERIFICATION, '🔐')} Verification Required",
-            vc.get("panel_message") or "Click **Verify** below and solve a short captcha to unlock the rest of the server.",
+            vc.get("panel_message") or "Click **Verify** below — I'll DM you a short captcha to unlock the rest of the server. Make sure your DMs are open!",
             color=COLOR_PRIMARY
         )
         embed.set_footer(text=BOT_NAME)
