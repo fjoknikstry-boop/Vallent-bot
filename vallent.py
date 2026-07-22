@@ -4687,10 +4687,25 @@ async def pfx_ownerhelp(ctx):
 @bot.command(name="commandlist", aliases=["cmdlist", "allcommands", "cmds"])
 @is_owner()
 async def pfx_commandlist(ctx):
-    """Owner-only. Full list of every registered command + its aliases,
-    in one embed — meant for posting somewhere public like the support
-    server, unlike `ownerhelp` which is always DM-only."""
-    cmds = sorted(bot.commands, key=lambda c: c.name.lower())
+    """Owner-only to RUN, but the output is meant to be posted publicly
+    (support server, etc.) — so owner/Moonkeeper-restricted commands are
+    deliberately excluded from the list itself. Detected two ways so
+    nothing sensitive slips through: dynamically, via any command carrying
+    an `is_owner()` check, and via the static OWNER_ONLY_CMDS set (which
+    also covers `is_owner_or_staff()`-gated ones like `noprefix`/`grantpremium`
+    that don't use is_owner() directly)."""
+    def _is_owner_restricted(c: commands.Command) -> bool:
+        if c.name in OWNER_ONLY_CMDS:
+            return True
+        for check in c.checks:
+            if getattr(check, "__qualname__", "").startswith("is_owner.<locals>.predicate"):
+                return True
+        return False
+
+    cmds = sorted(
+        (c for c in bot.commands if not _is_owner_restricted(c)),
+        key=lambda c: c.name.lower()
+    )
     lines = []
     for c in cmds:
         entry = f"`{BOT_PREFIX}{c.name}`"
@@ -4715,7 +4730,7 @@ async def pfx_commandlist(ctx):
                 banner_url = None
         if banner_url:
             embed.set_image(url=banner_url)
-    embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {len(cmds)} commands total")
+    embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {len(cmds)} commands")
     await ctx.send(embed=embed)
 
 # ══════════════════════════════════════════════════════════════════
