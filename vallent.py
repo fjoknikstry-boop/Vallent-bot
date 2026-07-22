@@ -1042,15 +1042,50 @@ async def do_ban(guild, author, member, reason, reply_fn):
     except discord.Forbidden:
         await reply_fn(embed=error_embed("The bot doesn't have permission to ban."))
 
-async def do_timeout(guild, author, member, minutes, reason, reply_fn):
+def _parse_timeout_duration(duration: str) -> Optional[datetime.timedelta]:
+    """Parse a timeout duration into a timedelta. Accepts a bare number
+    (minutes, kept for backwards compatibility with the old `timeout
+    @user 60` usage) or a suffixed value: `30s`, `10m`, `2h`, `1d`, `1w`.
+    Returns None if the format is invalid or works out to zero/negative.
+    Discord itself caps timeouts at 28 days, so anything longer just gets
+    clamped down to that instead of failing the command."""
+    duration = duration.strip().lower()
+    if duration.isdigit():
+        amount, unit = int(duration), "m"
+    else:
+        m = re.fullmatch(r"(\d+)\s*(s|m|h|d|w)", duration)
+        if not m:
+            return None
+        amount, unit = int(m.group(1)), m.group(2)
+    if amount <= 0:
+        return None
+    delta = {
+        "s": datetime.timedelta(seconds=amount),
+        "m": datetime.timedelta(minutes=amount),
+        "h": datetime.timedelta(hours=amount),
+        "d": datetime.timedelta(days=amount),
+        "w": datetime.timedelta(weeks=amount),
+    }[unit]
+    return min(delta, datetime.timedelta(days=28))
+
+async def do_timeout(guild, author, member, duration, reason, reply_fn):
     if author.id != bot.owner_id and not author.guild_permissions.moderate_members:
         return await reply_fn(embed=error_embed("You don't have permission to use this command."))
     if _is_protected(guild, member):
         return await reply_fn(embed=error_embed("This user can't be timed out."))
+    delta = _parse_timeout_duration(str(duration))
+    if not delta:
+        return await reply_fn(embed=error_embed(
+            "Invalid duration. Use a plain number of minutes, or a suffixed value like "
+            "`30s`, `10m`, `2h`, `1d`, `1w` (max 28 days)."
+        ))
     try:
-        until = discord.utils.utcnow() + datetime.timedelta(minutes=minutes)
+        until = discord.utils.utcnow() + delta
         await member.timeout(until, reason=f"{author} | {reason}")
-        await reply_fn(embed=success_embed(f"{member.mention} has been timed out for {minutes} minutes."))
+        await reply_fn(embed=success_embed(
+            f"{member.mention} has been timed out until {discord.utils.format_dt(until, 'f')} "
+            f"({discord.utils.format_dt(until, 'R')})."
+        ))
     except discord.Forbidden:
         await reply_fn(embed=error_embed("The bot doesn't have permission to timeout members."))
 
@@ -2141,8 +2176,8 @@ async def pfx_unban(ctx, user_id: str):
         await ctx.send(embed=error_embed("The bot doesn't have permission."))
 
 @bot.command(name="timeout", aliases=["to", "mute"])
-async def pfx_timeout(ctx, member: discord.Member, minutes: int, *, reason: str = "No reason provided."):
-    await do_timeout(ctx.guild, ctx.author, member, minutes, reason, ctx.send)
+async def pfx_timeout(ctx, member: discord.Member, duration: str, *, reason: str = "No reason provided."):
+    await do_timeout(ctx.guild, ctx.author, member, duration, reason, ctx.send)
 
 @bot.command(name="untimeout", aliases=["unmute", "unto"])
 async def pfx_untimeout(ctx, member: discord.Member):
