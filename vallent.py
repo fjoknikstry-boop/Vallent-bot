@@ -201,6 +201,20 @@ def _init_guild(gc: dict):
     gc["antinuke"].setdefault("log_channel", None)
     gc["antinuke"].setdefault("whitelist",   [])
     gc["antinuke"].setdefault("punishment",  "strip_roles")
+    gc.setdefault("verification", {
+        "enabled":            False,
+        "channel_id":         None,
+        "unverified_role_id": None,
+        "verified_role_id":   None,
+        "log_channel_id":     None,
+        "message_id":         None,
+    })
+    gc["verification"].setdefault("enabled",            False)
+    gc["verification"].setdefault("channel_id",         None)
+    gc["verification"].setdefault("unverified_role_id", None)
+    gc["verification"].setdefault("verified_role_id",   None)
+    gc["verification"].setdefault("log_channel_id",     None)
+    gc["verification"].setdefault("message_id",         None)
     gc.setdefault("ticket", {"panels": {}})
     gc["ticket"].setdefault("panels", {})
     # Migrate the old ticket structure (single-config, panels as a list) to the multi-panel dict.
@@ -1383,6 +1397,173 @@ async def close_ticket_channel(guild: discord.Guild, channel: discord.abc.GuildC
         pass
     return True
 
+# ══════════════════════════════════════════════════════════════════
+# VERIFICATION SYSTEM — captcha gate for new members
+# ══════════════════════════════════════════════════════════════════
+# Fully opt-in per guild: nothing happens on join until an admin sets a
+# channel + an Unverified role + a Verified role, then runs
+# `verification enable`. Until then this whole system stays dormant.
+#
+# Pending captchas are kept in memory only (a few minutes at most) —
+# same reasoning as antinuke's sliding-window tracker: short-lived by
+# nature, no benefit to persisting them across a bot restart.
+
+_PENDING_CAPTCHAS: dict = {}   # uid -> {"code","guild_id","expires","attempts"}
+CAPTCHA_TTL     = 300   # seconds a generated code stays valid
+CAPTCHA_MAX_TRY = 3     # wrong guesses allowed before a fresh code is required
+
+async def _apply_unverified_role(member: discord.Member):
+    """Hooked into on_member_join for every guild the bot is in — a no-op
+    unless that specific guild has verification configured and enabled."""
+    gc = guild_cfg(cfg, member.guild.id)
+    vc = gc.get("verification", {})
+    if not vc.get("enabled"):
+        return
+    role = member.guild.get_role(vc.get("unverified_role_id") or 0)
+    if not role:
+        return
+    try:
+        await member.add_roles(role, reason="Verification system — pending captcha")
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+async def _complete_verification(member: discord.Member, gc: dict) -> bool:
+    """Swap Unverified -> Verified and post an optional log entry. Returns
+    False if the Verified role is missing/unassignable so the caller can
+    tell the member to ping staff instead of silently doing nothing."""
+    vc         = gc.get("verification", {})
+    ver_role   = member.guild.get_role(vc.get("verified_role_id") or 0)
+    unver_role = member.guild.get_role(vc.get("unverified_role_id") or 0)
+    if not ver_role:
+        return False
+    try:
+        if ver_role not in member.roles:
+            await member.add_roles(ver_role, reason="Verification system — captcha passed")
+        if unver_role and unver_role in member.roles:
+            await member.remove_roles(unver_role, reason="Verification system — captcha passed")
+    except (discord.Forbidden, discord.HTTPException):
+        return False
+
+    log_ch = member.guild.get_channel(vc.get("log_channel_id") or 0)
+    if log_ch:
+        emb = base_embed("✅ Member Verified", f"{member.mention} completed the captcha and was verified.", color=COLOR_SUCCESS)
+        emb.set_thumbnail(url=member.display_avatar.url)
+        emb.set_footer(text=BOT_NAME)
+        try:
+            await log_ch.send(embed=emb)
+        except Exception:
+            pass
+    return True
+
+class CaptchaModal(discord.ui.Modal, title="Enter the Verification Code"):
+    code_input = discord.ui.TextInput(
+        label="Type the code shown in the image",
+        placeholder="e.g. NHR3K4",
+        min_length=4, max_length=8, required=True
+    )
+
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        pending = _PENDING_CAPTCHAS.get(interaction.user.id)
+        if not pending or pending["guild_id"] != interaction.guild.id:
+            return await interaction.response.send_message(
+                embed=error_embed("That code expired or wasn't found — click **Verify** again to get a new one."),
+                ephemeral=True
+            )
+        if time.monotonic() > pending["expires"]:
+            _PENDING_CAPTCHAS.pop(interaction.user.id, None)
+            return await interaction.response.send_message(
+                embed=error_embed("That code expired — click **Verify** again to get a new one."),
+                ephemeral=True
+            )
+        if self.code_input.value.strip().upper() != pending["code"]:
+            pending["attempts"] += 1
+            if pending["attempts"] >= CAPTCHA_MAX_TRY:
+                _PENDING_CAPTCHAS.pop(interaction.user.id, None)
+                return await interaction.response.send_message(
+                    embed=error_embed("Too many wrong attempts. Click **Verify** again to get a brand new code."),
+                    ephemeral=True
+                )
+            left = CAPTCHA_MAX_TRY - pending["attempts"]
+            return await interaction.response.send_message(
+                embed=error_embed(f"That's not quite right. **{left}** attempt(s) left before you'll need a new code."),
+                ephemeral=True
+            )
+
+        _PENDING_CAPTCHAS.pop(interaction.user.id, None)
+        gc = guild_cfg(cfg, interaction.guild.id)
+        ok = await _complete_verification(interaction.user, gc)
+        if ok:
+            await interaction.response.send_message(
+                embed=success_embed("You're verified! Welcome in — enjoy the server. 🎉"),
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                embed=error_embed(
+                    "The Verified role couldn't be applied — the bot may be missing permissions, its role "
+                    "may be positioned too low, or the role was deleted. Please ping staff for help."
+                ),
+                ephemeral=True
+            )
+
+class CaptchaEnterView(discord.ui.View):
+    """Ephemeral, one-off view attached to a single captcha image — not
+    persistent (unlike VerificationView below), since it's only ever
+    valid for the short life of that specific code anyway."""
+    def __init__(self):
+        super().__init__(timeout=CAPTCHA_TTL)
+
+    @discord.ui.button(label="Enter Code", style=discord.ButtonStyle.success, emoji="⌨️")
+    async def enter_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        pending = _PENDING_CAPTCHAS.get(interaction.user.id)
+        if not pending or pending["guild_id"] != interaction.guild.id:
+            return await interaction.response.send_message(
+                embed=error_embed("This code expired. Click **Verify** again in the verification channel."),
+                ephemeral=True
+            )
+        await interaction.response.send_modal(CaptchaModal())
+
+class VerificationView(discord.ui.View):
+    """Persistent, static view — one shared custom_id, re-registered via
+    bot.add_view() in on_ready so the button keeps working across bot
+    restarts (same pattern as TicketControlView below)."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Verify", style=discord.ButtonStyle.success, emoji="✅", custom_id="vx_verify_start")
+    async def verify_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        gc = guild_cfg(cfg, interaction.guild.id)
+        vc = gc.get("verification", {})
+        if not vc.get("enabled"):
+            return await interaction.response.send_message(
+                embed=error_embed("Verification isn't set up on this server."), ephemeral=True
+            )
+        ver_role = interaction.guild.get_role(vc.get("verified_role_id") or 0)
+        if ver_role and ver_role in interaction.user.roles:
+            return await interaction.response.send_message(
+                embed=info_embed("Already Verified", "You're already verified — no need to do this again!"),
+                ephemeral=True
+            )
+
+        code = rank_card.generate_captcha_code()
+        _PENDING_CAPTCHAS[interaction.user.id] = {
+            "code": code, "guild_id": interaction.guild.id,
+            "expires": time.monotonic() + CAPTCHA_TTL, "attempts": 0
+        }
+        img  = rank_card.render_captcha_image(code)
+        file = discord.File(img, filename="captcha.png")
+        embed = base_embed(
+            "🔐 Verify You're Human",
+            "Type the code shown below, then hit **Enter Code**.\n"
+            f"-# This code expires in {CAPTCHA_TTL // 60} minutes.",
+            color=COLOR_PRIMARY
+        )
+        embed.set_image(url="attachment://captcha.png")
+        await interaction.response.send_message(embed=embed, file=file, view=CaptchaEnterView(), ephemeral=True)
+
 class TicketControlView(discord.ui.View):
     """Persistent, static view — one custom_id shared by every ticket, safe to use
     across bot restarts via bot.add_view() in on_ready. Holds both Claim and
@@ -1629,6 +1810,7 @@ async def on_ready():
     panel_ids = {pid for gcfg in cfg.get("guilds", {}).values() for pid in gcfg.get("ticket", {}).get("panels", {}).keys()}
     for pid in panel_ids:
         bot.add_view(TicketOpenView(pid))
+    bot.add_view(VerificationView())
 
     if not cleanup_spam_cache.is_running():
         cleanup_spam_cache.start()
@@ -3504,6 +3686,138 @@ async def pfx_antinuke(ctx, sub: str = "", *, rest: str = ""):
             "The bot owner and server owner are automatically whitelisted — no need to add them manually."
         )))
 
+@bot.command(name="verification", aliases=["verify", "captcha"])
+async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.administrator:
+        return await ctx.send(embed=error_embed("Only Administrators or the owner can configure verification."))
+    gc  = guild_cfg(cfg, ctx.guild.id)
+    vc  = gc.setdefault("verification", {
+        "enabled": False, "channel_id": None, "unverified_role_id": None,
+        "verified_role_id": None, "log_channel_id": None, "message_id": None,
+    })
+    sub = sub.lower()
+
+    if sub in ("channel", "setchannel"):
+        ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else None
+        if not ch:
+            return await ctx.send(embed=error_embed("Mention a channel: `verification channel #channel`"))
+        vc["channel_id"] = ch.id
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Verification channel set to {ch.mention}."))
+
+    elif sub in ("unverifiedrole", "urole", "unverified"):
+        role = ctx.message.role_mentions[0] if ctx.message.role_mentions else None
+        if not role:
+            return await ctx.send(embed=error_embed("Mention a role: `verification unverifiedrole @role`"))
+        vc["unverified_role_id"] = role.id
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Unverified role set to {role.mention}."))
+
+    elif sub in ("verifiedrole", "vrole", "verified"):
+        role = ctx.message.role_mentions[0] if ctx.message.role_mentions else None
+        if not role:
+            return await ctx.send(embed=error_embed("Mention a role: `verification verifiedrole @role`"))
+        vc["verified_role_id"] = role.id
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Verified role set to {role.mention}."))
+
+    elif sub == "logchannel":
+        ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else None
+        if not ch:
+            vc["log_channel_id"] = None
+            save_config(cfg)
+            return await ctx.send(embed=success_embed("Verification log channel cleared."))
+        vc["log_channel_id"] = ch.id
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Verification logs will be sent to {ch.mention}."))
+
+    elif sub == "enable":
+        missing = []
+        if not vc.get("channel_id"):          missing.append("`verification channel #channel`")
+        if not vc.get("unverified_role_id"):  missing.append("`verification unverifiedrole @role`")
+        if not vc.get("verified_role_id"):    missing.append("`verification verifiedrole @role`")
+        if missing:
+            return await ctx.send(embed=error_embed(
+                "Can't enable yet — still missing:\n" + "\n".join(missing) +
+                "\n\nRun `verification status` any time to check your progress."
+            ))
+        me = ctx.guild.me
+        if not me.guild_permissions.manage_roles:
+            return await ctx.send(embed=error_embed("The bot needs the **Manage Roles** permission before verification can be enabled."))
+        unver_role = ctx.guild.get_role(vc["unverified_role_id"])
+        ver_role   = ctx.guild.get_role(vc["verified_role_id"])
+        if not unver_role or not ver_role:
+            return await ctx.send(embed=error_embed("One of the configured roles no longer exists — re-set it with `verification unverifiedrole`/`verifiedrole` first."))
+        if unver_role >= me.top_role or ver_role >= me.top_role:
+            return await ctx.send(embed=error_embed(
+                "The bot's highest role needs to be **above** both the Unverified and Verified roles in the "
+                "role list, otherwise it can't assign or remove them. Move the bot's role up and try again."
+            ))
+        vc["enabled"] = True
+        save_config(cfg)
+        ch = ctx.guild.get_channel(vc["channel_id"])
+        await ctx.send(embed=success_embed(
+            f"Verification is now **ENABLED**. New members will get {unver_role.mention} on join.\n"
+            f"Run `verification send` in {ch.mention if ch else 'the verification channel'} to post the "
+            "Verify button, if you haven't already."
+        ))
+
+    elif sub == "disable":
+        vc["enabled"] = False
+        save_config(cfg)
+        await ctx.send(embed=success_embed(
+            "Verification disabled. New members will no longer receive the Unverified role.\n"
+            "-# Members who already have Unverified/Verified roles keep them — this only stops new assignments."
+        ))
+
+    elif sub == "send":
+        if not vc.get("enabled"):
+            return await ctx.send(embed=error_embed("Verification isn't enabled yet — run `verification enable` first."))
+        ch = ctx.guild.get_channel(vc.get("channel_id") or 0)
+        if not ch:
+            return await ctx.send(embed=error_embed("Verification channel isn't set — run `verification channel #channel` first."))
+        embed = base_embed(
+            "🔐 Verification Required",
+            "Click **Verify** below and solve a short captcha to unlock the rest of the server.",
+            color=COLOR_PRIMARY
+        )
+        embed.set_footer(text=BOT_NAME)
+        try:
+            msg = await ch.send(embed=embed, view=VerificationView())
+        except discord.Forbidden:
+            return await ctx.send(embed=error_embed("The bot doesn't have permission to send messages in that channel."))
+        vc["message_id"] = msg.id
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Verification panel posted in {ch.mention}."))
+
+    elif sub == "status":
+        status = "🟢 Enabled" if vc.get("enabled") else "🔴 Disabled"
+        ch     = ctx.guild.get_channel(vc.get("channel_id") or 0)
+        urole  = ctx.guild.get_role(vc.get("unverified_role_id") or 0)
+        vrole  = ctx.guild.get_role(vc.get("verified_role_id") or 0)
+        lch    = ctx.guild.get_channel(vc.get("log_channel_id") or 0)
+        embed = base_embed("Verification Status", None, color=COLOR_SUCCESS if vc.get("enabled") else COLOR_INFO)
+        embed.add_field(name="Status", value=status, inline=True)
+        embed.add_field(name="Channel", value=ch.mention if ch else "*(not set)*", inline=True)
+        embed.add_field(name="Log Channel", value=lch.mention if lch else "*(not set)*", inline=True)
+        embed.add_field(name="Unverified Role", value=urole.mention if urole else "*(not set)*", inline=True)
+        embed.add_field(name="Verified Role", value=vrole.mention if vrole else "*(not set)*", inline=True)
+        await ctx.send(embed=embed)
+
+    else:
+        await ctx.send(embed=info_embed("Verification Setup", (
+            "`verification channel #channel` — where the Verify button gets posted\n"
+            "`verification unverifiedrole @role` — role given to members automatically on join\n"
+            "`verification verifiedrole @role` — role given once they solve the captcha\n"
+            "`verification logchannel #channel` — *(optional)* log every successful verification\n"
+            "`verification enable` — turn the feature on (needs the 3 items above set first)\n"
+            "`verification disable` — turn it off (doesn't touch roles already given out)\n"
+            "`verification send` — post/repost the Verify button in the configured channel\n"
+            "`verification status` — view the current setup\n\n"
+            "-# Nothing activates automatically — new members only start getting the Unverified "
+            "role once you've configured everything above and run `enable`."
+        )))
+
 # ── OWNER COMMANDS ────────────────────────────────────────────────
 
 @bot.command(name="maintenance", aliases=["mnt"])
@@ -4139,6 +4453,7 @@ HELP_CATEGORIES = [
     ("giveaway", "Giveaway", ICON_GIVEAWAY, "🎉", "`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`"),
     ("antispam", "Antispam", ICON_ANTISPAM, "🛡️", "`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`"),
     ("antinuke", "Anti-Nuke", ICON_ANTINUKE, "🛡️", "`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`"),
+    ("verification", "Verification", ICON_ANTINUKE, "🔐", "`verification channel/unverifiedrole/verifiedrole/logchannel` · `verification enable/disable` · `verification send` · `verification status`"),
     ("automod", "AutoMod", ICON_AUTOMOD, "🤖", "`automod setup` — creates a native Discord AutoMod rule (blocks profanity/sexual content/slurs)\n`automod list` · `automod remove <rule_id>`"),
     ("ignore", "Ignore Channel", ICON_IGNORE, "🔇", "`ignorechannel add/remove/list [#channel]` — makes the bot completely silent in a specific channel"),
     ("autoresponse", "Auto-Response", ICON_AUTORESPONSE, "💬", "`autoresponse add <trigger> | <response>` · `remove` · `match` · `list` · `toggle`"),
@@ -4439,6 +4754,12 @@ async def slash_help(i: discord.Interaction):
 
 @bot.event
 async def on_member_join(member: discord.Member):
+    # Verification runs for ANY guild that has it configured & enabled —
+    # deliberately placed before the support-server-only return below,
+    # since that early return only gates the badge/welcome-DM logic.
+    if not member.bot:
+        await _apply_unverified_role(member)
+
     support_server_id = int(os.getenv("SUPPORT_SERVER_ID", "0"))
     if member.guild.id != support_server_id or member.bot:
         return
