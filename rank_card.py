@@ -25,6 +25,7 @@ import io
 import logging
 import math
 import os
+import random
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
@@ -645,3 +646,57 @@ def render_leaderboard_card(guild_name: str, entries: list) -> io.BytesIO:
     draw = ImageDraw.Draw(canvas)
     _watermark(draw, canvas.size)
     return _flatten(canvas)
+
+# ══════════════════════════════════════════════════════════════════
+# CAPTCHA — dipakai di sistem verifikasi member baru (join -> Unverified
+# role -> selesein captcha -> Verified role). Gambar sengaja dibikin
+# noisy/distorsi (rotasi per-huruf, garis coretan, speckle) biar gak
+# gampang di-OCR bot, tapi tetep gampang dibaca manusia.
+# ══════════════════════════════════════════════════════════════════
+
+_CAPTCHA_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I — biar gak ambigu
+
+def generate_captcha_code(length: int = 6) -> str:
+    """Random alnum code, huruf ambigu (0/O/1/I/l) udah disingkirin dari pool."""
+    return "".join(random.choice(_CAPTCHA_CHARS) for _ in range(length))
+
+def render_captcha_image(code: str) -> io.BytesIO:
+    """Render `code` jadi gambar captcha bergaya VALLENT EXS (dark red,
+    grain texture) dengan distorsi per-karakter + noise, siap dikirim
+    sebagai file attachment ke Discord."""
+    W, H = 320, 130
+    img = _vertical_gradient((W, H), (26, 6, 8), (46, 10, 12)).convert("RGBA")
+    img = Image.alpha_composite(img, _noise_texture((W, H), opacity=26))
+    draw = ImageDraw.Draw(img)
+
+    # garis coretan acak di belakang teks — bikin susah di-OCR otomatis
+    for _ in range(6):
+        x1, y1 = random.randint(0, W), random.randint(0, H)
+        x2, y2 = random.randint(0, W), random.randint(0, H)
+        draw.line([(x1, y1), (x2, y2)], fill=(*CRIMSON, 90), width=2)
+
+    f = _font(F_DISPLAY, 54)
+    n = max(len(code), 1)
+    spacing = W // (n + 1)
+    for i, ch in enumerate(code):
+        glyph = Image.new("RGBA", (80, 100), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glyph)
+        gd.text((12, 14), ch, font=f, fill=(255, 255, 255, 255))
+        angle = random.uniform(-22, 22)
+        glyph = glyph.rotate(angle, resample=Image.BICUBIC, expand=True)
+        px = spacing * (i + 1) - glyph.width // 2
+        py = H // 2 - glyph.height // 2 + random.randint(-8, 8)
+        img.alpha_composite(glyph, (px, py))
+
+    # speckle noise di atas teks buat tekstur anti-OCR tambahan
+    draw = ImageDraw.Draw(img)
+    for _ in range(160):
+        x, y = random.randint(0, W - 1), random.randint(0, H - 1)
+        draw.point((x, y), fill=(255, 255, 255, random.randint(20, 70)))
+
+    out = Image.new("RGB", (W, H), (20, 4, 6))
+    out.paste(img, (0, 0), img)
+    buf = io.BytesIO()
+    out.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
