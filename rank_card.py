@@ -365,14 +365,48 @@ def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = Fal
     clip = _diagonal_clip_mask(W, H, cut=cut)
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     canvas.paste(base, (0, 0), clip)
-    draw = ImageDraw.Draw(canvas)
-    draw.line([(0, 0), (W - cut, 0)], fill=(*border, 255), width=3)
-    draw.line([(W - cut, 0), (W, cut)], fill=(*border, 255), width=3)
-    draw.line([(W, cut), (W, H)], fill=(*border, 255), width=3)
-    draw.line([(W, H), (0, H)], fill=(*border, 255), width=3)
-    draw.line([(0, H), (0, 0)], fill=(*border, 255), width=3)
-    _corner_bracket(draw, 16, 16, 24, (*corner, 220))
-    _corner_bracket(draw, 16, H - 16, 24, (*corner, 220), flip_y=True)
+
+    border_pts = [(0, 0), (W - cut, 0), (W, cut), (W, H), (0, H), (0, 0)]
+
+    if premium:
+        # ── PREMIUM ONLY: outer glow — a soft, blurred duplicate of the
+        # frame sitting just behind the crisp stroke, so the border reads
+        # as glowing neon instead of a flat single-pixel outline. Kept
+        # exclusive to premium so the upgrade actually feels special
+        # instead of every card looking the same. ──────────────────────
+        glow_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(glow_layer).line(border_pts, fill=(*corner, 140), width=9)
+        glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(5))
+        canvas = Image.alpha_composite(canvas, glow_layer)
+
+        draw = ImageDraw.Draw(canvas)
+        draw.line(border_pts, fill=(*border, 255), width=3)
+
+        # inset hairline: a faint second line just inside the main stroke
+        # gives the frame some depth instead of a single flat outline
+        inset = 5
+        inset_pts = [
+            (inset, inset), (W - cut - inset * 0.5, inset), (W - inset, cut + inset * 0.5),
+            (W - inset, H - inset), (inset, H - inset), (inset, inset),
+        ]
+        draw.line(inset_pts, fill=(*corner, 100), width=1)
+
+        _corner_bracket(draw, 16, 16, 26, (*corner, 235), width=3)
+        _corner_bracket(draw, 16, H - 16, 26, (*corner, 235), flip_y=True, width=3)
+        _corner_bracket(draw, W - 16, H - 16, 26, (*corner, 235), flip_x=True, flip_y=True, width=3)
+
+        # small glowing HUD dots at each bracket's vertex
+        for bx, by in [(16, 16), (16, H - 16), (W - 16, H - 16)]:
+            draw.ellipse([bx - 4, by - 4, bx + 4, by + 4], fill=(*corner, 90))
+            draw.ellipse([bx - 2, by - 2, bx + 2, by + 2], fill=(*corner, 255))
+    else:
+        # ── REGULAR: plain flat outline, unchanged — kept simple on
+        # purpose so the premium glow-up above actually stands out. ────
+        draw = ImageDraw.Draw(canvas)
+        draw.line(border_pts, fill=(*border, 255), width=3)
+        _corner_bracket(draw, 16, 16, 24, (*corner, 220))
+        _corner_bracket(draw, 16, H - 16, 24, (*corner, 220), flip_y=True)
+
     return canvas
 
 def _flatten(canvas: Image.Image) -> io.BytesIO:
