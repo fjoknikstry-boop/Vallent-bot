@@ -95,6 +95,8 @@ def load_config() -> dict:
             "no_prefix_expiry":  {},
             "bot_roles":         {},
             "role_sync":         {},
+            "custom_badges":     {},
+            "user_custom_badges": {},
             "votes":             {},
             "payment_methods": {
                 "qris":    {"enabled": True, "image_url": "", "info": ""},
@@ -115,6 +117,8 @@ def load_config() -> dict:
     data.setdefault("no_prefix_guilds", [])
     data.setdefault("no_prefix_expiry", {})
     data.setdefault("bot_roles",        {})
+    data.setdefault("custom_badges",      {})   # badge_id -> {"name": str, "emoji": str} — owner-defined, free-form badges
+    data.setdefault("user_custom_badges", {})   # uid(str) -> [badge_id, ...] — which custom badges each user holds
     data.setdefault("moonkeeper_users",     [])   # uid list — manual Moonkeeper grants (independent of bot_roles hierarchy)
     data.setdefault("moonkeeper_sync_role", None)  # single Discord role ID synced to Moonkeeper, if any
     data.setdefault("role_sync",        {})
@@ -718,6 +722,65 @@ def get_user_badges(uid: int) -> list:
     # No default badge — if it's empty, it stays empty
     return badges
 
+# ══════════════════════════════════════════════════════════════════
+# CUSTOM BADGES — free-form badges the owner designs and assigns
+# ══════════════════════════════════════════════════════════════════
+# Fully independent from BOT_ROLE_BADGES above. Name and emoji are 100%
+# up to the owner (any text, any emoji including custom server emoji) —
+# these aren't tied to a hierarchy or a Discord role, just a manual grant
+# stored per-user. Only the bot owner can create/delete/give/remove them
+# (see the `custombadge` command further down).
+
+def _slugify_badge_id(name: str) -> str:
+    """Turn a badge name into a short, stable dict key (e.g. 'Dragon Tamer'
+    -> 'dragon_tamer'). If that slug is already used by a different badge,
+    suffix it with a counter so two similarly-named badges never collide
+    or silently overwrite each other."""
+    base = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "badge"
+    defs = cfg.get("custom_badges", {})
+    slug = base
+    n = 2
+    while slug in defs:
+        slug = f"{base}_{n}"
+        n += 1
+    return slug
+
+def get_custom_badges(uid: int) -> list:
+    """Return this user's owner-granted custom badges, in the order they
+    were given, as {"id", "name", "emoji"} dicts. If the owner later deletes
+    a badge's definition, it's silently dropped here instead of erroring."""
+    defs = cfg.get("custom_badges", {})
+    ids  = cfg.get("user_custom_badges", {}).get(str(uid), [])
+    return [{"id": bid, **defs[bid]} for bid in ids if bid in defs]
+
+def _badge_display_lines(uid: int) -> tuple:
+    """Build the formatted '<emoji> **Name**' lines for every badge a user
+    holds — bot-role badges (Founder/Staff/etc.) first, then owner-granted
+    custom badges — plus the total count. Shared by the profile embed and
+    the support-server welcome DM so the two can never drift out of sync."""
+    lines = []
+    for b in get_user_badges(uid):
+        info      = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
+        emoji_str = info.get("emoji", "")
+        prefix    = (emoji_str + " ") if emoji_str else "\u2022 "
+        lines.append(prefix + "**" + info["label"] + "**")
+    for cb in get_custom_badges(uid):
+        emoji_str = cb.get("emoji", "")
+        prefix    = (emoji_str + " ") if emoji_str else "\u2022 "
+        lines.append(prefix + "**" + cb["name"] + "**")
+    return lines, len(lines)
+
+def _resolve_badge_target(token: str) -> Optional[int]:
+    """Parse a user mention or raw ID into an int. Returns None if the
+    token isn't a valid user reference. Deliberately doesn't require the
+    target to be a member of the current guild — custom badges are global
+    (bot-wide), same as the bot-role badges, so the owner can badge anyone
+    the bot has ever seen from any server."""
+    m = re.match(r"<@!?(\d+)>$|^(\d{17,20})$", token.strip())
+    if not m:
+        return None
+    return int(m.group(1) or m.group(2))
+
 def build_profile_embed(user: discord.abc.User) -> discord.Embed:
     uid        = user.id
     role       = get_bot_role(uid)
@@ -732,14 +795,10 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
     embed = discord.Embed(title=f"{profile_icon} {user.display_name}'s Profile".strip(), color=color)
     embed.set_thumbnail(url=user.display_avatar.url)
 
-    # ── ALL BADGES — its own field, one badge per line ────────────────
-    if badges:
-        badge_lines = []
-        for b in badges:
-            info      = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
-            emoji_str = info.get("emoji", "")
-            prefix    = (emoji_str + " ") if emoji_str else "\u2022 "
-            badge_lines.append(prefix + "**" + info["label"] + "**")
+    # ── ALL BADGES — its own field, one badge per line (bot-role badges +
+    # owner-granted custom badges, in that order) ───────────────────────
+    badge_lines, total_badges = _badge_display_lines(uid)
+    if badge_lines:
         badges_value = "\n".join(badge_lines)
     else:
         invite = SUPPORT_INVITE
@@ -753,7 +812,7 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
     embed.add_field(name=f"{badges_icon} __ALL BADGES__".strip(), value=badges_value, inline=False)
 
     # ── Total Badges & Commands Runned — two fields side by side ───────
-    embed.add_field(name="Total Badges", value="**" + str(len(badges)) + "**", inline=True)
+    embed.add_field(name="Total Badges", value="**" + str(total_badges) + "**", inline=True)
     embed.add_field(name=f"{e(ICON_COMMANDS, '⚙️')} Commands Runned".strip(), value="**" + str(cmds_run) + "**", inline=True)
 
     # ── Premium — its own field, only shown if active ───────────────────
@@ -3654,6 +3713,131 @@ async def pfx_botrole(ctx, action: str = "", *args):
         save_config(cfg)
         await ctx.send(embed=success_embed(f"Manual bot role(s) **{', '.join(removed)}** removed from {member.mention}."))
 
+@bot.command(name="custombadge", aliases=["cbadge", "cb"])
+@is_owner()
+async def pfx_custombadge(ctx, action: str = "", *args):
+    """
+    Owner-only. Create fully custom, free-form badges — any name, any emoji
+    (including this server's custom emoji) — and give/remove them on any
+    specific user, any time. Completely separate from the built-in bot-role
+    badges (Founder/Staff/etc.): no hierarchy, no auto-sync, just a manual
+    grant that only the owner controls.
+    """
+    action = action.lower()
+    defs   = cfg.setdefault("custom_badges", {})
+    grants = cfg.setdefault("user_custom_badges", {})
+
+    if action == "create":
+        if len(args) < 2:
+            return await ctx.send(embed=error_embed(
+                "Usage: `custombadge create <emoji> <name>`\nExample: `custombadge create 🐉 Dragon Tamer`"
+            ))
+        emoji_tok = args[0]
+        name      = " ".join(args[1:]).strip()
+        if len(name) > 100:
+            return await ctx.send(embed=error_embed("Badge name is too long (max 100 characters)."))
+        badge_id = _slugify_badge_id(name)
+        defs[badge_id] = {"name": name, "emoji": emoji_tok}
+        save_config(cfg)
+        return await ctx.send(embed=success_embed(
+            f"Custom badge created: {emoji_tok} **{name}**\n"
+            f"ID: `{badge_id}` — use this ID to give or remove it.\n\n"
+            f"`custombadge give @user {badge_id}`"
+        ))
+
+    if action == "delete":
+        if not args:
+            return await ctx.send(embed=error_embed("Usage: `custombadge delete <badge_id>`"))
+        badge_id = args[0].lower()
+        if badge_id not in defs:
+            return await ctx.send(embed=error_embed(f"No custom badge with ID `{badge_id}`. Use `custombadge list` to see all IDs."))
+        removed = defs.pop(badge_id)
+        holders = 0
+        for ids in grants.values():
+            if badge_id in ids:
+                ids.remove(badge_id)
+                holders += 1
+        save_config(cfg)
+        return await ctx.send(embed=success_embed(
+            f"Deleted custom badge {removed.get('emoji','')} **{removed.get('name', badge_id)}** (`{badge_id}`) — "
+            f"removed from {holders} member(s) who had it."
+        ))
+
+    if action == "list":
+        if not defs:
+            return await ctx.send(embed=info_embed("Custom Badges", "No custom badges created yet.\nUse `custombadge create <emoji> <name>` to make one."))
+        lines = []
+        for bid, info in defs.items():
+            holder_count = sum(1 for ids in grants.values() if bid in ids)
+            lines.append(f"{info.get('emoji','')} **{info.get('name', bid)}** — `{bid}` · {holder_count} holder(s)")
+        return await ctx.send(embed=info_embed("Custom Badges", "\n".join(lines)))
+
+    if action in ("give", "grant"):
+        if len(args) < 2:
+            return await ctx.send(embed=error_embed("Usage: `custombadge give @user <badge_id>`"))
+        target_id = _resolve_badge_target(args[0])
+        badge_id  = args[1].lower()
+        if not target_id:
+            return await ctx.send(embed=error_embed("Provide a valid user mention or ID."))
+        if badge_id not in defs:
+            return await ctx.send(embed=error_embed(f"No custom badge with ID `{badge_id}`. Use `custombadge list` to see all IDs."))
+        held = grants.setdefault(str(target_id), [])
+        if badge_id in held:
+            return await ctx.send(embed=error_embed(f"<@{target_id}> already has that badge."))
+        held.append(badge_id)
+        save_config(cfg)
+        info = defs[badge_id]
+        try:
+            target_user = await bot.fetch_user(target_id)
+            dm = base_embed(
+                "Custom Badge Granted!",
+                f"You've been given the {info.get('emoji','')} **{info['name']}** badge on {BOT_NAME}!\nCheck your profile: `profile`",
+                color=COLOR_SUCCESS
+            )
+            await target_user.send(embed=dm)
+        except Exception:
+            pass
+        return await ctx.send(embed=success_embed(f"Gave {info.get('emoji','')} **{info['name']}** to <@{target_id}>."))
+
+    if action in ("remove", "revoke", "take"):
+        if len(args) < 2:
+            return await ctx.send(embed=error_embed("Usage: `custombadge remove @user <badge_id>`"))
+        target_id = _resolve_badge_target(args[0])
+        badge_id  = args[1].lower()
+        if not target_id:
+            return await ctx.send(embed=error_embed("Provide a valid user mention or ID."))
+        held = grants.get(str(target_id), [])
+        if badge_id not in held:
+            return await ctx.send(embed=error_embed(f"<@{target_id}> doesn't have that badge."))
+        held.remove(badge_id)
+        save_config(cfg)
+        info = defs.get(badge_id, {})
+        return await ctx.send(embed=success_embed(f"Removed {info.get('emoji','')} **{info.get('name', badge_id)}** from <@{target_id}>."))
+
+    if action == "user":
+        if not args:
+            return await ctx.send(embed=error_embed("Usage: `custombadge user @user`"))
+        target_id = _resolve_badge_target(args[0])
+        if not target_id:
+            return await ctx.send(embed=error_embed("Provide a valid user mention or ID."))
+        held = get_custom_badges(target_id)
+        if not held:
+            return await ctx.send(embed=info_embed("Custom Badges", f"<@{target_id}> has no custom badges."))
+        lines = [f"{b.get('emoji','')} **{b['name']}** — `{b['id']}`" for b in held]
+        return await ctx.send(embed=info_embed(f"Custom Badges — <@{target_id}>", "\n".join(lines)))
+
+    return await ctx.send(embed=info_embed("Custom Badges", (
+        "`custombadge create <emoji> <name>` — create a new custom badge\n"
+        "`custombadge give @user <badge_id>` — give a badge to a member\n"
+        "`custombadge remove @user <badge_id>` — revoke a badge from a member\n"
+        "`custombadge delete <badge_id>` — permanently delete a badge (removes it from everyone who has it)\n"
+        "`custombadge list` — view every custom badge, its ID, and how many people hold it\n"
+        "`custombadge user @user` — view a member's custom badges\n\n"
+        "-# Fully separate from the built-in bot-role badges (Founder, Staff, etc.) — name and "
+        "emoji are 100% yours to decide, including this server's custom emoji. Shows up right "
+        "alongside the other badges on `profile`."
+    )))
+
 @bot.command(name="grantpremium", aliases=["gp"])
 @is_owner_or_staff()
 async def pfx_grantpremium(ctx, member: discord.Member = None, duration: str = ""):
@@ -3848,6 +4032,7 @@ OWNER_HELP_CATEGORY = ("owner", "Owner Only", ICON_OWNER, "👑", (
     "`maintenance on/off/status`\n"
     "`noprefix grant/revoke/list`\n"
     "`botrole set/remove/list`\n"
+    "`custombadge create/give/remove/delete/list` — free-form badges you design and assign\n"
     "`grantpremium @user <duration>/revoke`\n"
     "`premiumlock add/remove/list`\n"
     "`blacklist add/remove/list`\n"
@@ -3943,6 +4128,7 @@ async def pfx_ownerhelp(ctx):
     embed.add_field(name="Maintenance", value="`maintenance on [reason]` · `maintenance off` · `maintenance status`", inline=False)
     embed.add_field(name="No-Prefix", value="`noprefix grant @user [duration]` · `noprefix revoke @user` · `noprefix list`\nDuration: `7d` / `24h` / `30m` / leave blank for permanent.", inline=False)
     embed.add_field(name="Bot Role", value="`botrole set @user <role>` · `botrole remove @user` · `botrole list`\n`botrole sync <tier> <role_id>` — auto-badge from a Discord role in the support server", inline=False)
+    embed.add_field(name="Custom Badges", value="`custombadge create <emoji> <name>` · `give/remove @user <badge_id>` · `list` · `delete <badge_id>` · `user @user`\nFree-form badges — any name, any emoji — fully separate from bot-role badges.", inline=False)
     embed.add_field(name="Premium", value="`grantpremium @user <duration>` · `grantpremium @user revoke`", inline=False)
     embed.add_field(name="Premium Lock", value="`premiumlock add <command>` · `premiumlock remove <command>` · `premiumlock list`", inline=False)
     embed.add_field(name="Blacklist", value="`blacklist add <id>` · `blacklist remove <id>` · `blacklist list`", inline=False)
@@ -4151,7 +4337,7 @@ async def on_member_join(member: discord.Member):
         grant_xp_boost(uid, minutes=60, multiplier=1.10)
         mark_join_boost_granted(uid)
 
-    badges = get_user_badges(uid)
+    badge_lines, _ = _badge_display_lines(uid)
     role   = get_bot_role(uid)
     bonus_line = (
         "Bonus: **+10% XP Boost** active for **60 minutes** on every server using " + BOT_NAME + "!\n\n"
@@ -4169,12 +4355,6 @@ async def on_member_join(member: discord.Member):
         timestamp=discord.utils.utcnow()
     )
     embed.set_thumbnail(url=member.display_avatar.url)
-    badge_lines = []
-    for b in badges:
-        info      = BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"])
-        emoji_str = info.get("emoji", "")
-        prefix    = (emoji_str + " ") if emoji_str else "\u2022 "
-        badge_lines.append(prefix + "**" + info["label"] + "**")
     embed.add_field(name=f"{e(ICON_BADGES, '✨')} ALL BADGES".strip(), value="\n".join(badge_lines), inline=True)
     embed.add_field(name="Bot Role", value=role.capitalize(), inline=True)
     embed.set_footer(text=BOT_NAME + " \u2022 " + BOT_TAGLINE)
