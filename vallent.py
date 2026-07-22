@@ -46,7 +46,7 @@ from emoji_config import (
     ICON_PROFILE, ICON_BADGES, ICON_COMMANDS, ICON_PREMIUM_TAG,
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
     ICON_BOOST, ICON_ANTINUKE, ICON_IGNORE, ICON_AUTOMOD, ICON_AUTORESPONSE,
-    ICON_AFK,
+    ICON_AFK, ICON_VERIFICATION,
     e
 )
 import rank_card
@@ -1446,7 +1446,7 @@ async def _complete_verification(member: discord.Member, gc: dict) -> bool:
 
     log_ch = member.guild.get_channel(vc.get("log_channel_id") or 0)
     if log_ch:
-        emb = base_embed("✅ Member Verified", f"{member.mention} completed the captcha and was verified.", color=COLOR_SUCCESS)
+        emb = base_embed(f"{e(ICON_VERIFICATION, '🔐')} Member Verified", f"{member.mention} completed the captcha and was verified.", color=COLOR_SUCCESS)
         emb.set_thumbnail(url=member.display_avatar.url)
         emb.set_footer(text=BOT_NAME)
         try:
@@ -1556,7 +1556,7 @@ class VerificationView(discord.ui.View):
         img  = rank_card.render_captcha_image(code)
         file = discord.File(img, filename="captcha.png")
         embed = base_embed(
-            "🔐 Verify You're Human",
+            f"{e(ICON_VERIFICATION, '🔐')} Verify You're Human",
             "Type the code shown below, then hit **Enter Code**.\n"
             f"-# This code expires in {CAPTCHA_TTL // 60} minutes.",
             color=COLOR_PRIMARY
@@ -3777,7 +3777,7 @@ async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
         if not ch:
             return await ctx.send(embed=error_embed("Verification channel isn't set — run `verification channel #channel` first."))
         embed = base_embed(
-            "🔐 Verification Required",
+            f"{e(ICON_VERIFICATION, '🔐')} Verification Required",
             "Click **Verify** below and solve a short captcha to unlock the rest of the server.",
             color=COLOR_PRIMARY
         )
@@ -4453,7 +4453,7 @@ HELP_CATEGORIES = [
     ("giveaway", "Giveaway", ICON_GIVEAWAY, "🎉", "`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`"),
     ("antispam", "Antispam", ICON_ANTISPAM, "🛡️", "`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`"),
     ("antinuke", "Anti-Nuke", ICON_ANTINUKE, "🛡️", "`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`"),
-    ("verification", "Verification", ICON_ANTINUKE, "🔐", "`verification channel/unverifiedrole/verifiedrole/logchannel` · `verification enable/disable` · `verification send` · `verification status`"),
+    ("verification", "Verification", ICON_VERIFICATION, "🔐", "`verification channel/unverifiedrole/verifiedrole/logchannel` · `verification enable/disable` · `verification send` · `verification status`"),
     ("automod", "AutoMod", ICON_AUTOMOD, "🤖", "`automod setup` — creates a native Discord AutoMod rule (blocks profanity/sexual content/slurs)\n`automod list` · `automod remove <rule_id>`"),
     ("ignore", "Ignore Channel", ICON_IGNORE, "🔇", "`ignorechannel add/remove/list [#channel]` — makes the bot completely silent in a specific channel"),
     ("autoresponse", "Auto-Response", ICON_AUTORESPONSE, "💬", "`autoresponse add <trigger> | <response>` · `remove` · `match` · `list` · `toggle`"),
