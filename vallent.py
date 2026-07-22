@@ -4684,6 +4684,40 @@ async def pfx_ownerhelp(ctx):
         ack = error_embed("Couldn't DM you — open your DMs for this server/bot first, then try again.")
     await ctx.send(embed=ack, delete_after=8)
 
+@bot.command(name="commandlist", aliases=["cmdlist", "allcommands", "cmds"])
+@is_owner()
+async def pfx_commandlist(ctx):
+    """Owner-only. Full list of every registered command + its aliases,
+    in one embed — meant for posting somewhere public like the support
+    server, unlike `ownerhelp` which is always DM-only."""
+    cmds = sorted(bot.commands, key=lambda c: c.name.lower())
+    lines = []
+    for c in cmds:
+        entry = f"`{BOT_PREFIX}{c.name}`"
+        if c.aliases:
+            entry += " — " + ", ".join(f"`{a}`" for a in c.aliases)
+        lines.append(entry)
+
+    embed = discord.Embed(
+        title=f"{e(ICON_OWNER, '👑')} {BOT_NAME} — Full Command List".strip(),
+        description="\n".join(lines),
+        color=COLOR_PRIMARY,
+        timestamp=discord.utils.utcnow()
+    )
+    if bot.user:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+        banner_url = bot.user.banner.url if bot.user.banner else None
+        if not banner_url:
+            try:
+                fetched = await bot.fetch_user(bot.user.id)
+                banner_url = fetched.banner.url if fetched.banner else None
+            except Exception:
+                banner_url = None
+        if banner_url:
+            embed.set_image(url=banner_url)
+    embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {len(cmds)} commands total")
+    await ctx.send(embed=embed)
+
 # ══════════════════════════════════════════════════════════════════
 # SLASH COMMANDS
 # ══════════════════════════════════════════════════════════════════
