@@ -60,6 +60,7 @@ import antinuke
 BOT_NAME      = "VALLENT EXS"
 BOT_TAGLINE   = "Nocturne Development."
 BOT_VERSION   = "1.0.0"
+BOT_BANNER_URL: Optional[str] = None  # populated once in on_ready() from the bot account's Discord banner, if it has one
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
 WIB           = pytz.timezone("Asia/Jakarta")
@@ -449,6 +450,17 @@ def bot_invite_url() -> Optional[str]:
     )
     return discord.utils.oauth_url(bot.user.id, permissions=perms, scopes=("bot", "applications.commands"))
 
+def brand_embed(embed: discord.Embed) -> discord.Embed:
+    """Attach the bot's avatar as a thumbnail and its Discord banner (if it
+    has one set) as the embed image. Shared by the help menu, the mention
+    auto-reply, and `commandlist` so the bot's branding stays consistent
+    everywhere instead of being copy-pasted per command."""
+    if bot.user:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    if BOT_BANNER_URL:
+        embed.set_image(url=BOT_BANNER_URL)
+    return embed
+
 def invite_support_view() -> discord.ui.View:
     """Shared 'Invite Me' / 'Support' link-button row — used by the mention
     auto-reply and the help menu. Support button only appears if SUPPORT_INVITE
@@ -485,7 +497,7 @@ def bot_info_embed(mention: str, guild_id: int) -> discord.Embed:
         timestamp=discord.utils.utcnow()
     )
     embed.set_footer(text=BOT_TAGLINE)
-    return embed
+    return brand_embed(embed)
 
 # ══════════════════════════════════════════════════════════════════
 # PREMIUM HELPERS
@@ -1863,6 +1875,18 @@ async def sync_premium_descriptions():
 @bot.event
 async def on_ready():
     print(f"[{BOT_NAME}] Ready as {bot.user} (ID: {bot.user.id})")
+
+    # Cache the bot account's Discord banner (if it has one) once at startup
+    # instead of hitting the API on every help/mention/commandlist call —
+    # gateway-cached bot.user often doesn't include banner data, so a single
+    # HTTP fetch here is worth it.
+    global BOT_BANNER_URL
+    try:
+        fetched = await bot.fetch_user(bot.user.id)
+        BOT_BANNER_URL = fetched.banner.url if fetched.banner else None
+    except Exception:
+        BOT_BANNER_URL = None
+
     for cmd in bot.tree.get_commands():
         ORIGINAL_CMD_DESCRIPTIONS[cmd.name] = cmd.description.removeprefix("[💎] ")
         if hasattr(cmd, "commands"):
@@ -4627,13 +4651,13 @@ class HelpView(discord.ui.View):
             timestamp=discord.utils.utcnow()
         )
         embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {BOT_TAGLINE}")
-        return embed
+        return brand_embed(embed)
 
     def category_embed(self, key: str) -> discord.Embed:
         _, label, icon_var, fallback, value = next(c for c in self.categories if c[0] == key)
         embed = discord.Embed(title=f"{e(icon_var, fallback)} {label}".strip(), description=value, color=COLOR_PRIMARY, timestamp=discord.utils.utcnow())
         embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {BOT_TAGLINE}")
-        return embed
+        return brand_embed(embed)
 
     async def on_select(self, interaction: discord.Interaction):
         if interaction.user.id != self.invoker_id:
@@ -4719,19 +4743,8 @@ async def pfx_commandlist(ctx):
         color=COLOR_PRIMARY,
         timestamp=discord.utils.utcnow()
     )
-    if bot.user:
-        embed.set_thumbnail(url=bot.user.display_avatar.url)
-        banner_url = bot.user.banner.url if bot.user.banner else None
-        if not banner_url:
-            try:
-                fetched = await bot.fetch_user(bot.user.id)
-                banner_url = fetched.banner.url if fetched.banner else None
-            except Exception:
-                banner_url = None
-        if banner_url:
-            embed.set_image(url=banner_url)
     embed.set_footer(text=f"{BOT_NAME} v{BOT_VERSION} • {len(cmds)} commands")
-    await ctx.send(embed=embed)
+    await ctx.send(embed=brand_embed(embed))
 
 # ══════════════════════════════════════════════════════════════════
 # SLASH COMMANDS
