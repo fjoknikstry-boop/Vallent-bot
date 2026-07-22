@@ -731,6 +731,17 @@ def get_user_badges(uid: int) -> list:
 # stored per-user. Only the bot owner can create/delete/give/remove them
 # (see the `custombadge` command further down).
 
+def _sanitize_badge_name(name: str) -> str:
+    """Strip any Discord mention syntax (@user, @role, #channel, @everyone/
+    @here) out of a badge name. Badge names are just display text — a
+    mention accidentally typed while naming a badge (e.g. `custombadge
+    create 🔥 Monarch @Niks.`) should never turn into a real, clickable/
+    pinging tag on the profile card."""
+    name = re.sub(r"<@!?\d+>|<@&\d+>|<#\d+>", "", name)
+    name = re.sub(r"@(everyone|here)", "", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
+
 def _slugify_badge_id(name: str) -> str:
     """Turn a badge name into a short, stable dict key (e.g. 'Dragon Tamer'
     -> 'dragon_tamer'). If that slug is already used by a different badge,
@@ -767,7 +778,7 @@ def _badge_display_lines(uid: int) -> tuple:
     for cb in get_custom_badges(uid):
         emoji_str = cb.get("emoji", "")
         prefix    = (emoji_str + " ") if emoji_str else "\u2022 "
-        lines.append(prefix + "**" + cb["name"] + "**")
+        lines.append(prefix + "**\u2022 " + cb["name"] + "**")
     return lines, len(lines)
 
 def _resolve_badge_target(token: str) -> Optional[int]:
@@ -3713,7 +3724,7 @@ async def pfx_botrole(ctx, action: str = "", *args):
         save_config(cfg)
         await ctx.send(embed=success_embed(f"Manual bot role(s) **{', '.join(removed)}** removed from {member.mention}."))
 
-@bot.command(name="custombadge", aliases=["cbadge", "cb"])
+@bot.command(name="custombadge", aliases=["cbadge", "cb", "custombadges", "badge", "badges"])
 @is_owner()
 async def pfx_custombadge(ctx, action: str = "", *args):
     """
@@ -3733,7 +3744,9 @@ async def pfx_custombadge(ctx, action: str = "", *args):
                 "Usage: `custombadge create <emoji> <name>`\nExample: `custombadge create 🐉 Dragon Tamer`"
             ))
         emoji_tok = args[0]
-        name      = " ".join(args[1:]).strip()
+        name      = _sanitize_badge_name(" ".join(args[1:]))
+        if not name:
+            return await ctx.send(embed=error_embed("Badge name can't be empty (mentions and channel tags don't count as a name)."))
         if len(name) > 100:
             return await ctx.send(embed=error_embed("Badge name is too long (max 100 characters)."))
         badge_id = _slugify_badge_id(name)
