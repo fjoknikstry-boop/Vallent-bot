@@ -38,23 +38,23 @@ BADGE_MOONKEEPER = "<a:emoji_55:1528919570918670396>"   # Emoji untuk badge MOON
 # ══════════════════════════════════════════════════════════════════
 
 # Section headers di !vx help
-ICON_MODERATION  = "<:emoji_28:1528929786511228939>"   # Icon untuk section Moderation
-ICON_ROLE        = "<:emoji_33:1528929910100463666>"   # Icon untuk section Role & Voice
-ICON_INFO        = "<:emoji_49:1528947364189049012>"   # Icon untuk section Info
-ICON_TICKET      = "<:emoji_47:1528941765749510284>"   # Icon untuk section Ticket
-ICON_LEVEL       = "<:emoji_35:1528930032989372708>"   # Icon untuk section Level & XP
-ICON_GIVEAWAY    = "<a:emoji_51:1529240194920874164>"   # Icon untuk section Giveaway
-ICON_ANTISPAM    = "<:emoji_44:1528941241453252638>"   # Icon untuk section Antispam
-ICON_OWNER       = "<:emoji_11:1527088601240961094>"   # Icon untuk section Owner Only
-ICON_BOOST       = "<a:emoji_50:1529240171311009802>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
-ICON_ANTINUKE    = "<:emoji_31:1528929865267544164>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
-ICON_VERIFICATION = "<:emoji_55:1529381471146479676>"   # Icon untuk section & panel Verifikasi (captcha) — isi ID emoji lu di sini (fallback: 🔐)
-ICON_IGNORE      = "<:emoji_50:1528948003484864643>"
-ICON_AUTOMOD     = "<:emoji_51:1528948381559296061>"
-ICON_AUTORESPONSE = "<:emoji_42:1528941215330992280>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
-ICON_AFK          = "<:emoji_60:1529943424982192281>"   # Icon untuk section & notifikasi AFK — isi ID emoji lu di sini (fallback: 💤)
+ICON_MODERATION  = "<:emoji_52:1529987703125442700>"   # Icon untuk section Moderation
+ICON_ROLE        = "<:emoji_58:1529987879802241034>"   # Icon untuk section Role & Voice
+ICON_INFO        = "<:emoji_51:1529987677850702055>"   # Icon untuk section Info
+ICON_TICKET      = "<:emoji_55:1529987766849376407>"   # Icon untuk section Ticket
+ICON_LEVEL       = "<:emoji_56:1529987791746760805>"   # Icon untuk section Level & XP
+ICON_GIVEAWAY    = "<:emoji_63:1529987959410004008>"   # Icon untuk section Giveaway
+ICON_ANTISPAM    = "<:emoji_63:1529987994742816900>"   # Icon untuk section Antispam
+ICON_OWNER       = "<:emoji_49:1529987523135410196>"   # Icon untuk section Owner Only
+ICON_BOOST       = "<:emoji_65:1529988809352151181>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
+ICON_ANTINUKE    = "<:emoji_61:1529987932180582540>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
+ICON_VERIFICATION = "<:emoji_50:1529987543813062898>"   # Icon untuk section & panel Verifikasi (captcha) — isi ID emoji lu di sini (fallback: 🔐)
+ICON_IGNORE      = "<:emoji_59:1529987896189124842>"
+ICON_AUTOMOD     = "<:emoji_57:1529987833354387577>"
+ICON_AUTORESPONSE = "<:emoji_54:1529987747337732310>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
+ICON_AFK          = "<:emoji_46:1529987166225039450>"   # Icon untuk section & notifikasi AFK — isi ID emoji lu di sini (fallback: 💤)
 # Status / result icons
-ICON_SUCCESS     = "<:emoji_62:1529975882339323954>"   # Icon sukses (checklist, dll)
+ICON_SUCCESS     = "<:emoji_37:1528930134349058248>"   # Icon sukses (checklist, dll)
 ICON_ERROR       = "<:emoji_38:1528930169950310441>"   # Icon error / gagal
 ICON_WARNING     = "<:emoji_32:1528929890038972466>"   # Icon warning / peringatan
 ICON_LOADING     = "<a:emoji_53:1529240301539954778>"   # Icon loading / proses
@@ -75,7 +75,7 @@ ICON_STATUS_DEGRADED    = "<a:Loading:1529932224655527948>"   # isi ID emoji lu 
 # section icon & tombol Send di panel builder)
 # ══════════════════════════════════════════════════════════════════
  
-ICON_EMBED       = "<:emoji_61:1529943660790284390>"   # Icon untuk section Embed Builder di help menu — isi ID emoji lu di sini (fallback: 🖼️)
+ICON_EMBED       = "<:emoji_53:1529987727452541180>"   # Icon untuk section Embed Builder di help menu — isi ID emoji lu di sini (fallback: 🖼️)
 ICON_EMBED_SEND  = "<:emoji_59:1529943396615979119>"   # Icon untuk tombol Send di panel /embed — isi ID emoji lu di sini (fallback: ✅)
  
 # Profile card icons
@@ -89,7 +89,7 @@ ICON_TICKET_OPEN  = "<:emoji_53:1528949967207534702>"  # Icon tombol Open Ticket
 ICON_TICKET_CLOSE = "<:emoji_53:1528949983645138984>"  # Icon tombol Close Ticket
 
 # Giveaway icons
-ICON_GIVEAWAY_REACT = "<:emoji_14:1527088695688302732>" # Icon reaksi giveaway (default 🎉 kalau kosong)
+ICON_GIVEAWAY_REACT = "<a:emoji_51:1529240194920874164>" # Icon reaksi giveaway (default 🎉 kalau kosong)
 ICON_WINNER          = "<a:emoji_53:1522406976632389855>" # Icon pengumuman pemenang
 
 # ══════════════════════════════════════════════════════════════════
