@@ -52,7 +52,7 @@ ICON_VERIFICATION = "<:emoji_55:1529381471146479676>"   # Icon untuk section & p
 ICON_IGNORE      = "<:emoji_50:1528948003484864643>"
 ICON_AUTOMOD     = "<:emoji_51:1528948381559296061>"
 ICON_AUTORESPONSE = "<:emoji_42:1528941215330992280>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
-ICON_AFK          = "<:emoji_36:1528930072386338926>"   # Icon untuk section & notifikasi AFK — isi ID emoji lu di sini (fallback: 💤)
+ICON_AFK          = "<:emoji_60:1529943424982192281>"   # Icon untuk section & notifikasi AFK — isi ID emoji lu di sini (fallback: 💤)
 # Status / result icons
 ICON_SUCCESS     = "<:emoji_37:1528930134349058248>"   # Icon sukses (checklist, dll)
 ICON_ERROR       = "<:emoji_38:1528930169950310441>"   # Icon error / gagal
@@ -69,6 +69,14 @@ ICON_STATUS_OFFLINE     = "<a:Offline:1529931159549776132>"   # isi ID emoji lu 
 ICON_STATUS_MAINTENANCE = "<:yellow_status:1529931730935611526>"   # isi ID emoji lu di sini (fallback: 🟠)
 ICON_STATUS_UPDATE      = "<a:online:1529932716529946645>"   # isi ID emoji lu di sini (fallback: 🔵)
 ICON_STATUS_DEGRADED    = "<a:Loading:1529932224655527948>"   # isi ID emoji lu di sini (fallback: 🟡)
+
+# ══════════════════════════════════════════════════════════════════
+# EMBED BUILDER ICONS (dipakai command `embed` / `/embed` — help menu
+# section icon & tombol Send di panel builder)
+# ══════════════════════════════════════════════════════════════════
+ 
+ICON_EMBED       = "<:emoji_61:1529943660790284390>"   # Icon untuk section Embed Builder di help menu — isi ID emoji lu di sini (fallback: 🖼️)
+ICON_EMBED_SEND  = "<:emoji_59:1529943396615979119>"   # Icon untuk tombol Send di panel /embed — isi ID emoji lu di sini (fallback: ✅)
  
 # Profile card icons
 ICON_PROFILE     = "<:emoji_52:1528948967314817024>"   # Icon di header profile
