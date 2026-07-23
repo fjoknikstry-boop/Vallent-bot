@@ -54,7 +54,7 @@ ICON_AUTOMOD     = "<:emoji_51:1528948381559296061>"
 ICON_AUTORESPONSE = "<:emoji_42:1528941215330992280>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
 ICON_AFK          = "<:emoji_60:1529943424982192281>"   # Icon untuk section & notifikasi AFK — isi ID emoji lu di sini (fallback: 💤)
 # Status / result icons
-ICON_SUCCESS     = "<:emoji_37:1528930134349058248>"   # Icon sukses (checklist, dll)
+ICON_SUCCESS     = "<:emoji_62:1529975882339323954>"   # Icon sukses (checklist, dll)
 ICON_ERROR       = "<:emoji_38:1528930169950310441>"   # Icon error / gagal
 ICON_WARNING     = "<:emoji_32:1528929890038972466>"   # Icon warning / peringatan
 ICON_LOADING     = "<a:emoji_53:1529240301539954778>"   # Icon loading / proses
