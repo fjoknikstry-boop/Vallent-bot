@@ -5336,7 +5336,7 @@ class EmbedBuilderPanel(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(content=f"✅ Sent to {self.channel.mention} — draft cleared.", view=self)
 
-@bot.tree.command(name="embed", description="Build a custom embed (title, description, thumbnail, banner, separators, color) and send it to a channel.")
+@bot.tree.command(name="embed", description="Build a custom embed and send it to a channel.")
 @app_commands.describe(channel="Channel the embed will be sent to")
 async def slash_embed(i: discord.Interaction, channel: discord.TextChannel):
     if i.user.id != bot.owner_id and not i.user.guild_permissions.administrator:
