@@ -49,6 +49,7 @@ from emoji_config import (
     ICON_AFK, ICON_VERIFICATION,
     ICON_STATUS_ONLINE, ICON_STATUS_OFFLINE, ICON_STATUS_MAINTENANCE,
     ICON_STATUS_UPDATE, ICON_STATUS_DEGRADED,
+    ICON_EMBED, ICON_EMBED_SEND,
     e
 )
 import rank_card
@@ -961,7 +962,7 @@ async def _antispam_log(guild: discord.Guild, gc: dict, member: discord.Member, 
 # OWNER / PERMISSION HELPERS
 # ══════════════════════════════════════════════════════════════════
 
-OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave", "vxservers", "vxguilds", "ownerhelp", "botstatus"}
+OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave", "vxservers", "vxguilds", "ownerhelp", "botstatus", "synccommands"}
 
 def is_owner():
     async def predicate(ctx: commands.Context) -> bool:
@@ -4238,6 +4239,32 @@ async def pfx_botstatus(ctx, sub: str = "", *, rest: str = ""):
         return await ctx.send(embed=error_embed("I don't have permission to send messages in that channel."))
     await ctx.send(embed=success_embed(f"Status update posted in {ch.mention}."))
 
+@bot.command(name="synccommands", aliases=["sync", "syncslash"])
+@is_owner()
+async def pfx_synccommands(ctx, scope: str = "guild"):
+    """Owner-only. Force-resync slash commands. Global syncs (what runs
+    automatically on startup) can take up to ~1 hour to actually show up
+    in Discord's client — a guild-specific sync applies instantly, which
+    is the fast way to confirm a newly-added slash command actually
+    registered instead of waiting on Discord's global cache."""
+    scope = scope.lower()
+    try:
+        if scope in ("global", "g"):
+            synced = await bot.tree.sync()
+            await ctx.send(embed=success_embed(
+                f"Globally synced **{len(synced)}** slash command(s). "
+                "Note: global syncs can take up to ~1 hour to show up for everyone."
+            ))
+        else:
+            bot.tree.copy_global_to(guild=ctx.guild)
+            synced = await bot.tree.sync(guild=ctx.guild)
+            await ctx.send(embed=success_embed(
+                f"Synced **{len(synced)}** slash command(s) to **{ctx.guild.name}** — should show up immediately.\n"
+                "-# Run `synccommands global` instead to push the same update everywhere (slower to appear)."
+            ))
+    except Exception as e:
+        await ctx.send(embed=error_embed(f"Sync failed: {e}"))
+
 @bot.command(name="premiumlock", aliases=["plock"])
 @is_owner()
 async def pfx_premiumlock(ctx, action: str = "", *, cmd_name: str = ""):
@@ -4818,7 +4845,7 @@ HELP_CATEGORIES = [
     )),
     ("role_voice", "Role & Voice", ICON_ROLE, "🎭", "`addrole` · `removerole` · `move`"),
     ("info", "Info", ICON_INFO, "ℹ️", "`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`"),
-    ("embed", "Embed Builder", ICON_INFO, "🖼️", (
+    ("embed", "Embed Builder", ICON_EMBED, "🖼️", (
         "`embed title/description/append/separator` — write the content\n"
         "`embed thumbnail/banner/color` — style it (URL or attach an image)\n"
         "`embed channel #channel` · `embed preview` · `embed send` · `embed reset`\n"
@@ -5295,7 +5322,7 @@ class EmbedBuilderPanel(discord.ui.View):
         draft = _get_embed_draft(interaction.user.id)
         await interaction.response.edit_message(**_panel_render_kwargs(draft))
 
-    @discord.ui.button(label="Send", style=discord.ButtonStyle.success, row=3)
+    @discord.ui.button(label="Send", style=discord.ButtonStyle.success, emoji=e(ICON_EMBED_SEND, "✅"), row=3)
     async def send_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
         draft = _get_embed_draft(interaction.user.id)
         if not draft.get("title") and not draft.get("description"):
