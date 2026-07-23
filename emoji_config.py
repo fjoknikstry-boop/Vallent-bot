@@ -59,6 +59,17 @@ ICON_ERROR       = "<:emoji_38:1528930169950310441>"   # Icon error / gagal
 ICON_WARNING     = "<:emoji_32:1528929890038972466>"   # Icon warning / peringatan
 ICON_LOADING     = "<a:emoji_53:1529240301539954778>"   # Icon loading / proses
 
+# ══════════════════════════════════════════════════════════════════
+# BOT STATUS UPDATE ICONS (dipakai command `botstatus` — notif di channel
+# status support server: online/maintenance/update/offline/degraded)
+# ══════════════════════════════════════════════════════════════════
+ 
+ICON_STATUS_ONLINE      = "<a:Status:1529931214054752427>"   # isi ID emoji lu di sini (fallback: 🟢)
+ICON_STATUS_OFFLINE     = "<a:Offline:1529931159549776132>"   # isi ID emoji lu di sini (fallback: 🔴)
+ICON_STATUS_MAINTENANCE = "<:yellow_status:1529931730935611526>"   # isi ID emoji lu di sini (fallback: 🟠)
+ICON_STATUS_UPDATE      = "<a:online:1529932716529946645>"   # isi ID emoji lu di sini (fallback: 🔵)
+ICON_STATUS_DEGRADED    = "<a:Loading:1529932224655527948>"   # isi ID emoji lu di sini (fallback: 🟡)
+ 
 # Profile card icons
 ICON_PROFILE     = "<:emoji_52:1528948967314817024>"   # Icon di header profile
 ICON_BADGES      = "<a:emoji_47:1528089656783142993>"   # Icon di ALL BADGES
