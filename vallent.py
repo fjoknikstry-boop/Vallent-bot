@@ -3956,6 +3956,157 @@ async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
             "role once you've configured everything above and run `enable`."
         )))
 
+# ══════════════════════════════════════════════════════════════════
+# EMBED BUILDER — compose a custom embed piece-by-piece, then send it
+# to any channel. Draft state lives in memory per-user (like the AFK/
+# captcha stores above) — it's a working scratchpad, not saved data, so
+# there's no reason for it to survive a bot restart.
+# ══════════════════════════════════════════════════════════════════
+
+_EMBED_DRAFTS: dict = {}   # uid -> draft dict
+
+SEPARATOR_STYLES = {
+    "line":  "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
+    "dots":  "· · · · · · · · · · · · · · · · · · · ·",
+    "stars": "✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦",
+    "wave":  "〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜",
+}
+
+def _get_embed_draft(uid: int) -> dict:
+    return _EMBED_DRAFTS.setdefault(uid, {
+        "title": None, "description": "", "thumbnail": None,
+        "image": None, "color": COLOR_PRIMARY, "channel_id": None,
+    })
+
+def _build_draft_embed(draft: dict) -> discord.Embed:
+    embed = discord.Embed(color=draft.get("color") or COLOR_PRIMARY, timestamp=discord.utils.utcnow())
+    if draft.get("title"):
+        embed.title = draft["title"]
+    if draft.get("description"):
+        embed.description = draft["description"]
+    if draft.get("thumbnail"):
+        embed.set_thumbnail(url=draft["thumbnail"])
+    if draft.get("image"):
+        embed.set_image(url=draft["image"])
+    embed.set_footer(text=BOT_NAME)
+    return embed
+
+def _draft_summary(ctx, draft: dict) -> str:
+    ch = ctx.guild.get_channel(draft.get("channel_id") or 0) if draft.get("channel_id") else None
+    return (
+        f"**Title:** {draft.get('title') or '*(not set)*'}\n"
+        f"**Description:** {'✅ set' if draft.get('description') else '*(not set)*'}\n"
+        f"**Thumbnail:** {'✅ set' if draft.get('thumbnail') else '*(not set)*'}\n"
+        f"**Banner:** {'✅ set' if draft.get('image') else '*(not set)*'}\n"
+        f"**Color:** `#{(draft.get('color') or COLOR_PRIMARY):06X}`\n"
+        f"**Channel:** {ch.mention if ch else '*(not set)*'}"
+    )
+
+@bot.command(name="embed", aliases=["em", "embedmsg"])
+async def pfx_embed(ctx, sub: str = "", *, rest: str = ""):
+    """Build a custom embed piece-by-piece (title, description, thumbnail,
+    banner, a divider/separator line, color) and send it to any channel.
+    Draft is per-user and stays in memory until you `send` or `reset` it."""
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.administrator:
+        return await ctx.send(embed=error_embed("Only Administrators or the owner can use the embed builder."))
+    sub   = sub.lower()
+    draft = _get_embed_draft(ctx.author.id)
+
+    if sub == "title":
+        text = rest.strip()
+        if not text:
+            return await ctx.send(embed=error_embed("Usage: `embed title <text>`"))
+        draft["title"] = text[:256]
+        await ctx.send(embed=success_embed("Title set. Run `embed preview` to check it out."))
+
+    elif sub in ("description", "desc", "body"):
+        text = rest.strip()
+        if not text:
+            return await ctx.send(embed=error_embed("Usage: `embed description <text>`"))
+        draft["description"] = text[:4096]
+        await ctx.send(embed=success_embed("Description set (replaces anything before it)."))
+
+    elif sub == "append":
+        text = rest.strip()
+        if not text:
+            return await ctx.send(embed=error_embed("Usage: `embed append <text>` — adds a new line onto the existing description."))
+        draft["description"] = (draft.get("description", "") + "\n" + text).strip()[:4096]
+        await ctx.send(embed=success_embed("Added to the description."))
+
+    elif sub == "separator":
+        style = rest.strip().lower() or "line"
+        if style not in SEPARATOR_STYLES:
+            return await ctx.send(embed=error_embed(f"Unknown style. Choices: {', '.join(f'`{s}`' for s in SEPARATOR_STYLES)}"))
+        draft["description"] = (draft.get("description", "") + f"\n{SEPARATOR_STYLES[style]}\n").strip("\n")[:4096]
+        await ctx.send(embed=success_embed(f"Added a `{style}` separator to the description."))
+
+    elif sub == "thumbnail":
+        url = ctx.message.attachments[0].url if ctx.message.attachments else rest.strip()
+        if not url or not url.startswith("http"):
+            return await ctx.send(embed=error_embed("Attach an image to your message, or give a direct URL: `embed thumbnail <url>`"))
+        draft["thumbnail"] = url
+        await ctx.send(embed=success_embed("Thumbnail set."))
+
+    elif sub in ("banner", "image"):
+        url = ctx.message.attachments[0].url if ctx.message.attachments else rest.strip()
+        if not url or not url.startswith("http"):
+            return await ctx.send(embed=error_embed("Attach an image to your message, or give a direct URL: `embed banner <url>`"))
+        draft["image"] = url
+        await ctx.send(embed=success_embed("Banner set."))
+
+    elif sub == "color":
+        hex_txt = rest.strip().lstrip("#")
+        try:
+            draft["color"] = int(hex_txt, 16)
+        except ValueError:
+            return await ctx.send(embed=error_embed("Give a valid hex color, e.g. `embed color FF0000`"))
+        await ctx.send(embed=success_embed(f"Color set to `#{hex_txt.upper()}`."))
+
+    elif sub == "channel":
+        ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else None
+        if not ch:
+            return await ctx.send(embed=error_embed("Mention a channel: `embed channel #channel`"))
+        draft["channel_id"] = ch.id
+        await ctx.send(embed=success_embed(f"Target channel set to {ch.mention}."))
+
+    elif sub == "preview":
+        if not draft.get("title") and not draft.get("description"):
+            return await ctx.send(embed=error_embed("Nothing to preview yet — set a title or description first."))
+        await ctx.send(content="**Preview** *(not sent yet)*:", embed=_build_draft_embed(draft))
+
+    elif sub == "reset":
+        _EMBED_DRAFTS.pop(ctx.author.id, None)
+        await ctx.send(embed=success_embed("Embed draft cleared."))
+
+    elif sub == "send":
+        ch = ctx.guild.get_channel(draft.get("channel_id") or 0)
+        if not ch:
+            return await ctx.send(embed=error_embed("No target channel set yet — run `embed channel #channel` first."))
+        if not draft.get("title") and not draft.get("description"):
+            return await ctx.send(embed=error_embed("Nothing to send yet — set a title or description first."))
+        try:
+            await ch.send(embed=_build_draft_embed(draft))
+        except discord.Forbidden:
+            return await ctx.send(embed=error_embed("I don't have permission to send messages in that channel."))
+        _EMBED_DRAFTS.pop(ctx.author.id, None)
+        await ctx.send(embed=success_embed(f"Embed sent to {ch.mention}. Draft cleared."))
+
+    else:
+        await ctx.send(embed=info_embed("Embed Builder", (
+            "`embed title <text>` — set the title\n"
+            "`embed description <text>` — set/replace the body text\n"
+            "`embed append <text>` — add another line onto the body\n"
+            f"`embed separator [{'/'.join(SEPARATOR_STYLES)}]` — insert a divider line\n"
+            "`embed thumbnail <url>` *(or attach an image)* — small image, top-right\n"
+            "`embed banner <url>` *(or attach an image)* — big image at the bottom\n"
+            "`embed color <hex>` — e.g. `embed color FF0000`\n"
+            "`embed channel #channel` — where it gets sent\n"
+            "`embed preview` — see it before sending\n"
+            "`embed send` — post it to the target channel\n"
+            "`embed reset` — clear the draft and start over\n\n"
+            f"**Current draft:**\n{_draft_summary(ctx, draft)}"
+        )))
+
 # ── OWNER COMMANDS ────────────────────────────────────────────────
 
 @bot.command(name="maintenance", aliases=["mnt"])
@@ -4032,12 +4183,24 @@ async def pfx_botstatus(ctx, sub: str = "", *, rest: str = ""):
         save_config(cfg)
         return await ctx.send(embed=success_embed(f"Status updates will now be posted in {ch.mention}."))
 
+    # short aliases for each status type, so you don't have to type the
+    # full word every time — e.g. `botstatus on` == `botstatus online`
+    STATUS_TYPE_ALIASES = {
+        "on": "online", "up": "online",
+        "off": "offline", "down": "offline",
+        "maint": "maintenance", "mnt": "maintenance",
+        "upd": "update",
+        "deg": "degraded", "issue": "degraded", "issues": "degraded", "partial": "degraded",
+    }
+    sub = STATUS_TYPE_ALIASES.get(sub, sub)
+
     if sub not in BOT_STATUS_PRESETS and sub != "custom":
         preset_list = ", ".join(f"`{k}`" for k in BOT_STATUS_PRESETS)
         return await ctx.send(embed=info_embed("Bot Status", (
             "`botstatus channel #channel` — set where status cards get posted\n"
             f"`botstatus <type> [custom message]` — post a status update. Types: {preset_list}\n"
             "`botstatus custom <emoji> <message>` — fully custom one-off status\n\n"
+            "-# Short aliases work too: `on`/`up`, `off`/`down`, `maint`/`mnt`, `upd`, `deg`/`issue`/`partial`.\n"
             "-# Each type uses its own indicator emoji (set in emoji_config.py) and its own default "
             "message, which you can override by adding your own text after the type."
         )))
@@ -4655,6 +4818,12 @@ HELP_CATEGORIES = [
     )),
     ("role_voice", "Role & Voice", ICON_ROLE, "🎭", "`addrole` · `removerole` · `move`"),
     ("info", "Info", ICON_INFO, "ℹ️", "`userinfo` · `serverinfo` · `avatar` · `ping` · `addemoji` · `profile`"),
+    ("embed", "Embed Builder", ICON_INFO, "🖼️", (
+        "`embed title/description/append/separator` — write the content\n"
+        "`embed thumbnail/banner/color` — style it (URL or attach an image)\n"
+        "`embed channel #channel` · `embed preview` · `embed send` · `embed reset`\n"
+        "Admin/owner only. Draft is per-user, kept until you send or reset it."
+    )),
     ("afk", "AFK System", ICON_AFK, "💤", (
         "`afk [reason]` (alias `away`) · `/afk` — set yourself as AFK\n"
         "Sending any message automatically clears your AFK status.\n"
@@ -5000,6 +5169,158 @@ async def slash_help(i: discord.Interaction):
     view   = HelpView(i.user.id, i.user.id == bot.owner_id, has_np)
     await i.response.send_message(embed=view.home_embed(), view=view, ephemeral=True)
     view.message = await i.original_response()
+
+def _panel_render_kwargs(draft: dict) -> dict:
+    """Live-preview payload for the /embed panel message — shows the embed
+    exactly as it currently stands, or a placeholder if nothing's set yet."""
+    if draft.get("title") or draft.get("description"):
+        embed = _build_draft_embed(draft)
+    else:
+        embed = discord.Embed(description="*Nothing set yet — use the buttons below to start building.*", color=COLOR_PRIMARY)
+    return {"embed": embed}
+
+class EmbedFieldModal(discord.ui.Modal):
+    """Generic single-field modal used by every text-entry button on the
+    panel below. `panel_msg` is the actual ephemeral panel message object
+    captured at button-click time — editing it here (from the *separate*
+    interaction created by the modal submission) still works because that
+    message object stays bound to the original interaction's webhook token
+    for its full lifetime."""
+    def __init__(self, panel_msg: discord.Message, field: str, label: str,
+                 current: str = "", style=discord.TextStyle.short, max_length: int = 256, placeholder: str = ""):
+        super().__init__(title=label, timeout=300)
+        self.panel_msg = panel_msg
+        self.field     = field
+        self.value_input = discord.ui.TextInput(
+            label=label, style=style, required=False, default=current,
+            max_length=max_length, placeholder=placeholder
+        )
+        self.add_item(self.value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        draft = _get_embed_draft(interaction.user.id)
+        val   = self.value_input.value.strip()
+
+        if self.field == "append":
+            if val:
+                draft["description"] = (draft.get("description", "") + "\n" + val).strip()[:4000]
+        elif self.field == "color":
+            hex_txt = val.lstrip("#")
+            if hex_txt:
+                try:
+                    draft["color"] = int(hex_txt, 16)
+                except ValueError:
+                    return await interaction.response.send_message(embed=error_embed("Invalid hex color — try something like `8B0000`."), ephemeral=True)
+            else:
+                draft["color"] = COLOR_PRIMARY
+        elif self.field in ("thumbnail", "image"):
+            if val and not val.startswith("http"):
+                return await interaction.response.send_message(embed=error_embed("Must be a direct image URL."), ephemeral=True)
+            draft[self.field] = val or None
+        else:  # title / description
+            draft[self.field] = val or None
+
+        try:
+            await self.panel_msg.edit(**_panel_render_kwargs(draft))
+        except Exception:
+            pass
+        await interaction.response.send_message(embed=success_embed("Updated — check the panel above."), ephemeral=True, delete_after=4)
+
+class SeparatorSelect(discord.ui.Select):
+    def __init__(self):
+        options = [discord.SelectOption(label=s.capitalize(), value=s, description=SEPARATOR_STYLES[s][:40]) for s in SEPARATOR_STYLES]
+        super().__init__(placeholder="Insert a separator line…", options=options, min_values=1, max_values=1, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        draft = _get_embed_draft(interaction.user.id)
+        style = self.values[0]
+        draft["description"] = (draft.get("description", "") + f"\n{SEPARATOR_STYLES[style]}\n").strip("\n")[:4000]
+        await interaction.response.edit_message(**_panel_render_kwargs(draft))
+
+class EmbedBuilderPanel(discord.ui.View):
+    """The full /embed builder — every field from the prefix `!vx embed`
+    command, but as clickable buttons + modals instead of chat subcommands.
+    Shares the same in-memory draft store, so switching between `/embed`
+    and `!vx embed` mid-build works seamlessly."""
+    def __init__(self, channel: discord.TextChannel, owner_id: int):
+        super().__init__(timeout=900)
+        self.channel  = channel
+        self.owner_id = owner_id
+        self.add_item(SeparatorSelect())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(embed=error_embed("This isn't your embed builder — run `/embed` yourself."), ephemeral=True)
+            return False
+        return True
+
+    async def _open_modal(self, interaction, field, label, current="", **kw):
+        await interaction.response.send_modal(EmbedFieldModal(interaction.message, field, label, current=current, **kw))
+
+    @discord.ui.button(label="Title", style=discord.ButtonStyle.secondary, row=0)
+    async def title_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_embed_draft(interaction.user.id)
+        await self._open_modal(interaction, "title", "Title", current=draft.get("title") or "", max_length=256)
+
+    @discord.ui.button(label="Description", style=discord.ButtonStyle.secondary, row=0)
+    async def desc_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_embed_draft(interaction.user.id)
+        await self._open_modal(interaction, "description", "Description", current=draft.get("description") or "",
+                                style=discord.TextStyle.paragraph, max_length=4000, placeholder="Replaces the whole body")
+
+    @discord.ui.button(label="Add Line", style=discord.ButtonStyle.secondary, row=0)
+    async def append_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        await self._open_modal(interaction, "append", "Text to add", style=discord.TextStyle.paragraph,
+                                max_length=1000, placeholder="Added as a new line onto the existing description")
+
+    @discord.ui.button(label="Thumbnail", style=discord.ButtonStyle.secondary, row=0)
+    async def thumb_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_embed_draft(interaction.user.id)
+        await self._open_modal(interaction, "thumbnail", "Thumbnail URL", current=draft.get("thumbnail") or "", placeholder="Direct image link")
+
+    @discord.ui.button(label="Banner", style=discord.ButtonStyle.secondary, row=0)
+    async def banner_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_embed_draft(interaction.user.id)
+        await self._open_modal(interaction, "image", "Banner / Image URL", current=draft.get("image") or "", placeholder="Direct image link")
+
+    @discord.ui.button(label="Color", style=discord.ButtonStyle.secondary, row=1)
+    async def color_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_embed_draft(interaction.user.id)
+        current = f"{(draft.get('color') or COLOR_PRIMARY):06X}"
+        await self._open_modal(interaction, "color", "Color (hex)", current=current, max_length=7, placeholder="e.g. 8B0000")
+
+    @discord.ui.button(label="Reset", style=discord.ButtonStyle.danger, row=1)
+    async def reset_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        _EMBED_DRAFTS.pop(interaction.user.id, None)
+        draft = _get_embed_draft(interaction.user.id)
+        await interaction.response.edit_message(**_panel_render_kwargs(draft))
+
+    @discord.ui.button(label="Send", style=discord.ButtonStyle.success, row=3)
+    async def send_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_embed_draft(interaction.user.id)
+        if not draft.get("title") and not draft.get("description"):
+            return await interaction.response.send_message(embed=error_embed("Nothing to send yet — set a title or description first."), ephemeral=True)
+        try:
+            await self.channel.send(embed=_build_draft_embed(draft))
+        except discord.Forbidden:
+            return await interaction.response.send_message(embed=error_embed("I don't have permission to send messages in that channel."), ephemeral=True)
+        _EMBED_DRAFTS.pop(interaction.user.id, None)
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content=f"✅ Sent to {self.channel.mention} — draft cleared.", view=self)
+
+@bot.tree.command(name="embed", description="Build a custom embed (title, description, thumbnail, banner, separators, color) and send it to a channel.")
+@app_commands.describe(channel="Channel the embed will be sent to")
+async def slash_embed(i: discord.Interaction, channel: discord.TextChannel):
+    if i.user.id != bot.owner_id and not i.user.guild_permissions.administrator:
+        return await i.response.send_message(embed=error_embed("Only Administrators or the owner can use the embed builder."), ephemeral=True)
+    draft = _get_embed_draft(i.user.id)
+    draft["channel_id"] = channel.id
+    view = EmbedBuilderPanel(channel, i.user.id)
+    await i.response.send_message(
+        content=f"**Embed Builder** — building for {channel.mention}. Use the buttons below (this shares the same draft as `!vx embed`).",
+        view=view, **_panel_render_kwargs(draft), ephemeral=True
+    )
 
 
 
