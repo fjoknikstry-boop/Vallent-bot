@@ -47,6 +47,8 @@ from emoji_config import (
     ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
     ICON_BOOST, ICON_ANTINUKE, ICON_IGNORE, ICON_AUTOMOD, ICON_AUTORESPONSE,
     ICON_AFK, ICON_VERIFICATION,
+    ICON_STATUS_ONLINE, ICON_STATUS_OFFLINE, ICON_STATUS_MAINTENANCE,
+    ICON_STATUS_UPDATE, ICON_STATUS_DEGRADED,
     e
 )
 import rank_card
@@ -98,6 +100,7 @@ def load_config() -> dict:
             "role_sync":         {},
             "custom_badges":     {},
             "user_custom_badges": {},
+            "status_channel_id": None,
             "votes":             {},
             "payment_methods": {
                 "qris":    {"enabled": True, "image_url": "", "info": ""},
@@ -123,6 +126,7 @@ def load_config() -> dict:
     data.setdefault("moonkeeper_users",     [])   # uid list — manual Moonkeeper grants (independent of bot_roles hierarchy)
     data.setdefault("moonkeeper_sync_role", None)  # single Discord role ID synced to Moonkeeper, if any
     data.setdefault("role_sync",        {})
+    data.setdefault("status_channel_id", None)  # channel where `botstatus` posts online/maintenance/update/offline updates
     data.setdefault("votes",            {})
     data.setdefault("support_server_members", [])  # user IDs who have joined the support server
     data.setdefault("commands_run",           {})  # uid -> number of commands run
@@ -957,7 +961,7 @@ async def _antispam_log(guild: discord.Guild, gc: dict, member: discord.Member, 
 # OWNER / PERMISSION HELPERS
 # ══════════════════════════════════════════════════════════════════
 
-OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave", "vxservers", "vxguilds", "ownerhelp"}
+OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave", "vxservers", "vxguilds", "ownerhelp", "botstatus"}
 
 def is_owner():
     async def predicate(ctx: commands.Context) -> bool:
@@ -3997,6 +4001,80 @@ async def pfx_maintenance(ctx, action: str = "", *, reason: str = ""):
             "`maintenance off` — unlock again\n"
             "`maintenance status` — check the current status"))
 
+# ── BOT STATUS UPDATES — posts a NOTHING-style status card to a channel ──
+BOT_STATUS_PRESETS = {
+    "online":      {"icon": ICON_STATUS_ONLINE,      "fallback": "🟢", "color": COLOR_SUCCESS,
+                     "default_text": "is now online and ready to serve!"},
+    "offline":     {"icon": ICON_STATUS_OFFLINE,      "fallback": "🔴", "color": COLOR_ERROR,
+                     "default_text": "is going offline for a bit — back soon!"},
+    "maintenance": {"icon": ICON_STATUS_MAINTENANCE, "fallback": "🟠", "color": COLOR_WARNING,
+                     "default_text": "is entering maintenance mode. Some features may be unavailable."},
+    "update":      {"icon": ICON_STATUS_UPDATE,       "fallback": "🔵", "color": COLOR_PRIMARY,
+                     "default_text": "is being updated. Expect a short restart shortly."},
+    "degraded":    {"icon": ICON_STATUS_DEGRADED,     "fallback": "🟡", "color": COLOR_WARNING,
+                     "default_text": "is experiencing partial issues. We're looking into it."},
+}
+
+@bot.command(name="botstatus", aliases=["status", "bstatus"])
+@is_owner()
+async def pfx_botstatus(ctx, sub: str = "", *, rest: str = ""):
+    """Owner-only. Posts a NOTHING-style status card (title, colored
+    indicator, thumbnail, Bot ID + timestamp footer) to a dedicated status
+    channel — for announcing online/offline/maintenance/update/degraded,
+    or a fully custom one-off message."""
+    sub = sub.lower()
+
+    if sub in ("channel", "setchannel"):
+        ch = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else None
+        if not ch:
+            return await ctx.send(embed=error_embed("Mention a channel: `botstatus channel #channel`"))
+        cfg["status_channel_id"] = ch.id
+        save_config(cfg)
+        return await ctx.send(embed=success_embed(f"Status updates will now be posted in {ch.mention}."))
+
+    if sub not in BOT_STATUS_PRESETS and sub != "custom":
+        preset_list = ", ".join(f"`{k}`" for k in BOT_STATUS_PRESETS)
+        return await ctx.send(embed=info_embed("Bot Status", (
+            "`botstatus channel #channel` — set where status cards get posted\n"
+            f"`botstatus <type> [custom message]` — post a status update. Types: {preset_list}\n"
+            "`botstatus custom <emoji> <message>` — fully custom one-off status\n\n"
+            "-# Each type uses its own indicator emoji (set in emoji_config.py) and its own default "
+            "message, which you can override by adding your own text after the type."
+        )))
+
+    ch_id = cfg.get("status_channel_id")
+    ch    = bot.get_channel(ch_id) if ch_id else None
+    if not ch:
+        return await ctx.send(embed=error_embed("No status channel set yet — run `botstatus channel #channel` first."))
+
+    if sub == "custom":
+        parts = rest.split(" ", 1)
+        if len(parts) < 2 or not parts[1].strip():
+            return await ctx.send(embed=error_embed("Usage: `botstatus custom <emoji> <message>`"))
+        indicator, text = parts[0], parts[1].strip()
+        color = COLOR_PRIMARY
+    else:
+        preset    = BOT_STATUS_PRESETS[sub]
+        indicator = e(preset["icon"], preset["fallback"])
+        text      = rest.strip() or preset["default_text"]
+        color     = preset["color"]
+
+    embed = discord.Embed(
+        title=f"{BOT_NAME} Status Update",
+        description=f"{indicator} : **{bot.user.mention}** {text}",
+        color=color,
+        timestamp=discord.utils.utcnow()
+    )
+    if bot.user:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    embed.set_footer(text=f"Bot ID: {bot.user.id}")
+
+    try:
+        await ch.send(embed=embed)
+    except discord.Forbidden:
+        return await ctx.send(embed=error_embed("I don't have permission to send messages in that channel."))
+    await ctx.send(embed=success_embed(f"Status update posted in {ch.mention}."))
+
 @bot.command(name="premiumlock", aliases=["plock"])
 @is_owner()
 async def pfx_premiumlock(ctx, action: str = "", *, cmd_name: str = ""):
@@ -4599,6 +4677,7 @@ OWNER_HELP_CATEGORY = ("owner", "Owner Only", ICON_OWNER, "👑", (
     "`noprefix grant/revoke/list`\n"
     "`botrole set/remove/list`\n"
     "`custombadge create/give/remove/delete/list` — free-form badges you design and assign\n"
+    "`botstatus channel/online/offline/maintenance/update/degraded/custom` — status update cards\n"
     "`grantpremium @user <duration>/revoke`\n"
     "`premiumlock add/remove/list`\n"
     "`blacklist add/remove/list`\n"
