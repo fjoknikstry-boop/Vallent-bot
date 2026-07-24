@@ -32,7 +32,7 @@ import datetime
 import logging
 import pytz
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Union
 
 logging.basicConfig(level=logging.INFO)
 
@@ -5163,7 +5163,7 @@ async def slash_serverinfo(i: discord.Interaction):
 )
 async def slash_boostconfig(
     i: discord.Interaction,
-    channel: discord.TextChannel,
+    channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel],
     title: Optional[str] = None,
     emoji: Optional[str] = None,
     description: Optional[str] = None
@@ -5290,7 +5290,7 @@ class EmbedBuilderPanel(discord.ui.View):
     command, but as clickable buttons + modals instead of chat subcommands.
     Shares the same in-memory draft store, so switching between `/embed`
     and `!vx embed` mid-build works seamlessly."""
-    def __init__(self, channel: discord.TextChannel, owner_id: int):
+    def __init__(self, channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel], owner_id: int):
         super().__init__(timeout=900)
         self.channel  = channel
         self.owner_id = owner_id
@@ -5370,7 +5370,7 @@ class EmbedBuilderPanel(discord.ui.View):
 
 @bot.tree.command(name="embed", description="Build a custom embed and send it to a channel.")
 @app_commands.describe(channel="Channel the embed will be sent to")
-async def slash_embed(i: discord.Interaction, channel: discord.TextChannel):
+async def slash_embed(i: discord.Interaction, channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel]):
     if i.user.id != bot.owner_id and not i.user.guild_permissions.administrator:
         return await i.response.send_message(embed=error_embed("Only Administrators or the owner can use the embed builder."), ephemeral=True)
     draft = _get_embed_draft(i.user.id)
