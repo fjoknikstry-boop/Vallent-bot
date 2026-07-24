@@ -29,6 +29,65 @@ import discord
 
 MAX_TYPES_PER_PANEL = 25  # Discord's own hard cap on select menu options
 
+# A full custom emoji tag, e.g. <:name:123456789012345678> or <a:name:...>
+_CUSTOM_EMOJI_RE = re.compile(r"^<(a?):([a-zA-Z0-9_]{2,32}):(\d+)>$")
+# Discord's own `:name:` shortcode, optionally with a `~2` disambiguator
+# suffix — this is what several Discord clients (notably mobile) paste
+# into a plain text input when you pick a custom emoji from the emoji
+# picker, instead of the full <:name:id> tag. It has no ID attached, so
+# it has to be resolved against the guild's own emoji list by name.
+_EMOJI_SHORTCODE_RE = re.compile(r"^:([a-zA-Z0-9_]{2,32})(?:~\d+)?:$")
+
+
+def resolve_emoji_input(guild: Optional[discord.Guild], raw: str):
+    """Normalize a user-typed emoji into something Discord's component API
+    will actually accept. One invalid emoji rejects the ENTIRE message
+    (400 Invalid Form Body), so anything unresolvable is dropped (None)
+    with a warning instead of being passed through and blowing up the
+    whole panel post/edit.
+
+    Handles three shapes:
+    - Full custom tag `<:name:id>` / `<a:name:id>` — already valid, used as-is.
+    - Discord's `:name:` (or `:name~2:`) shortcode — looked up against the
+      server's own emoji list by name.
+    - A short plain unicode emoji — used as-is.
+
+    Returns (resolved_emoji_or_None, warning_or_None).
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None, None
+    if _CUSTOM_EMOJI_RE.match(raw):
+        return raw, None
+    m = _EMOJI_SHORTCODE_RE.match(raw)
+    if m:
+        name = m.group(1)
+        found = discord.utils.get(guild.emojis, name=name) if guild else None
+        if found:
+            return str(found), None
+        return None, f"couldn't find a server emoji named `:{name}:` — using the default emoji instead"
+    # Anything short that isn't wrapped in `:` or `<` is trusted as a
+    # plain unicode emoji (Discord itself will reject it if it's wrong,
+    # but that's a much narrower failure than a malformed custom tag).
+    if len(raw) <= 8 and not raw.startswith(":") and not raw.startswith("<"):
+        return raw, None
+    return None, "that doesn't look like a valid emoji — using the default emoji instead"
+
+
+def safe_emoji(raw: Optional[str]) -> Optional[str]:
+    """Defense-in-depth sanity check for emoji strings already stored in
+    config (e.g. saved before this validation existed, or edited by hand
+    in the JSON). Never raises — just returns None for anything that
+    isn't a full custom emoji tag or a short plain-unicode string, so one
+    bad legacy value can never take down an otherwise-valid panel."""
+    if not raw:
+        return None
+    if _CUSTOM_EMOJI_RE.match(raw):
+        return raw
+    if len(raw) <= 8 and not raw.startswith(":") and not raw.startswith("<"):
+        return raw
+    return None
+
 
 def slugify_type_id(label: str, existing: dict) -> str:
     """Turn a type's label into a short, stable dict key (e.g. 'Billing
@@ -83,7 +142,7 @@ def build_type_select_options(panel: dict) -> list:
             label=(t.get("label") or key)[:100],
             value=key,
             description=(t.get("description") or "")[:100] or None,
-            emoji=t.get("emoji") or None,
+            emoji=safe_emoji(t.get("emoji")) or None,
         ))
     return options[:MAX_TYPES_PER_PANEL]
 
