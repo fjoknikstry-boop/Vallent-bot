@@ -1336,7 +1336,7 @@ async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
     welcome_embed = base_embed(
         panel.get("title") or f"Ticket — {interaction.user.display_name}",
         welcome_text,
-        color=COLOR_PRIMARY
+        color=panel.get("color") or COLOR_PRIMARY
     )
     await ch.send(content=interaction.user.mention, embed=welcome_embed, view=TicketControlView())
 
@@ -1699,19 +1699,59 @@ class TicketControlView(discord.ui.View):
                 await interaction.followup.send(**kw)
         await close_ticket_channel(interaction.guild, interaction.channel, interaction.user, "Closed via button.", _respond)
 
+BUTTON_STYLES = {
+    "primary":   discord.ButtonStyle.primary,     # blurple
+    "secondary": discord.ButtonStyle.secondary,   # gray
+    "success":   discord.ButtonStyle.success,      # green
+    "danger":    discord.ButtonStyle.danger,       # red
+}
+
+def _build_ticket_panel_embed(panel: dict) -> discord.Embed:
+    """Shared by the prefix `ticket panel`/`ticket edit` commands, the
+    `/ticketpanel` builder's live preview, and the final posted message —
+    one source of truth so all three can never drift out of sync."""
+    embed = discord.Embed(
+        title=panel.get("title") or "Support Tickets",
+        description=panel.get("description") or "Click the button below to open a support ticket.",
+        color=panel.get("color") or COLOR_PRIMARY,
+        timestamp=discord.utils.utcnow()
+    )
+    if panel.get("thumbnail"):
+        embed.set_thumbnail(url=panel["thumbnail"])
+    if panel.get("image"):
+        embed.set_image(url=panel["image"])
+    embed.set_footer(text=BOT_NAME)
+    return embed
+
 class TicketOpenView(discord.ui.View):
-    """One instance per panel — custom_id stores the panel_id so the button always
-    knows which panel to open, even after a bot restart."""
-    def __init__(self, panel_id: str):
+    """One instance per panel — custom_id stores the panel_id so the
+    control always knows which panel to open, even after a bot restart.
+    Renders as either a single button OR a select menu depending on the
+    panel's `open_type`, with fully custom label/emoji/color, all sourced
+    from the panel's config (defaults kept for panels made before this
+    was configurable)."""
+    def __init__(self, panel_id: str, panel: dict = None):
         super().__init__(timeout=None)
         self.panel_id = panel_id
-        btn = discord.ui.Button(
-            label="Open Ticket", style=discord.ButtonStyle.danger,
-            emoji=ICON_TICKET_OPEN if ICON_TICKET_OPEN else "🎫",
-            custom_id=f"vx_ticket_open:{panel_id}"
-        )
-        btn.callback = self._open_callback
-        self.add_item(btn)
+        panel = panel or {}
+        label     = panel.get("button_label") or "Open Ticket"
+        emoji     = panel.get("button_emoji") or (ICON_TICKET_OPEN if ICON_TICKET_OPEN else "🎫")
+        style     = BUTTON_STYLES.get(panel.get("button_style"), discord.ButtonStyle.danger)
+        open_type = panel.get("open_type", "button")
+
+        if open_type == "dropdown":
+            select = discord.ui.Select(
+                placeholder=label,
+                options=[discord.SelectOption(label=label, value="open", emoji=emoji or None, description="Select to open a ticket")],
+                custom_id=f"vx_ticket_open_select:{panel_id}",
+                min_values=1, max_values=1,
+            )
+            select.callback = self._open_callback
+            self.add_item(select)
+        else:
+            btn = discord.ui.Button(label=label, style=style, emoji=emoji or None, custom_id=f"vx_ticket_open:{panel_id}")
+            btn.callback = self._open_callback
+            self.add_item(btn)
 
     async def _open_callback(self, interaction: discord.Interaction):
         await handle_open_ticket(interaction, self.panel_id)
@@ -1908,7 +1948,11 @@ async def on_ready():
     bot.add_view(TicketControlView())
     panel_ids = {pid for gcfg in cfg.get("guilds", {}).values() for pid in gcfg.get("ticket", {}).get("panels", {}).keys()}
     for pid in panel_ids:
-        bot.add_view(TicketOpenView(pid))
+        matching_panel = next(
+            (gcfg["ticket"]["panels"][pid] for gcfg in cfg.get("guilds", {}).values() if pid in gcfg.get("ticket", {}).get("panels", {})),
+            None
+        )
+        bot.add_view(TicketOpenView(pid, matching_panel))
     bot.add_view(VerificationView())
 
     if not cleanup_spam_cache.is_running():
@@ -3171,7 +3215,7 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
             return await ctx.send(embed=error_embed(f"Panel `{panel_id}` hasn't been set up yet. Run `ticket setup` first."))
         title, desc = parse_title_desc(parts[1] if len(parts) > 1 else "", panel["title"], panel["description"])
         panel["title"], panel["description"] = title, desc
-        msg = await ctx.send(embed=base_embed(title, desc, color=COLOR_PRIMARY), view=TicketOpenView(panel_id))
+        msg = await ctx.send(embed=_build_ticket_panel_embed(panel), view=TicketOpenView(panel_id, panel))
         panel["message_id"], panel["channel_id"] = msg.id, msg.channel.id
         save_config(cfg)
 
@@ -3194,7 +3238,7 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
             if ch:
                 try:
                     msg = await ch.fetch_message(panel["message_id"])
-                    await msg.edit(embed=base_embed(title, desc, color=COLOR_PRIMARY))
+                    await msg.edit(embed=_build_ticket_panel_embed(panel))
                     edited = True
                 except Exception:
                     pass
@@ -4000,6 +4044,39 @@ def _undo_draft(draft: dict) -> bool:
             draft.pop(k, None)
     draft.update(prev)
     return True
+
+# ── /ticketpanel draft store — same generic snapshot/undo helpers above
+# are reused as-is (they operate on any dict, regardless of schema) ────
+
+_TICKET_DRAFTS: dict = {}   # uid -> draft dict
+
+def _get_ticket_draft(uid: int) -> dict:
+    return _TICKET_DRAFTS.setdefault(uid, {
+        "panel_id": None, "category_id": None, "log_channel_id": None,
+        "support_role_id": None, "max_tickets": 1,
+        "title": "Support Tickets", "description": "Click the button below to open a support ticket.",
+        "welcome_message": None, "thumbnail": None, "image": None, "color": COLOR_PRIMARY,
+        "button_label": "Open Ticket", "button_emoji": "", "button_style": "danger",
+        "open_type": "button", "_history": [],
+    })
+
+def _ticket_panel_summary(guild: discord.Guild, draft: dict) -> str:
+    cat  = guild.get_channel(draft.get("category_id") or 0)
+    log  = guild.get_channel(draft.get("log_channel_id") or 0)
+    role = guild.get_role(draft.get("support_role_id") or 0)
+    btn_emoji = draft.get("button_emoji") or "🎫"
+    return (
+        f"**Panel ID:** `{draft.get('panel_id')}`\n"
+        f"**Category:** {cat.mention if cat else '*(not set)*'} · "
+        f"**Log:** {log.mention if log else '*(not set)*'} · "
+        f"**Role:** {role.mention if role else '*(none)*'} · "
+        f"**Max tickets:** {draft.get('max_tickets', 1)}\n"
+        f"**Control:** {btn_emoji} \"{draft.get('button_label') or 'Open Ticket'}\" "
+        f"(`{draft.get('button_style', 'danger')}`) as a **{draft.get('open_type', 'button')}**"
+    )
+
+def _ticket_render_kwargs(guild: discord.Guild, draft: dict) -> dict:
+    return {"content": _ticket_panel_summary(guild, draft), "embed": _build_ticket_panel_embed(draft)}
 
 def _build_draft_embed(draft: dict) -> discord.Embed:
     embed = discord.Embed(color=draft.get("color") or COLOR_PRIMARY, timestamp=discord.utils.utcnow())
@@ -4878,7 +4955,12 @@ HELP_CATEGORIES = [
         "Sending any message automatically clears your AFK status.\n"
         "Anyone who @mentions you while you're AFK gets notified with your reason."
     )),
-    ("ticket", "Ticket", ICON_TICKET, "🎫", "`ticket setup` · `ticket panel` · `ticket edit` · `ticket welcome` · `ticket list` · `ticket delete` · `ticket close`\nEach ticket has Claim + Close buttons."),
+    ("ticket", "Ticket", ICON_TICKET, "🎫", (
+        "`ticket setup` · `ticket panel` · `ticket edit` · `ticket welcome` · `ticket list` · `ticket delete` · `ticket close`\n"
+        "Each ticket has Claim + Close buttons.\n"
+        "`/ticketpanel` — full visual builder (title, description, welcome message, thumbnail, "
+        "banner, color, button label/emoji/color, button-or-dropdown), same style as `/embed`."
+    )),
     ("level", "Level & XP", ICON_LEVEL, "📈", "`rank` · `leaderboard` (alias `lb`) · `level toggle/setchannel/status` · `xp`"),
     ("giveaway", "Giveaway", ICON_GIVEAWAY, "🎉", "`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`"),
     ("antispam", "Antispam", ICON_ANTISPAM, "🛡️", "`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`"),
@@ -5379,6 +5461,264 @@ async def slash_embed(i: discord.Interaction, channel: Union[discord.TextChannel
     await i.response.send_message(
         content=f"**Embed Builder** — building for {channel.mention}. Use the buttons below (this shares the same draft as `!vx embed`).",
         view=view, **_panel_render_kwargs(draft), ephemeral=True
+    )
+
+# ══════════════════════════════════════════════════════════════════
+# /ticketpanel — same builder pattern as /embed, but for ticket panels:
+# title, description, welcome message, thumbnail, banner, color, button
+# label/emoji/color, and button-vs-dropdown opening style.
+# ══════════════════════════════════════════════════════════════════
+
+class TicketFieldModal(discord.ui.Modal):
+    """Generic single-field modal for the ticket builder's text fields —
+    mirrors EmbedFieldModal, refreshing the panel via edit_message() the
+    same reliable way (tied to the button that opened it)."""
+    def __init__(self, field: str, label: str, current: str = "",
+                 style=discord.TextStyle.short, max_length: int = 256, placeholder: str = ""):
+        super().__init__(title=label, timeout=300)
+        self.field = field
+        self.value_input = discord.ui.TextInput(
+            label=label, style=style, required=False, default=current,
+            max_length=max_length, placeholder=placeholder
+        )
+        self.add_item(self.value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        draft = _get_ticket_draft(interaction.user.id)
+        val   = self.value_input.value.strip()
+
+        if self.field == "color":
+            hex_txt = val.lstrip("#")
+            if hex_txt:
+                try:
+                    int(hex_txt, 16)
+                except ValueError:
+                    return await interaction.response.send_message(embed=error_embed("Invalid hex color — try something like `8B0000`."), ephemeral=True)
+        elif self.field in ("thumbnail", "image") and val and not val.startswith("http"):
+            return await interaction.response.send_message(embed=error_embed("Must be a direct image URL."), ephemeral=True)
+
+        _snapshot_draft(draft)
+        if self.field == "color":
+            draft["color"] = int(val.lstrip("#"), 16) if val else COLOR_PRIMARY
+        else:
+            draft[self.field] = val or None
+
+        await interaction.response.edit_message(**_ticket_render_kwargs(interaction.guild, draft))
+
+class TicketButtonModal(discord.ui.Modal, title="Button Label & Emoji"):
+    """Both button fields at once since a Modal supports multiple inputs
+    — one popup instead of two separate ones for label vs emoji."""
+    def __init__(self, current_label: str, current_emoji: str):
+        super().__init__(timeout=300)
+        self.label_input = discord.ui.TextInput(label="Button Label", default=current_label, max_length=80, required=False)
+        self.emoji_input = discord.ui.TextInput(label="Button Emoji (optional)", default=current_emoji, max_length=100, required=False, placeholder="e.g. 🎫 or a custom emoji")
+        self.add_item(self.label_input)
+        self.add_item(self.emoji_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        draft = _get_ticket_draft(interaction.user.id)
+        _snapshot_draft(draft)
+        draft["button_label"] = self.label_input.value.strip() or "Open Ticket"
+        draft["button_emoji"] = self.emoji_input.value.strip()
+        await interaction.response.edit_message(**_ticket_render_kwargs(interaction.guild, draft))
+
+class TicketButtonStyleSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Red (Danger)",      value="danger",    emoji="🔴"),
+            discord.SelectOption(label="Green (Success)",    value="success",   emoji="🟢"),
+            discord.SelectOption(label="Blurple (Primary)",  value="primary",   emoji="🔵"),
+            discord.SelectOption(label="Gray (Secondary)",   value="secondary", emoji="⚪"),
+        ]
+        super().__init__(placeholder="Button color…", options=options, min_values=1, max_values=1, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        draft = _get_ticket_draft(interaction.user.id)
+        _snapshot_draft(draft)
+        draft["button_style"] = self.values[0]
+        await interaction.response.edit_message(**_ticket_render_kwargs(interaction.guild, draft))
+
+class TicketOpenTypeSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Button", value="button", emoji="🔘", description="A single clickable button"),
+            discord.SelectOption(label="Dropdown", value="dropdown", emoji="📋", description="A select menu instead of a button"),
+        ]
+        super().__init__(placeholder="Opening style: button or dropdown…", options=options, min_values=1, max_values=1, row=3)
+
+    async def callback(self, interaction: discord.Interaction):
+        draft = _get_ticket_draft(interaction.user.id)
+        _snapshot_draft(draft)
+        draft["open_type"] = self.values[0]
+        await interaction.response.edit_message(**_ticket_render_kwargs(interaction.guild, draft))
+
+class TicketPanelBuilderView(discord.ui.View):
+    """Full /ticketpanel builder — every visual setting a ticket panel
+    supports, as clickable buttons + modals + selects instead of chat
+    subcommands. Structural setup (category/log/role/max) is provided
+    upfront as slash command parameters, since those need real Discord
+    pickers that only exist at command-invocation time, not inside a
+    modal."""
+    def __init__(self, owner_id: int, post_channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel]):
+        super().__init__(timeout=900)
+        self.owner_id     = owner_id
+        self.post_channel = post_channel
+        self.add_item(TicketButtonStyleSelect())
+        self.add_item(TicketOpenTypeSelect())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(embed=error_embed("This isn't your ticket builder — run `/ticketpanel` yourself."), ephemeral=True)
+            return False
+        return True
+
+    async def _open_modal(self, interaction, field, label, current="", **kw):
+        await interaction.response.send_modal(TicketFieldModal(field, label, current=current, **kw))
+
+    @discord.ui.button(label="Title", style=discord.ButtonStyle.secondary, row=0)
+    async def title_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_ticket_draft(interaction.user.id)
+        await self._open_modal(interaction, "title", "Title", current=draft.get("title") or "", max_length=256)
+
+    @discord.ui.button(label="Description", style=discord.ButtonStyle.secondary, row=0)
+    async def desc_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_ticket_draft(interaction.user.id)
+        await self._open_modal(interaction, "description", "Description", current=draft.get("description") or "",
+                                style=discord.TextStyle.paragraph, max_length=4000)
+
+    @discord.ui.button(label="Welcome Msg", style=discord.ButtonStyle.secondary, row=0)
+    async def welcome_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_ticket_draft(interaction.user.id)
+        await self._open_modal(interaction, "welcome_message", "Welcome Message (posted inside the ticket)",
+                                current=draft.get("welcome_message") or "", style=discord.TextStyle.paragraph,
+                                max_length=2000, placeholder="Placeholders: {user} {server} {panel}")
+
+    @discord.ui.button(label="Thumbnail", style=discord.ButtonStyle.secondary, row=0)
+    async def thumb_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_ticket_draft(interaction.user.id)
+        await self._open_modal(interaction, "thumbnail", "Thumbnail URL", current=draft.get("thumbnail") or "", placeholder="Direct image link")
+
+    @discord.ui.button(label="Banner", style=discord.ButtonStyle.secondary, row=0)
+    async def banner_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_ticket_draft(interaction.user.id)
+        await self._open_modal(interaction, "image", "Banner / Image URL", current=draft.get("image") or "", placeholder="Direct image link")
+
+    @discord.ui.button(label="Color", style=discord.ButtonStyle.secondary, row=1)
+    async def color_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_ticket_draft(interaction.user.id)
+        current = f"{(draft.get('color') or COLOR_PRIMARY):06X}"
+        await self._open_modal(interaction, "color", "Color (hex)", current=current, max_length=7, placeholder="e.g. 8B0000")
+
+    @discord.ui.button(label="Button Text", style=discord.ButtonStyle.secondary, row=1)
+    async def button_text_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_ticket_draft(interaction.user.id)
+        await interaction.response.send_modal(TicketButtonModal(draft.get("button_label") or "Open Ticket", draft.get("button_emoji") or ""))
+
+    @discord.ui.button(label="Undo", style=discord.ButtonStyle.secondary, row=1)
+    async def undo_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_ticket_draft(interaction.user.id)
+        if not _undo_draft(draft):
+            return await interaction.response.send_message(embed=error_embed("Nothing to undo yet."), ephemeral=True)
+        await interaction.response.edit_message(**_ticket_render_kwargs(interaction.guild, draft))
+
+    @discord.ui.button(label="Reset", style=discord.ButtonStyle.danger, row=1)
+    async def reset_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_ticket_draft(interaction.user.id)
+        _snapshot_draft(draft)
+        draft.update({
+            "title": "Support Tickets", "description": "Click the button below to open a support ticket.",
+            "welcome_message": None, "thumbnail": None, "image": None, "color": COLOR_PRIMARY,
+            "button_label": "Open Ticket", "button_emoji": "", "button_style": "danger", "open_type": "button",
+        })
+        await interaction.response.edit_message(**_ticket_render_kwargs(interaction.guild, draft))
+
+    @discord.ui.button(label="Create Panel", style=discord.ButtonStyle.success, row=4)
+    async def create_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft  = _get_ticket_draft(interaction.user.id)
+        gc     = guild_cfg(cfg, interaction.guild.id)
+        panels = gc["ticket"]["panels"]
+        panel_id = draft.get("panel_id")
+        panel  = panels.setdefault(panel_id, {})
+        panel.update({
+            "title":           draft.get("title") or "Support Tickets",
+            "description":     draft.get("description") or "Click the button below to open a support ticket.",
+            "category":        draft.get("category_id"),
+            "log_channel":     draft.get("log_channel_id"),
+            "support_role":    draft.get("support_role_id"),
+            "max_tickets":     draft.get("max_tickets", 1),
+            "welcome_message": draft.get("welcome_message"),
+            "thumbnail":       draft.get("thumbnail"),
+            "image":           draft.get("image"),
+            "color":           draft.get("color") or COLOR_PRIMARY,
+            "button_label":    draft.get("button_label") or "Open Ticket",
+            "button_emoji":    draft.get("button_emoji") or "",
+            "button_style":    draft.get("button_style") or "danger",
+            "open_type":       draft.get("open_type") or "button",
+        })
+        try:
+            msg = await self.post_channel.send(embed=_build_ticket_panel_embed(panel), view=TicketOpenView(panel_id, panel))
+        except discord.Forbidden:
+            return await interaction.response.send_message(embed=error_embed("I don't have permission to send messages in that channel."), ephemeral=True)
+        panel["message_id"], panel["channel_id"] = msg.id, self.post_channel.id
+        save_config(cfg)
+        _TICKET_DRAFTS.pop(interaction.user.id, None)
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content=f"✅ Ticket panel `{panel_id}` created in {self.post_channel.mention}.", embed=None, view=self)
+
+@bot.tree.command(name="ticketpanel", description="Build a fully custom ticket panel and post it to a channel.")
+@app_commands.describe(
+    panel_id="Short ID for this panel (letters/numbers/-/_ only, e.g. 'support')",
+    category="Category where new ticket channels will be created",
+    log_channel="Channel where ticket open/close logs are sent",
+    post_channel="Channel where the panel message itself gets posted",
+    support_role="Role that can see/manage tickets from this panel (optional)",
+    max_tickets="Max open tickets per user for this panel (default 1)"
+)
+async def slash_ticketpanel(
+    i: discord.Interaction,
+    panel_id: str,
+    category: discord.CategoryChannel,
+    log_channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel],
+    post_channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel],
+    support_role: Optional[discord.Role] = None,
+    max_tickets: Optional[int] = 1
+):
+    if i.user.id != bot.owner_id and not i.user.guild_permissions.manage_guild:
+        return await i.response.send_message(embed=error_embed("Only Manage Server permission holders or the owner can build ticket panels."), ephemeral=True)
+
+    panel_id = panel_id.lower().strip()
+    if not re.fullmatch(r"[a-z0-9_-]{1,32}", panel_id):
+        return await i.response.send_message(embed=error_embed("Panel ID can only contain lowercase letters, numbers, `-`, `_` (max 32 characters)."), ephemeral=True)
+
+    gc       = guild_cfg(cfg, i.guild.id)
+    existing = gc["ticket"]["panels"].get(panel_id, {})
+
+    draft = _get_ticket_draft(i.user.id)
+    draft.clear()
+    draft.update({
+        "panel_id": panel_id,
+        "category_id": category.id,
+        "log_channel_id": log_channel.id,
+        "support_role_id": support_role.id if support_role else None,
+        "max_tickets": max(1, min(5, max_tickets or 1)),
+        "title": existing.get("title", "Support Tickets"),
+        "description": existing.get("description", "Click the button below to open a support ticket."),
+        "welcome_message": existing.get("welcome_message"),
+        "thumbnail": existing.get("thumbnail"),
+        "image": existing.get("image"),
+        "color": existing.get("color", COLOR_PRIMARY),
+        "button_label": existing.get("button_label", "Open Ticket"),
+        "button_emoji": existing.get("button_emoji", ""),
+        "button_style": existing.get("button_style", "danger"),
+        "open_type": existing.get("open_type", "button"),
+        "_history": [],
+    })
+
+    view = TicketPanelBuilderView(i.user.id, post_channel)
+    await i.response.send_message(
+        content=f"**Ticket Panel Builder** `{panel_id}` — will post in {post_channel.mention}. Use the buttons below.",
+        view=view, **_ticket_render_kwargs(i.guild, draft), ephemeral=True
     )
 
 
