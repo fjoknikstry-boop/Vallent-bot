@@ -5746,10 +5746,11 @@ async def slash_ticketpanel(
         "_history": [],
     })
 
-    view = TicketPanelBuilderView(i.user.id, post_channel)
+    view   = TicketPanelBuilderView(i.user.id, post_channel)
+    render = _ticket_render_kwargs(i.guild, draft)
+    intro  = f"**Ticket Panel Builder** `{panel_id}` — will post in {post_channel.mention}. Use the buttons below.\n\n"
     await i.response.send_message(
-        content=f"**Ticket Panel Builder** `{panel_id}` — will post in {post_channel.mention}. Use the buttons below.",
-        view=view, **_ticket_render_kwargs(i.guild, draft), ephemeral=True
+        content=intro + render["content"], embed=render["embed"], view=view, ephemeral=True
     )
 
 # ══════════════════════════════════════════════════════════════════
