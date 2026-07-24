@@ -5590,12 +5590,17 @@ class TicketPanelBuilderView(discord.ui.View):
     upfront as slash command parameters, since those need real Discord
     pickers that only exist at command-invocation time, not inside a
     modal."""
-    def __init__(self, owner_id: int, post_channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel]):
+    def __init__(self, owner_id: int, post_channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel], is_edit: bool = False):
         super().__init__(timeout=900)
         self.owner_id     = owner_id
         self.post_channel = post_channel
+        self.is_edit      = is_edit  # True when this panel_id already has a live message — reuses/edits it instead of posting a duplicate
         self.add_item(TicketButtonStyleSelect())
         self.add_item(TicketOpenTypeSelect())
+        if is_edit:
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.style == discord.ButtonStyle.success:
+                    item.label = "Update Panel"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -5665,6 +5670,14 @@ class TicketPanelBuilderView(discord.ui.View):
 
     @discord.ui.button(label="Create Panel", style=discord.ButtonStyle.success, row=4)
     async def create_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        # Defer FIRST — sending the panel message + save_config() (blocking
+        # file write) can occasionally take longer than Discord's 3-second
+        # ack window. Without deferring, a slow tick makes Discord show
+        # "This interaction failed" to the user even though the panel
+        # message went out fine underneath — which is exactly the
+        # confusing state this fixes.
+        await interaction.response.defer(ephemeral=True)
+
         draft  = _get_ticket_draft(interaction.user.id)
         gc     = guild_cfg(cfg, interaction.guild.id)
         panels = gc["ticket"]["panels"]
@@ -5686,16 +5699,50 @@ class TicketPanelBuilderView(discord.ui.View):
             "button_style":    draft.get("button_style") or "danger",
             "open_type":       draft.get("open_type") or "button",
         })
-        try:
-            msg = await self.post_channel.send(embed=_build_ticket_panel_embed(panel), view=TicketOpenView(panel_id, panel))
-        except discord.Forbidden:
-            return await interaction.response.send_message(embed=error_embed("I don't have permission to send messages in that channel."), ephemeral=True)
-        panel["message_id"], panel["channel_id"] = msg.id, self.post_channel.id
+
+        # If this panel_id already has a live message (i.e. a ticket panel
+        # was already created before — meaning tickets may already have
+        # been opened from it), edit that SAME message in place instead of
+        # posting a duplicate. Only falls back to posting a new message if
+        # the old one is gone (deleted manually, channel removed, etc).
+        old_channel_id = panel.get("channel_id")
+        old_message_id = panel.get("message_id")
+        edited_existing = False
+        target_channel  = self.post_channel
+
+        if old_channel_id and old_message_id:
+            old_channel = interaction.guild.get_channel(old_channel_id)
+            if old_channel:
+                try:
+                    old_msg = await old_channel.fetch_message(old_message_id)
+                    await old_msg.edit(embed=_build_ticket_panel_embed(panel), view=TicketOpenView(panel_id, panel))
+                    panel["channel_id"] = old_channel.id
+                    target_channel      = old_channel
+                    edited_existing     = True
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    edited_existing = False
+
+        if not edited_existing:
+            try:
+                msg = await self.post_channel.send(embed=_build_ticket_panel_embed(panel), view=TicketOpenView(panel_id, panel))
+            except discord.Forbidden:
+                return await interaction.followup.send(embed=error_embed("I don't have permission to send messages in that channel."), ephemeral=True)
+            except discord.HTTPException as ex:
+                return await interaction.followup.send(embed=error_embed(f"Discord rejected the panel message: {ex}"), ephemeral=True)
+            panel["message_id"], panel["channel_id"] = msg.id, self.post_channel.id
+            target_channel = self.post_channel
+
         save_config(cfg)
         _TICKET_DRAFTS.pop(interaction.user.id, None)
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content=f"✅ Ticket panel `{panel_id}` created in {self.post_channel.mention}.", embed=None, view=self)
+
+        verb = "updated" if edited_existing else "created"
+        note = "" if (target_channel.id == self.post_channel.id) else \
+            f"\n*(Edited the existing panel message in {target_channel.mention} — pick that same channel next time to avoid this note.)*"
+        await interaction.edit_original_response(
+            content=f"✅ Ticket panel `{panel_id}` {verb} in {target_channel.mention}.{note}", embed=None, view=self
+        )
 
 @bot.tree.command(name="ticketpanel", description="Build a fully custom ticket panel and post it to a channel.")
 @app_commands.describe(
@@ -5746,9 +5793,19 @@ async def slash_ticketpanel(
         "_history": [],
     })
 
-    view   = TicketPanelBuilderView(i.user.id, post_channel)
-    render = _ticket_render_kwargs(i.guild, draft)
-    intro  = f"**Ticket Panel Builder** `{panel_id}` — will post in {post_channel.mention}. Use the buttons below.\n\n"
+    is_edit = bool(existing.get("message_id") and existing.get("channel_id"))
+    view    = TicketPanelBuilderView(i.user.id, post_channel, is_edit=is_edit)
+    render  = _ticket_render_kwargs(i.guild, draft)
+    if is_edit:
+        old_ch = i.guild.get_channel(existing["channel_id"])
+        intro  = (
+            f"**Ticket Panel Builder** `{panel_id}` — this panel already exists"
+            + (f" in {old_ch.mention}" if old_ch else "") +
+            ". Editing it will update that same message in place (existing tickets aren't affected). "
+            "Use the buttons below, then **Update Panel** to apply.\n\n"
+        )
+    else:
+        intro = f"**Ticket Panel Builder** `{panel_id}` — will post in {post_channel.mention}. Use the buttons below.\n\n"
     await i.response.send_message(
         content=intro + render["content"], embed=render["embed"], view=view, ephemeral=True
     )
