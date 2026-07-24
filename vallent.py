@@ -3977,7 +3977,29 @@ def _get_embed_draft(uid: int) -> dict:
     return _EMBED_DRAFTS.setdefault(uid, {
         "title": None, "description": "", "thumbnail": None,
         "image": None, "color": COLOR_PRIMARY, "channel_id": None,
+        "_history": [],
     })
+
+def _snapshot_draft(draft: dict) -> None:
+    """Push a copy of the draft's current content onto its undo stack,
+    right before applying a new change. Capped so it can't grow forever."""
+    hist = draft.setdefault("_history", [])
+    hist.append({k: v for k, v in draft.items() if k != "_history"})
+    if len(hist) > 15:
+        hist.pop(0)
+
+def _undo_draft(draft: dict) -> bool:
+    """Pop the last snapshot and restore it. Returns False if there's
+    nothing to undo (fresh draft or already at the oldest state)."""
+    hist = draft.get("_history", [])
+    if not hist:
+        return False
+    prev = hist.pop()
+    for k in list(draft.keys()):
+        if k != "_history":
+            draft.pop(k, None)
+    draft.update(prev)
+    return True
 
 def _build_draft_embed(draft: dict) -> discord.Embed:
     embed = discord.Embed(color=draft.get("color") or COLOR_PRIMARY, timestamp=discord.utils.utcnow())
@@ -5208,16 +5230,15 @@ def _panel_render_kwargs(draft: dict) -> dict:
 
 class EmbedFieldModal(discord.ui.Modal):
     """Generic single-field modal used by every text-entry button on the
-    panel below. `panel_msg` is the actual ephemeral panel message object
-    captured at button-click time — editing it here (from the *separate*
-    interaction created by the modal submission) still works because that
-    message object stays bound to the original interaction's webhook token
-    for its full lifetime."""
-    def __init__(self, panel_msg: discord.Message, field: str, label: str,
+    panel below. Editing the panel via interaction.response.edit_message()
+    here works reliably because Discord ties a modal submission back to
+    whichever message the button that opened it was attached to — unlike
+    calling .edit() on a separately-stored message object, which isn't
+    reliable for ephemeral messages across two different interactions."""
+    def __init__(self, field: str, label: str,
                  current: str = "", style=discord.TextStyle.short, max_length: int = 256, placeholder: str = ""):
         super().__init__(title=label, timeout=300)
-        self.panel_msg = panel_msg
-        self.field     = field
+        self.field = field
         self.value_input = discord.ui.TextInput(
             label=label, style=style, required=False, default=current,
             max_length=max_length, placeholder=placeholder
@@ -5228,39 +5249,39 @@ class EmbedFieldModal(discord.ui.Modal):
         draft = _get_embed_draft(interaction.user.id)
         val   = self.value_input.value.strip()
 
+        if self.field == "color":
+            hex_txt = val.lstrip("#")
+            if hex_txt:
+                try:
+                    int(hex_txt, 16)
+                except ValueError:
+                    return await interaction.response.send_message(embed=error_embed("Invalid hex color — try something like `8B0000`."), ephemeral=True)
+        elif self.field in ("thumbnail", "image") and val and not val.startswith("http"):
+            return await interaction.response.send_message(embed=error_embed("Must be a direct image URL."), ephemeral=True)
+
+        _snapshot_draft(draft)
         if self.field == "append":
             if val:
                 draft["description"] = (draft.get("description", "") + "\n" + val).strip()[:4000]
         elif self.field == "color":
-            hex_txt = val.lstrip("#")
-            if hex_txt:
-                try:
-                    draft["color"] = int(hex_txt, 16)
-                except ValueError:
-                    return await interaction.response.send_message(embed=error_embed("Invalid hex color — try something like `8B0000`."), ephemeral=True)
-            else:
-                draft["color"] = COLOR_PRIMARY
+            draft["color"] = int(val.lstrip("#"), 16) if val else COLOR_PRIMARY
         elif self.field in ("thumbnail", "image"):
-            if val and not val.startswith("http"):
-                return await interaction.response.send_message(embed=error_embed("Must be a direct image URL."), ephemeral=True)
             draft[self.field] = val or None
         else:  # title / description
             draft[self.field] = val or None
 
-        try:
-            await self.panel_msg.edit(**_panel_render_kwargs(draft))
-        except Exception:
-            pass
-        await interaction.response.send_message(embed=success_embed("Updated — check the panel above."), ephemeral=True, delete_after=4)
+        await interaction.response.edit_message(**_panel_render_kwargs(draft))
 
 class SeparatorSelect(discord.ui.Select):
     def __init__(self):
         options = [discord.SelectOption(label=s.capitalize(), value=s, description=SEPARATOR_STYLES[s][:40]) for s in SEPARATOR_STYLES]
         super().__init__(placeholder="Insert a separator line…", options=options, min_values=1, max_values=1, row=2)
 
+
     async def callback(self, interaction: discord.Interaction):
         draft = _get_embed_draft(interaction.user.id)
         style = self.values[0]
+        _snapshot_draft(draft)
         draft["description"] = (draft.get("description", "") + f"\n{SEPARATOR_STYLES[style]}\n").strip("\n")[:4000]
         await interaction.response.edit_message(**_panel_render_kwargs(draft))
 
@@ -5282,7 +5303,7 @@ class EmbedBuilderPanel(discord.ui.View):
         return True
 
     async def _open_modal(self, interaction, field, label, current="", **kw):
-        await interaction.response.send_modal(EmbedFieldModal(interaction.message, field, label, current=current, **kw))
+        await interaction.response.send_modal(EmbedFieldModal(field, label, current=current, **kw))
 
     @discord.ui.button(label="Title", style=discord.ButtonStyle.secondary, row=0)
     async def title_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
@@ -5316,10 +5337,21 @@ class EmbedBuilderPanel(discord.ui.View):
         current = f"{(draft.get('color') or COLOR_PRIMARY):06X}"
         await self._open_modal(interaction, "color", "Color (hex)", current=current, max_length=7, placeholder="e.g. 8B0000")
 
+    @discord.ui.button(label="Undo", style=discord.ButtonStyle.secondary, row=1)
+    async def undo_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_embed_draft(interaction.user.id)
+        if not _undo_draft(draft):
+            return await interaction.response.send_message(embed=error_embed("Nothing to undo yet."), ephemeral=True)
+        await interaction.response.edit_message(**_panel_render_kwargs(draft))
+
     @discord.ui.button(label="Reset", style=discord.ButtonStyle.danger, row=1)
     async def reset_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
-        _EMBED_DRAFTS.pop(interaction.user.id, None)
         draft = _get_embed_draft(interaction.user.id)
+        _snapshot_draft(draft)
+        ch_id = draft.get("channel_id")
+        for k in ("title", "description", "thumbnail", "image", "color"):
+            draft.pop(k, None)
+        draft.update({"title": None, "description": "", "thumbnail": None, "image": None, "color": COLOR_PRIMARY, "channel_id": ch_id})
         await interaction.response.edit_message(**_panel_render_kwargs(draft))
 
     @discord.ui.button(label="Send", style=discord.ButtonStyle.success, emoji=e(ICON_EMBED_SEND, "✅"), row=3)
