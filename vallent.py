@@ -54,6 +54,7 @@ from emoji_config import (
 )
 import rank_card
 import antinuke
+import ticket_types
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1279,27 +1280,36 @@ def _find_active_ticket(gc: dict, channel_id: int):
                 return uid, tk, panel
     return None, None, None
 
-async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
+async def handle_open_ticket(interaction: discord.Interaction, panel_id: str, type_key: str = None):
     gc    = guild_cfg(cfg, interaction.guild.id)
     panel = gc["ticket"]["panels"].get(panel_id)
     uid   = str(interaction.user.id)
 
-    if not panel or not panel.get("category"):
+    if not panel or not (panel.get("category") or panel.get("types")):
         return await interaction.response.send_message(
             embed=error_embed("This ticket panel hasn't been configured properly."), ephemeral=True)
 
+    type_cfg = ticket_types.get_type_config(panel, type_key)
+    if not type_cfg.get("category"):
+        return await interaction.response.send_message(
+            embed=error_embed("This ticket type hasn't been configured with a category yet."), ephemeral=True)
+
     tickets    = gc["active_tickets"].setdefault(uid, [])
-    same_panel = [tk for tk in tickets if tk.get("panel_id") == panel_id and interaction.guild.get_channel(tk.get("channel_id"))]
-    max_t      = panel.get("max_tickets", 1)
-    if len(same_panel) >= max_t:
-        ch  = interaction.guild.get_channel(same_panel[0]["channel_id"]) if same_panel else None
+    # Tracked per (panel, type) so different ticket types under the same
+    # panel each get their own max-open-tickets limit, instead of sharing
+    # one counter across totally different categories.
+    scope_key  = f"{panel_id}:{type_key}" if type_key else panel_id
+    same_scope = [tk for tk in tickets if tk.get("scope_key", tk.get("panel_id")) == scope_key and interaction.guild.get_channel(tk.get("channel_id"))]
+    max_t      = type_cfg.get("max_tickets", 1)
+    if len(same_scope) >= max_t:
+        ch  = interaction.guild.get_channel(same_scope[0]["channel_id"]) if same_scope else None
         msg = "You already have an open ticket." if max_t == 1 else \
-            f"You already have {len(same_panel)}/{max_t} open tickets for the **{panel.get('title', panel_id)}** panel."
+            f"You already have {len(same_scope)}/{max_t} open tickets for **{type_cfg['label']}**."
         if ch:
             msg += f"\n{ch.mention}"
         return await interaction.response.send_message(embed=error_embed(msg), ephemeral=True)
 
-    category = interaction.guild.get_channel(panel["category"])
+    category = interaction.guild.get_channel(type_cfg["category"])
     if not category:
         return await interaction.response.send_message(
             embed=error_embed("Ticket category not found."), ephemeral=True)
@@ -1309,7 +1319,7 @@ async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
         interaction.user:               discord.PermissionOverwrite(view_channel=True, send_messages=True),
         interaction.guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
     }
-    role_id = panel.get("support_role")
+    role_id = type_cfg.get("support_role")
     if role_id:
         role = interaction.guild.get_role(role_id)
         if role:
@@ -1318,11 +1328,13 @@ async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
     ch = await category.create_text_channel(
         name=f"ticket-{interaction.user.name}",
         overwrites=overwrites,
-        topic=f"Ticket [{panel_id}] for {interaction.user} ({interaction.user.id})"
+        topic=f"Ticket [{panel_id}/{type_key or '-'}] for {interaction.user} ({interaction.user.id})"
     )
     tickets.append({
         "channel_id": ch.id,
         "panel_id":   panel_id,
+        "type_key":   type_key,
+        "scope_key":  scope_key,
         "opened_at":  discord.utils.utcnow().isoformat(),
         "claimed_by": None,
     })
@@ -1332,22 +1344,23 @@ async def handle_open_ticket(interaction: discord.Interaction, panel_id: str):
     welcome_text = (welcome_text
                     .replace("{user}",   interaction.user.mention)
                     .replace("{server}", interaction.guild.name)
-                    .replace("{panel}",  panel.get("title") or panel_id))
+                    .replace("{panel}",  panel.get("title") or panel_id)
+                    .replace("{type}",   type_cfg["label"]))
     welcome_embed = base_embed(
-        panel.get("title") or f"Ticket — {interaction.user.display_name}",
+        type_cfg["label"] if type_key else (panel.get("title") or f"Ticket — {interaction.user.display_name}"),
         welcome_text,
         color=panel.get("color") or COLOR_PRIMARY
     )
     await ch.send(content=interaction.user.mention, embed=welcome_embed, view=TicketControlView())
 
-    log_id = panel.get("log_channel")
+    log_id = type_cfg.get("log_channel")
     if log_id:
         log_ch = interaction.guild.get_channel(log_id)
         if log_ch:
             log_emb = base_embed("Ticket Opened", None, color=COLOR_PRIMARY)
             log_emb.add_field(name="User",    value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=True)
             log_emb.add_field(name="Channel", value=ch.mention, inline=True)
-            log_emb.add_field(name="Panel",   value=panel.get("title") or panel_id, inline=True)
+            log_emb.add_field(name="Type",    value=type_cfg["label"], inline=True)
             try:
                 await log_ch.send(embed=log_emb)
             except Exception:
@@ -1726,10 +1739,14 @@ def _build_ticket_panel_embed(panel: dict) -> discord.Embed:
 class TicketOpenView(discord.ui.View):
     """One instance per panel — custom_id stores the panel_id so the
     control always knows which panel to open, even after a bot restart.
-    Renders as either a single button OR a select menu depending on the
-    panel's `open_type`, with fully custom label/emoji/color, all sourced
-    from the panel's config (defaults kept for panels made before this
-    was configurable)."""
+    Three possible layouts, checked in order:
+    1. Multi-category dropdown — if the panel has 2+ configured `types`
+       (see ticket_types.py), one option per type; each opens with that
+       type's own category/log/role.
+    2. Single-option dropdown — `open_type` is "dropdown" but no real
+       types configured; a purely cosmetic choice (still opens the panel's
+       one category).
+    3. Plain button — the classic default."""
     def __init__(self, panel_id: str, panel: dict = None):
         super().__init__(timeout=None)
         self.panel_id = panel_id
@@ -1739,7 +1756,16 @@ class TicketOpenView(discord.ui.View):
         style     = BUTTON_STYLES.get(panel.get("button_style"), discord.ButtonStyle.danger)
         open_type = panel.get("open_type", "button")
 
-        if open_type == "dropdown":
+        type_options = ticket_types.build_type_select_options(panel)
+        if type_options:
+            select = discord.ui.Select(
+                placeholder=label, options=type_options,
+                custom_id=f"vx_ticket_open_select:{panel_id}",
+                min_values=1, max_values=1,
+            )
+            select.callback = self._open_callback
+            self.add_item(select)
+        elif open_type == "dropdown":
             select = discord.ui.Select(
                 placeholder=label,
                 options=[discord.SelectOption(label=label, value="open", emoji=emoji or None, description="Select to open a ticket")],
@@ -1754,7 +1780,12 @@ class TicketOpenView(discord.ui.View):
             self.add_item(btn)
 
     async def _open_callback(self, interaction: discord.Interaction):
-        await handle_open_ticket(interaction, self.panel_id)
+        type_key = None
+        if isinstance(interaction.data, dict):
+            values = interaction.data.get("values")
+            if values and values[0] != "open":
+                type_key = values[0]
+        await handle_open_ticket(interaction, self.panel_id, type_key)
 
 # ══════════════════════════════════════════════════════════════════
 # GIVEAWAY SYSTEM
@@ -5720,6 +5751,111 @@ async def slash_ticketpanel(
         content=f"**Ticket Panel Builder** `{panel_id}` — will post in {post_channel.mention}. Use the buttons below.",
         view=view, **_ticket_render_kwargs(i.guild, draft), ephemeral=True
     )
+
+# ══════════════════════════════════════════════════════════════════
+# /tickettype — multi-category dropdown support (ticket_types.py).
+# Separate command group instead of cramming into /ticketpanel's modal
+# builder, since category/log/role need real Discord pickers that only
+# exist as slash parameters, not inside a modal's text fields.
+# ══════════════════════════════════════════════════════════════════
+
+tickettype_group = app_commands.Group(name="tickettype", description="Manage multiple ticket types (categories) inside one panel.")
+
+def _tickettype_permission_check(i: discord.Interaction) -> bool:
+    return i.user.id == bot.owner_id or i.user.guild_permissions.manage_guild
+
+@tickettype_group.command(name="add", description="Add a ticket type (its own category/log/role) to a panel.")
+@app_commands.describe(
+    panel_id="The panel to add this type to (must already exist — see /ticketpanel)",
+    label="Shown in the dropdown, e.g. 'Report a Bug'",
+    category="Category where this type's tickets get created",
+    emoji="Emoji shown next to this type in the dropdown (optional)",
+    description="Short description shown under the label in the dropdown (optional)",
+    log_channel="Log channel for this type (optional — falls back to the panel's own log channel)",
+    support_role="Role that can see this type's tickets (optional — falls back to the panel's role)",
+    max_tickets="Max open tickets per user for this type (default 1)"
+)
+async def tickettype_add(
+    i: discord.Interaction, panel_id: str, label: str, category: discord.CategoryChannel,
+    emoji: Optional[str] = None, description: Optional[str] = None,
+    log_channel: Optional[Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel]] = None,
+    support_role: Optional[discord.Role] = None, max_tickets: Optional[int] = 1
+):
+    if not _tickettype_permission_check(i):
+        return await i.response.send_message(embed=error_embed("Only Manage Server permission holders or the owner can manage ticket types."), ephemeral=True)
+    gc     = guild_cfg(cfg, i.guild.id)
+    panels = gc["ticket"]["panels"]
+    panel  = panels.get(panel_id.lower().strip())
+    if not panel:
+        return await i.response.send_message(embed=error_embed(f"Panel `{panel_id}` doesn't exist yet — create it first with `/ticketpanel`."), ephemeral=True)
+
+    types = panel.setdefault("types", {})
+    if len(types) >= ticket_types.MAX_TYPES_PER_PANEL:
+        return await i.response.send_message(embed=error_embed(f"This panel already has the max {ticket_types.MAX_TYPES_PER_PANEL} types Discord allows in one dropdown."), ephemeral=True)
+
+    type_key = ticket_types.slugify_type_id(label, types)
+    types[type_key] = {
+        "label": label[:100], "emoji": (emoji or "").strip(), "description": (description or "").strip(),
+        "category": category.id, "log_channel": log_channel.id if log_channel else None,
+        "support_role": support_role.id if support_role else None, "max_tickets": max(1, min(5, max_tickets or 1)),
+    }
+    save_config(cfg)
+
+    ch = i.guild.get_channel(panel.get("channel_id") or 0)
+    resynced = False
+    if ch and panel.get("message_id"):
+        try:
+            msg = await ch.fetch_message(panel["message_id"])
+            await msg.edit(view=TicketOpenView(panel_id, panel))
+            resynced = True
+        except Exception:
+            pass
+
+    note = "The live panel message was updated to show the new dropdown." if resynced else \
+        "Config saved, but the panel message wasn't found — run `/ticketpanel` again (same panel_id) to repost it with the dropdown."
+    await i.response.send_message(embed=success_embed(
+        f"Added type `{type_key}` (**{label}**) to panel `{panel_id}`.\n"
+        f"This panel now has **{len(types)}** type(s) — {'a dropdown will show automatically' if len(types) >= 2 else 'add one more to activate the dropdown'}.\n{note}"
+    ), ephemeral=True)
+
+@tickettype_group.command(name="remove", description="Remove a ticket type from a panel.")
+@app_commands.describe(panel_id="The panel to remove from", type_id="The type's ID (see /tickettype list)")
+async def tickettype_remove(i: discord.Interaction, panel_id: str, type_id: str):
+    if not _tickettype_permission_check(i):
+        return await i.response.send_message(embed=error_embed("Only Manage Server permission holders or the owner can manage ticket types."), ephemeral=True)
+    gc     = guild_cfg(cfg, i.guild.id)
+    panel  = gc["ticket"]["panels"].get(panel_id.lower().strip())
+    if not panel:
+        return await i.response.send_message(embed=error_embed(f"Panel `{panel_id}` doesn't exist."), ephemeral=True)
+    types = panel.get("types", {})
+    if type_id not in types:
+        return await i.response.send_message(embed=error_embed(f"No type `{type_id}` on panel `{panel_id}`. Use `/tickettype list` to see valid IDs."), ephemeral=True)
+    removed = types.pop(type_id)
+    save_config(cfg)
+
+    ch = i.guild.get_channel(panel.get("channel_id") or 0)
+    resynced = False
+    if ch and panel.get("message_id"):
+        try:
+            msg = await ch.fetch_message(panel["message_id"])
+            await msg.edit(view=TicketOpenView(panel_id, panel))
+            resynced = True
+        except Exception:
+            pass
+    note = "The live panel message was updated." if resynced else "The panel message wasn't found — repost it with `/ticketpanel` if needed."
+    await i.response.send_message(embed=success_embed(f"Removed type `{type_id}` (**{removed.get('label', type_id)}**) from panel `{panel_id}`.\n{note}"), ephemeral=True)
+
+@tickettype_group.command(name="list", description="View every ticket type configured on a panel.")
+@app_commands.describe(panel_id="The panel to inspect")
+async def tickettype_list(i: discord.Interaction, panel_id: str):
+    gc    = guild_cfg(cfg, i.guild.id)
+    panel = gc["ticket"]["panels"].get(panel_id.lower().strip())
+    if not panel:
+        return await i.response.send_message(embed=error_embed(f"Panel `{panel_id}` doesn't exist."), ephemeral=True)
+    summary = ticket_types.format_type_list(panel, i.guild.get_channel, i.guild.get_role)
+    await i.response.send_message(embed=info_embed(f"Ticket Types — `{panel_id}`", summary), ephemeral=True)
+
+bot.tree.add_command(tickettype_group)
 
 
 
