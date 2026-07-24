@@ -1752,7 +1752,7 @@ class TicketOpenView(discord.ui.View):
         self.panel_id = panel_id
         panel = panel or {}
         label     = panel.get("button_label") or "Open Ticket"
-        emoji     = panel.get("button_emoji") or (ICON_TICKET_OPEN if ICON_TICKET_OPEN else "🎫")
+        emoji     = ticket_types.safe_emoji(panel.get("button_emoji")) or (ICON_TICKET_OPEN if ICON_TICKET_OPEN else "🎫")
         style     = BUTTON_STYLES.get(panel.get("button_style"), discord.ButtonStyle.danger)
         open_type = panel.get("open_type", "button")
 
@@ -5550,8 +5550,12 @@ class TicketButtonModal(discord.ui.Modal, title="Button Label & Emoji"):
         draft = _get_ticket_draft(interaction.user.id)
         _snapshot_draft(draft)
         draft["button_label"] = self.label_input.value.strip() or "Open Ticket"
-        draft["button_emoji"] = self.emoji_input.value.strip()
-        await interaction.response.edit_message(**_ticket_render_kwargs(interaction.guild, draft))
+        resolved, warning = ticket_types.resolve_emoji_input(interaction.guild, self.emoji_input.value)
+        draft["button_emoji"] = resolved or ""
+        render = _ticket_render_kwargs(interaction.guild, draft)
+        if warning:
+            render["content"] = f"⚠️ {warning}\n\n" + render["content"]
+        await interaction.response.edit_message(**render)
 
 class TicketButtonStyleSelect(discord.ui.Select):
     def __init__(self):
@@ -5582,6 +5586,189 @@ class TicketOpenTypeSelect(discord.ui.Select):
         _snapshot_draft(draft)
         draft["open_type"] = self.values[0]
         await interaction.response.edit_message(**_ticket_render_kwargs(interaction.guild, draft))
+
+async def _resync_panel_message(guild: discord.Guild, panel_id: str, panel: dict) -> bool:
+    """Re-render the live panel message's view (used whenever `types` or
+    open_type changes) so users see the current dropdown/button without
+    needing to repost the whole panel. Returns True on success."""
+    ch = guild.get_channel(panel.get("channel_id") or 0)
+    if not ch or not panel.get("message_id"):
+        return False
+    try:
+        msg = await ch.fetch_message(panel["message_id"])
+        await msg.edit(view=TicketOpenView(panel_id, panel))
+        return True
+    except Exception:
+        return False
+
+
+class TicketTypeInfoModal(discord.ui.Modal, title="Add Ticket Type"):
+    """Step 1 of adding a type from inside the panel builder — text fields
+    only (label/emoji/description/max tickets). Category/log/role need
+    real Discord pickers a modal can't contain, so step 2 continues in a
+    follow-up view (TicketTypeCategoryView) with actual Select components."""
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.label_input = discord.ui.TextInput(label="Label (shown in dropdown)", max_length=100, placeholder="e.g. Report a Bug")
+        self.emoji_input = discord.ui.TextInput(label="Emoji (optional)", required=False, max_length=100, placeholder="e.g. 🐞 or a custom emoji")
+        self.desc_input  = discord.ui.TextInput(label="Description (optional)", required=False, max_length=100, placeholder="Shown under the label in the dropdown")
+        self.max_input   = discord.ui.TextInput(label="Max tickets per user (default 1)", required=False, max_length=2, placeholder="1-5")
+        self.add_item(self.label_input)
+        self.add_item(self.emoji_input)
+        self.add_item(self.desc_input)
+        self.add_item(self.max_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        resolved_emoji, warning = ticket_types.resolve_emoji_input(interaction.guild, self.emoji_input.value)
+        raw_max = (self.max_input.value or "").strip()
+        try:
+            max_tickets = max(1, min(5, int(raw_max))) if raw_max else 1
+        except ValueError:
+            max_tickets = 1
+        pending = {
+            "label":       self.label_input.value.strip()[:100] or "New Type",
+            "emoji":       resolved_emoji or "",
+            "description": (self.desc_input.value or "").strip()[:100],
+            "max_tickets": max_tickets,
+        }
+        draft = _get_ticket_draft(interaction.user.id)
+        draft["_pending_type"] = pending
+        content = f"**{pending['label']}** — now pick a category (required), log channel & role (both optional) below, then **Save Type**."
+        if warning:
+            content = f"⚠️ {warning}\n\n" + content
+        await interaction.response.send_message(content=content, view=TicketTypeCategoryView(interaction.user.id), ephemeral=True)
+
+
+class TicketTypeCategoryView(discord.ui.View):
+    """Step 2 of Add Type — the real Discord pickers a modal can't hold.
+    Finalizes the type (adds it to the panel's `types` dict and resyncs
+    the live message) once Save Type is pressed with a category chosen."""
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=300)
+        self.owner_id         = owner_id
+        self.category_id      = None
+        self.log_channel_id   = None
+        self.support_role_id  = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(embed=error_embed("This isn't your ticket type setup — run it yourself."), ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.select(cls=discord.ui.ChannelSelect, channel_types=[discord.ChannelType.category],
+                        placeholder="Category for this type (required)", row=0)
+    async def category_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
+        self.category_id = select.values[0].id
+        await interaction.response.edit_message(content=f"Category set to {select.values[0].mention}. Pick log channel/role (optional), then **Save Type**.", view=self)
+
+    @discord.ui.select(cls=discord.ui.ChannelSelect,
+                        channel_types=[discord.ChannelType.text, discord.ChannelType.news, discord.ChannelType.public_thread, discord.ChannelType.private_thread],
+                        placeholder="Log channel (optional)", row=1)
+    async def log_select(self, interaction: discord.Interaction, select: discord.ui.ChannelSelect):
+        self.log_channel_id = select.values[0].id if select.values else None
+        await interaction.response.edit_message(content=f"Log channel set to {select.values[0].mention}. Pick a role (optional), then **Save Type**.", view=self)
+
+    @discord.ui.select(cls=discord.ui.RoleSelect, placeholder="Support role (optional)", row=2)
+    async def role_select(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        self.support_role_id = select.values[0].id if select.values else None
+        await interaction.response.edit_message(content=f"Role set to {select.values[0].mention}. Hit **Save Type** to finish.", view=self)
+
+    @discord.ui.button(label="Save Type", style=discord.ButtonStyle.success, row=3)
+    async def save_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft    = _get_ticket_draft(interaction.user.id)
+        pending  = draft.get("_pending_type")
+        panel_id = draft.get("panel_id")
+        if not pending or not panel_id:
+            return await interaction.response.send_message(embed=error_embed("This setup expired — start again with the **Add Type** button in the builder."), ephemeral=True)
+        if not self.category_id:
+            return await interaction.response.send_message(embed=error_embed("Pick a category first — it's required."), ephemeral=True)
+
+        gc     = guild_cfg(cfg, interaction.guild.id)
+        panel  = gc["ticket"]["panels"].setdefault(panel_id, {})
+        types  = panel.setdefault("types", {})
+        if len(types) >= ticket_types.MAX_TYPES_PER_PANEL:
+            return await interaction.response.send_message(embed=error_embed(f"This panel already has the max {ticket_types.MAX_TYPES_PER_PANEL} types Discord allows."), ephemeral=True)
+
+        type_key = ticket_types.slugify_type_id(pending["label"], types)
+        types[type_key] = {
+            "label": pending["label"], "emoji": pending["emoji"], "description": pending["description"],
+            "category": self.category_id, "log_channel": self.log_channel_id,
+            "support_role": self.support_role_id, "max_tickets": pending["max_tickets"],
+        }
+        save_config(cfg)
+        draft.pop("_pending_type", None)
+
+        resynced = await _resync_panel_message(interaction.guild, panel_id, panel)
+        note = "The live panel message was updated to show the new dropdown." if resynced else \
+            "Config saved — hit **Create/Update Panel** in the builder to show it live."
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            content=(f"✅ Added type `{type_key}` (**{pending['label']}**) to panel `{panel_id}`. "
+                     f"This panel now has **{len(types)}** type(s) — "
+                     f"{'a dropdown will show automatically' if len(types) >= 2 else 'add one more to activate the dropdown'}.\n{note}"),
+            view=self
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=3)
+    async def cancel_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_ticket_draft(interaction.user.id)
+        draft.pop("_pending_type", None)
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="Cancelled — no type was added.", view=self)
+
+
+class TicketTypeRemoveSelect(discord.ui.Select):
+    def __init__(self, panel: dict):
+        types = panel.get("types", {})
+        options = [
+            discord.SelectOption(label=(t.get("label") or key)[:100], value=key,
+                                  emoji=ticket_types.safe_emoji(t.get("emoji")) or None)
+            for key, t in types.items()
+        ][:25]
+        super().__init__(placeholder="Choose a type to remove…", options=options, min_values=1, max_values=1, row=0)
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        view.selected_key = self.values[0]
+        await interaction.response.edit_message(content=f"Selected `{self.values[0]}` — hit **Remove Selected** to confirm.", view=view)
+
+
+class TicketTypeManageView(discord.ui.View):
+    def __init__(self, owner_id: int, panel_id: str, panel: dict):
+        super().__init__(timeout=300)
+        self.owner_id      = owner_id
+        self.panel_id      = panel_id
+        self.selected_key  = None
+        self.add_item(TicketTypeRemoveSelect(panel))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(embed=error_embed("This isn't your ticket type manager — run it yourself."), ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Remove Selected", style=discord.ButtonStyle.danger, row=1)
+    async def remove_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        if not self.selected_key:
+            return await interaction.response.send_message(embed=error_embed("Pick a type from the dropdown first."), ephemeral=True)
+        gc    = guild_cfg(cfg, interaction.guild.id)
+        panel = gc["ticket"]["panels"].get(self.panel_id)
+        if not panel or self.selected_key not in panel.get("types", {}):
+            return await interaction.response.send_message(embed=error_embed("That type no longer exists."), ephemeral=True)
+        removed = panel["types"].pop(self.selected_key)
+        save_config(cfg)
+        resynced = await _resync_panel_message(interaction.guild, self.panel_id, panel)
+        note = "The live panel message was updated." if resynced else "The panel message wasn't found — update it from the builder if needed."
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            content=f"✅ Removed type `{self.selected_key}` (**{removed.get('label', self.selected_key)}**) from panel `{self.panel_id}`.\n{note}",
+            view=self
+        )
+
 
 class TicketPanelBuilderView(discord.ui.View):
     """Full /ticketpanel builder — every visual setting a ticket panel
@@ -5667,6 +5854,27 @@ class TicketPanelBuilderView(discord.ui.View):
             "button_label": "Open Ticket", "button_emoji": "", "button_style": "danger", "open_type": "button",
         })
         await interaction.response.edit_message(**_ticket_render_kwargs(interaction.guild, draft))
+
+    @discord.ui.button(label="Add Type", style=discord.ButtonStyle.secondary, row=1)
+    async def add_type_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        """Adds a dropdown 'type' with its own category/log/role — this is
+        what turns a single-category panel into a multi-category dropdown
+        (2+ types = dropdown shows automatically). Uses ticket_types.py."""
+        await interaction.response.send_modal(TicketTypeInfoModal())
+
+    @discord.ui.button(label="Manage Types", style=discord.ButtonStyle.secondary, row=4)
+    async def manage_types_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft    = _get_ticket_draft(interaction.user.id)
+        panel_id = draft.get("panel_id")
+        gc       = guild_cfg(cfg, interaction.guild.id)
+        panel    = gc["ticket"]["panels"].get(panel_id)
+        if not panel or not panel.get("types"):
+            return await interaction.response.send_message(embed=error_embed("This panel has no ticket types configured yet — use **Add Type** first."), ephemeral=True)
+        await interaction.response.send_message(
+            content=f"Manage ticket types on panel `{panel_id}`:",
+            view=TicketTypeManageView(interaction.user.id, panel_id, panel),
+            ephemeral=True
+        )
 
     @discord.ui.button(label="Create Panel", style=discord.ButtonStyle.success, row=4)
     async def create_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
@@ -5852,28 +6060,21 @@ async def tickettype_add(
         return await i.response.send_message(embed=error_embed(f"This panel already has the max {ticket_types.MAX_TYPES_PER_PANEL} types Discord allows in one dropdown."), ephemeral=True)
 
     type_key = ticket_types.slugify_type_id(label, types)
+    resolved_emoji, emoji_warning = ticket_types.resolve_emoji_input(i.guild, emoji or "")
     types[type_key] = {
-        "label": label[:100], "emoji": (emoji or "").strip(), "description": (description or "").strip(),
+        "label": label[:100], "emoji": resolved_emoji or "", "description": (description or "").strip(),
         "category": category.id, "log_channel": log_channel.id if log_channel else None,
         "support_role": support_role.id if support_role else None, "max_tickets": max(1, min(5, max_tickets or 1)),
     }
     save_config(cfg)
 
-    ch = i.guild.get_channel(panel.get("channel_id") or 0)
-    resynced = False
-    if ch and panel.get("message_id"):
-        try:
-            msg = await ch.fetch_message(panel["message_id"])
-            await msg.edit(view=TicketOpenView(panel_id, panel))
-            resynced = True
-        except Exception:
-            pass
-
+    resynced = await _resync_panel_message(i.guild, panel_id, panel)
     note = "The live panel message was updated to show the new dropdown." if resynced else \
         "Config saved, but the panel message wasn't found — run `/ticketpanel` again (same panel_id) to repost it with the dropdown."
+    warn = f"\n⚠️ {emoji_warning}" if emoji_warning else ""
     await i.response.send_message(embed=success_embed(
         f"Added type `{type_key}` (**{label}**) to panel `{panel_id}`.\n"
-        f"This panel now has **{len(types)}** type(s) — {'a dropdown will show automatically' if len(types) >= 2 else 'add one more to activate the dropdown'}.\n{note}"
+        f"This panel now has **{len(types)}** type(s) — {'a dropdown will show automatically' if len(types) >= 2 else 'add one more to activate the dropdown'}.\n{note}{warn}"
     ), ephemeral=True)
 
 @tickettype_group.command(name="remove", description="Remove a ticket type from a panel.")
@@ -5891,15 +6092,7 @@ async def tickettype_remove(i: discord.Interaction, panel_id: str, type_id: str)
     removed = types.pop(type_id)
     save_config(cfg)
 
-    ch = i.guild.get_channel(panel.get("channel_id") or 0)
-    resynced = False
-    if ch and panel.get("message_id"):
-        try:
-            msg = await ch.fetch_message(panel["message_id"])
-            await msg.edit(view=TicketOpenView(panel_id, panel))
-            resynced = True
-        except Exception:
-            pass
+    resynced = await _resync_panel_message(i.guild, panel_id, panel)
     note = "The live panel message was updated." if resynced else "The panel message wasn't found — repost it with `/ticketpanel` if needed."
     await i.response.send_message(embed=success_embed(f"Removed type `{type_id}` (**{removed.get('label', type_id)}**) from panel `{panel_id}`.\n{note}"), ephemeral=True)
 
