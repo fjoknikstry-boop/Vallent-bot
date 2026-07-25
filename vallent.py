@@ -65,7 +65,7 @@ from aiohttp import web as aiohttp_web
 
 BOT_NAME      = "VALLENT EXS"
 BOT_TAGLINE   = "Nocturne Development."
-BOT_VERSION   = "1.0.0"
+BOT_VERSION   = "1.1.1"
 BOT_BANNER_URL: Optional[str] = None  # populated once in on_ready() from the bot account's Discord banner, if it has one
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -1971,7 +1971,7 @@ async def rotate_status():
     statuses = [
         discord.Activity(type=discord.ActivityType.watching, name="every move."),
         discord.Activity(type=discord.ActivityType.listening, name="!vx help"),
-        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.0"),
+        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.2"),
         discord.Activity(type=discord.ActivityType.watching, name=f"{len(bot.guilds)} servers"),
     ]
     import random as _r
@@ -2841,31 +2841,48 @@ async def _build_leaderboard_entries(guild: discord.Guild, all_d: list) -> list:
     tasks = [fetch_one(idx, uid, data) for idx, (uid, data) in enumerate(all_d)]
     return await asyncio.gather(*tasks)
 
+def _format_remaining(target: datetime.datetime) -> str:
+    """Plain-text countdown for a disabled button's label (Discord buttons
+    can't render live timestamps like message content can with <t:...:R>,
+    so this is a static snapshot valid as of when the message was sent)."""
+    delta = target - datetime.datetime.now(datetime.timezone.utc)
+    total_minutes = max(1, int(delta.total_seconds() // 60))
+    hours, minutes = divmod(total_minutes, 60)
+    if hours and minutes:
+        return f"{hours}h {minutes}m"
+    if hours:
+        return f"{hours}h"
+    return f"{minutes}m"
+
 def _support_boost_promo(uid: int):
-    """Return (content_text, view) combining the two ways to get the
-    +10% XP Boost: joining the support server (60 min) and voting for
-    the bot on top.gg (20 min, resets ~12h after each vote). Either half
-    is skipped if its config isn't set (SUPPORT_INVITE / TOPGG_VOTE_URL).
-    Returns (None, None) if NEITHER is configured."""
+    """Return (content_text, view) combining the two ways to get an XP
+    Boost: joining the support server (+15%, 60 min) and voting for the
+    bot on top.gg (+10%, 20 min, ~12h cooldown between votes). Either
+    half is skipped if its config isn't set (SUPPORT_INVITE /
+    TOPGG_VOTE_URL). The Vote button is disabled with a "Vote again in
+    Xh Ym" label while the user is on cooldown, instead of just always
+    linking out."""
     lines = []
     view  = discord.ui.View()
 
     remaining = xp_boost_remaining(uid)
     if remaining:
-        lines.append(f"Your **+10%** XP Boost is active until {discord.utils.format_dt(remaining, 'R')}!")
+        pct = round((get_xp_multiplier(uid) - 1) * 100)
+        lines.append(f"Your **+{pct}%** XP Boost is active until {discord.utils.format_dt(remaining, 'R')}!")
 
     if SUPPORT_INVITE and SUPPORT_INVITE.startswith(("http://", "https://")):
         if not remaining:
-            lines.append("**Join the support server** and get a **+10% XP Boost** for 60 minutes!")
+            lines.append("**Join the support server** and get a **+15% XP Boost** for 60 minutes!")
         view.add_item(discord.ui.Button(label="Join Support Server", style=discord.ButtonStyle.link, url=SUPPORT_INVITE))
 
     if TOPGG_VOTE_URL:
         next_vote = vote_system.next_vote_time(cfg.get("votes", {}), str(uid))
         if next_vote:
             lines.append(f"You can **vote** again {discord.utils.format_dt(next_vote, 'R')} for another **+10%** Boost (20 min).")
+            view.add_item(discord.ui.Button(label=f"Vote again in {_format_remaining(next_vote)}", style=discord.ButtonStyle.secondary, disabled=True))
         else:
             lines.append("**Vote for the bot** and get a **+10% XP Boost** for 20 minutes!")
-        view.add_item(discord.ui.Button(label="Vote", style=discord.ButtonStyle.link, url=TOPGG_VOTE_URL, emoji="🗳️"))
+            view.add_item(discord.ui.Button(label="Vote", style=discord.ButtonStyle.link, url=TOPGG_VOTE_URL))
 
     if not lines and not view.children:
         return None, None
@@ -2931,7 +2948,7 @@ def _vote_command_kwargs(uid: int) -> dict:
     entry     = cfg.get("votes", {}).get(str(uid), {})
     next_vote = vote_system.next_vote_time(cfg.get("votes", {}), str(uid))
     embed = discord.Embed(
-        title="🗳️ Vote for the Bot",
+        title="Vote for the Bot",
         description=(
             f"Vote on top.gg and get a **+10% XP Boost** for **{vote_system.BOOST_MINUTES} minutes**, every time you vote!\n\n"
             + (f"⏳ You can vote again {discord.utils.format_dt(next_vote, 'R')}." if next_vote else "✅ You can vote right now!")
@@ -2944,7 +2961,10 @@ def _vote_command_kwargs(uid: int) -> dict:
         embed.add_field(name="Current Streak", value=str(entry["streak"]), inline=True)
     embed.set_footer(text=BOT_NAME)
     view = discord.ui.View()
-    view.add_item(discord.ui.Button(label="Vote Now", style=discord.ButtonStyle.link, url=TOPGG_VOTE_URL, emoji="🗳️"))
+    if next_vote:
+        view.add_item(discord.ui.Button(label=f"Vote again in {_format_remaining(next_vote)}", style=discord.ButtonStyle.secondary, disabled=True))
+    else:
+        view.add_item(discord.ui.Button(label="Vote Now", style=discord.ButtonStyle.link, url=TOPGG_VOTE_URL))
     return {"embed": embed, "view": view}
 
 @bot.command(name="vote", aliases=["v"])
@@ -6239,13 +6259,13 @@ async def on_member_join(member: discord.Member):
 
     boosted = can_receive_join_boost(uid)
     if boosted:
-        grant_xp_boost(uid, minutes=60, multiplier=1.10)
+        grant_xp_boost(uid, minutes=60, multiplier=1.15)
         mark_join_boost_granted(uid)
 
     badge_lines, _ = _badge_display_lines(uid)
     role   = get_bot_role(uid)
     bonus_line = (
-        "Bonus: **+10% XP Boost** active for **60 minutes** on every server using " + BOT_NAME + "!\n\n"
+        "Bonus: **+15% XP Boost** active for **60 minutes** on every server using " + BOT_NAME + "!\n\n"
         if boosted else ""
     )
     embed  = discord.Embed(
