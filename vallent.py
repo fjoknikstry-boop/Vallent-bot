@@ -3,7 +3,7 @@ VALLENT EXS — Discord Moderation Bot
 Author  : Niks. (Founder)
 Version : 1.0.0
 
-"No mercy. No limits. Nocturne Development."
+"No mercy. No limits. Full control."
 
 Features:
   - Full moderation suite (kick, ban, timeout, warn, purge, lock, slowmode, etc.)
@@ -55,6 +55,8 @@ from emoji_config import (
 import rank_card
 import antinuke
 import ticket_types
+import vote_system
+from aiohttp import web as aiohttp_web
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -63,7 +65,7 @@ import ticket_types
 
 BOT_NAME      = "VALLENT EXS"
 BOT_TAGLINE   = "Nocturne Development."
-BOT_VERSION   = "1.2.0"
+BOT_VERSION   = "1.0.0"
 BOT_BANNER_URL: Optional[str] = None  # populated once in on_ready() from the bot account's Discord banner, if it has one
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -78,6 +80,16 @@ COLOR_INFO    = 0xDC143C   # Crimson
 
 # Support server invite link — set via env var SUPPORT_INVITE
 SUPPORT_INVITE = os.getenv("SUPPORT_INVITE", "")
+# top.gg vote integration — all optional. Without TOPGG_WEBHOOK_AUTH set,
+# the webhook server simply never starts (no port opened, no crash) and
+# /vote or !vote will just tell people voting isn't configured yet.
+TOPGG_VOTE_URL      = os.getenv("TOPGG_VOTE_URL", "")        # e.g. https://top.gg/bot/<id>/vote
+TOPGG_WEBHOOK_AUTH   = os.getenv("TOPGG_WEBHOOK_AUTH", "")    # secret string, must match top.gg's Webhooks tab
+# Railway auto-injects PORT when the service has Public Networking turned
+# on — that's the port your app MUST bind to for Railway's public domain
+# to actually reach it. VOTE_WEBHOOK_PORT is only a manual fallback for
+# non-Railway hosts; on Railway, PORT always wins.
+VOTE_WEBHOOK_PORT    = int(os.getenv("PORT") or os.getenv("VOTE_WEBHOOK_PORT", "8080"))
 
 SPAM_THRESHOLD = 3
 SPAM_WINDOW    = 8.0
@@ -623,13 +635,59 @@ async def check_no_prefix_expiry():
 def is_maintenance_on() -> bool:
     return bool(cfg.get("maintenance", {}).get("enabled", False))
 
-def grant_xp_boost(uid: int, minutes: int = 60, multiplier: float = 1.10):
+def grant_xp_boost(uid: int, minutes: int = 60, multiplier: float = 1.10, extend_only: bool = False):
     """Grant a temporary XP boost — used as an incentive for joining the support
-    server. Applies across ALL guilds (not per-guild) since this is a personal
-    reward, not a server setting."""
-    expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
-    cfg.setdefault("xp_boost", {})[str(uid)] = {"expiry": expiry.isoformat(), "multiplier": multiplier}
+    server (and, separately, for voting on top.gg). Applies across ALL guilds
+    (not per-guild) since this is a personal reward, not a server setting.
+
+    extend_only=True never SHORTENS an already-longer boost still running
+    (e.g. someone with a 60-min join-server boost active votes and gets a
+    20-min boost — without this they'd lose 40 minutes of remaining time).
+    """
+    new_expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
+    if extend_only:
+        existing = cfg.get("xp_boost", {}).get(str(uid))
+        if existing:
+            try:
+                cur_expiry = datetime.datetime.fromisoformat(existing["expiry"])
+                if cur_expiry.tzinfo is None:
+                    cur_expiry = cur_expiry.replace(tzinfo=datetime.timezone.utc)
+                if cur_expiry > new_expiry:
+                    new_expiry = cur_expiry
+            except Exception:
+                pass
+    cfg.setdefault("xp_boost", {})[str(uid)] = {"expiry": new_expiry.isoformat(), "multiplier": multiplier}
     save_config(cfg)
+
+_vote_webhook_started = False  # guards against starting the web server twice on gateway reconnects
+
+async def _handle_topgg_vote(uid: int):
+    """Called by vote_system's webhook app for every CONFIRMED real vote.
+    Grants the +10% / 20-min boost (extend_only so it never shortens a
+    longer boost already running) and updates the vote ledger."""
+    grant_xp_boost(uid, minutes=vote_system.BOOST_MINUTES, multiplier=vote_system.BOOST_MULTIPLIER, extend_only=True)
+    vote_system.record_vote(cfg.setdefault("votes", {}), str(uid))
+    save_config(cfg)
+    print(f"[{BOT_NAME}] Vote reward granted to user {uid} (top.gg webhook).")
+
+async def start_vote_webhook_server():
+    """Starts the small aiohttp server that receives top.gg's vote webhook,
+    if TOPGG_WEBHOOK_AUTH is configured. Safe to call repeatedly — only
+    ever actually starts once (guarded by _vote_webhook_started), same
+    pattern as the .is_running() guards on the background tasks below."""
+    global _vote_webhook_started
+    if _vote_webhook_started or not TOPGG_WEBHOOK_AUTH:
+        return
+    try:
+        app    = vote_system.build_webhook_app(TOPGG_WEBHOOK_AUTH, _handle_topgg_vote)
+        runner = aiohttp_web.AppRunner(app)
+        await runner.setup()
+        site = aiohttp_web.TCPSite(runner, "0.0.0.0", VOTE_WEBHOOK_PORT)
+        await site.start()
+        _vote_webhook_started = True
+        print(f"[{BOT_NAME}] top.gg vote webhook listening on port {VOTE_WEBHOOK_PORT} (path /topgg/vote).")
+    except Exception:
+        logging.exception(f"[{BOT_NAME}] Failed to start the top.gg vote webhook server")
 
 def can_receive_join_boost(uid: int, cooldown_hours: int = 24) -> bool:
     """Anti-farm guard for the support-server join XP boost. Without this,
@@ -1913,7 +1971,7 @@ async def rotate_status():
     statuses = [
         discord.Activity(type=discord.ActivityType.watching, name="every move."),
         discord.Activity(type=discord.ActivityType.listening, name="!vx help"),
-        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.2"),
+        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.0"),
         discord.Activity(type=discord.ActivityType.watching, name=f"{len(bot.guilds)} servers"),
     ]
     import random as _r
@@ -1992,6 +2050,7 @@ async def on_ready():
         rotate_status.start()
     if not premium_expiry_task.is_running():
         premium_expiry_task.start()
+    await start_vote_webhook_server()
     print(f"[{BOT_NAME}] Online — {len(bot.guilds)} guild(s).")
 
 @bot.event
@@ -2783,20 +2842,34 @@ async def _build_leaderboard_entries(guild: discord.Guild, all_d: list) -> list:
     return await asyncio.gather(*tasks)
 
 def _support_boost_promo(uid: int):
-    """Return (content_text, view) for the join-support-server + XP boost promo.
-    content_text is None if SUPPORT_INVITE isn't set / isn't a valid URL — so we
-    don't offer an invite that doesn't exist or make discord.ui.Button error
-    out on a broken URL."""
-    if not SUPPORT_INVITE or not SUPPORT_INVITE.startswith(("http://", "https://")):
-        return None, None
+    """Return (content_text, view) combining the two ways to get the
+    +10% XP Boost: joining the support server (60 min) and voting for
+    the bot on top.gg (20 min, resets ~12h after each vote). Either half
+    is skipped if its config isn't set (SUPPORT_INVITE / TOPGG_VOTE_URL).
+    Returns (None, None) if NEITHER is configured."""
+    lines = []
+    view  = discord.ui.View()
+
     remaining = xp_boost_remaining(uid)
     if remaining:
-        content = f"Your **+10%** XP Boost is still active until {discord.utils.format_dt(remaining, 'R')}!"
-    else:
-        content = "**Join the support server** and get a **+10% XP Boost** for 60 minutes!"
-    view = discord.ui.View()
-    view.add_item(discord.ui.Button(label="Join Support Server", style=discord.ButtonStyle.link, url=SUPPORT_INVITE))
-    return content, view
+        lines.append(f"Your **+10%** XP Boost is active until {discord.utils.format_dt(remaining, 'R')}!")
+
+    if SUPPORT_INVITE and SUPPORT_INVITE.startswith(("http://", "https://")):
+        if not remaining:
+            lines.append("**Join the support server** and get a **+10% XP Boost** for 60 minutes!")
+        view.add_item(discord.ui.Button(label="Join Support Server", style=discord.ButtonStyle.link, url=SUPPORT_INVITE))
+
+    if TOPGG_VOTE_URL:
+        next_vote = vote_system.next_vote_time(cfg.get("votes", {}), str(uid))
+        if next_vote:
+            lines.append(f"You can **vote** again {discord.utils.format_dt(next_vote, 'R')} for another **+10%** Boost (20 min).")
+        else:
+            lines.append("**Vote for the bot** and get a **+10% XP Boost** for 20 minutes!")
+        view.add_item(discord.ui.Button(label="Vote", style=discord.ButtonStyle.link, url=TOPGG_VOTE_URL, emoji="🗳️"))
+
+    if not lines and not view.children:
+        return None, None
+    return ("\n".join(lines) if lines else None), (view if view.children else None)
 
 @bot.command(name="rank", aliases=["r"])
 async def pfx_rank(ctx, member: discord.Member = None):
@@ -2850,6 +2923,33 @@ async def pfx_rank(ctx, member: discord.Member = None):
     embed.set_thumbnail(url=target.display_avatar.url)
     embed.set_footer(text=BOT_NAME)
     await ctx.send(embed=embed)
+
+def _vote_command_kwargs(uid: int) -> dict:
+    """Shared embed+view builder for /vote and !vote."""
+    if not TOPGG_VOTE_URL:
+        return {"embed": error_embed("Voting isn't set up yet — ask the bot owner to configure `TOPGG_VOTE_URL`.")}
+    entry     = cfg.get("votes", {}).get(str(uid), {})
+    next_vote = vote_system.next_vote_time(cfg.get("votes", {}), str(uid))
+    embed = discord.Embed(
+        title="🗳️ Vote for the Bot",
+        description=(
+            f"Vote on top.gg and get a **+10% XP Boost** for **{vote_system.BOOST_MINUTES} minutes**, every time you vote!\n\n"
+            + (f"⏳ You can vote again {discord.utils.format_dt(next_vote, 'R')}." if next_vote else "✅ You can vote right now!")
+        ),
+        color=COLOR_PRIMARY,
+    )
+    if entry.get("total_votes"):
+        embed.add_field(name="Total Votes", value=str(entry["total_votes"]), inline=True)
+    if entry.get("streak"):
+        embed.add_field(name="Current Streak", value=str(entry["streak"]), inline=True)
+    embed.set_footer(text=BOT_NAME)
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(label="Vote Now", style=discord.ButtonStyle.link, url=TOPGG_VOTE_URL, emoji="🗳️"))
+    return {"embed": embed, "view": view}
+
+@bot.command(name="vote", aliases=["v"])
+async def pfx_vote(ctx):
+    await ctx.send(**_vote_command_kwargs(ctx.author.id))
 
 @bot.command(name="leaderboard", aliases=["lb"])
 async def pfx_leaderboard(ctx):
@@ -3878,8 +3978,8 @@ async def pfx_antinuke(ctx, sub: str = "", *, rest: str = ""):
 
 @bot.command(name="verification", aliases=["verify", "captcha"])
 async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
-    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.administrator:
-        return await ctx.send(embed=error_embed("Only Administrators or the owner can configure verification."))
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+        return await ctx.send(embed=error_embed("Only members with **Manage Server** or the owner can configure verification."))
     gc  = guild_cfg(cfg, ctx.guild.id)
     vc  = gc.setdefault("verification", {
         "enabled": False, "channel_id": None, "unverified_role_id": None,
@@ -4138,8 +4238,8 @@ async def pfx_embed(ctx, sub: str = "", *, rest: str = ""):
     """Build a custom embed piece-by-piece (title, description, thumbnail,
     banner, a divider/separator line, color) and send it to any channel.
     Draft is per-user and stays in memory until you `send` or `reset` it."""
-    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.administrator:
-        return await ctx.send(embed=error_embed("Only Administrators or the owner can use the embed builder."))
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+        return await ctx.send(embed=error_embed("Only members with **Manage Server** or the owner can use the embed builder."))
     sub   = sub.lower()
     draft = _get_embed_draft(ctx.author.id)
 
@@ -5205,6 +5305,10 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
     embed.set_thumbnail(url=target.display_avatar.url)
     await i.followup.send(embed=embed)
 
+@bot.tree.command(name="vote", description="Vote for the bot on top.gg and get a +10% XP Boost for 20 minutes.")
+async def slash_vote(i: discord.Interaction):
+    await i.response.send_message(**_vote_command_kwargs(i.user.id))
+
 @bot.tree.command(name="leaderboard", description="View this server's top 10 XP leaderboard.")
 async def slash_leaderboard(i: discord.Interaction):
     gc    = guild_cfg(cfg, i.guild.id)
@@ -5484,8 +5588,8 @@ class EmbedBuilderPanel(discord.ui.View):
 @bot.tree.command(name="embed", description="Build a custom embed and send it to a channel.")
 @app_commands.describe(channel="Channel the embed will be sent to")
 async def slash_embed(i: discord.Interaction, channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel]):
-    if i.user.id != bot.owner_id and not i.user.guild_permissions.administrator:
-        return await i.response.send_message(embed=error_embed("Only Administrators or the owner can use the embed builder."), ephemeral=True)
+    if i.user.id != bot.owner_id and not i.user.guild_permissions.manage_guild:
+        return await i.response.send_message(embed=error_embed("Only members with **Manage Server** or the owner can use the embed builder."), ephemeral=True)
     draft = _get_embed_draft(i.user.id)
     draft["channel_id"] = channel.id
     view = EmbedBuilderPanel(channel, i.user.id)
@@ -5631,21 +5735,30 @@ class TicketTypeInfoModal(discord.ui.Modal, title="Add Ticket Type"):
             "description": (self.desc_input.value or "").strip()[:100],
             "max_tickets": max_tickets,
         }
-        draft = _get_ticket_draft(interaction.user.id)
-        draft["_pending_type"] = pending
-        content = f"**{pending['label']}** — now pick a category (required), log channel & role (both optional) below, then **Save Type**."
+        # `pending` is carried directly on THIS view instance (not stashed
+        # in the per-user draft) so two overlapping Add Type sessions for
+        # the same user can never cross-contaminate each other's label —
+        # each step-2 message only ever knows about its own submission.
+        draft    = _get_ticket_draft(interaction.user.id)
+        panel_id = draft.get("panel_id")
+        content  = f"**{pending['label']}** — now pick a category (required), log channel & role (both optional) below, then **Save Type**."
         if warning:
             content = f"⚠️ {warning}\n\n" + content
-        await interaction.response.send_message(content=content, view=TicketTypeCategoryView(interaction.user.id), ephemeral=True)
+        await interaction.response.send_message(content=content, view=TicketTypeCategoryView(interaction.user.id, panel_id, pending), ephemeral=True)
 
 
 class TicketTypeCategoryView(discord.ui.View):
     """Step 2 of Add Type — the real Discord pickers a modal can't hold.
     Finalizes the type (adds it to the panel's `types` dict and resyncs
-    the live message) once Save Type is pressed with a category chosen."""
-    def __init__(self, owner_id: int):
+    the live message) once Save Type is pressed with a category chosen.
+    Carries its own panel_id + pending label/emoji/description so it never
+    depends on (or can be clobbered by) another overlapping Add Type
+    session for the same user."""
+    def __init__(self, owner_id: int, panel_id: str, pending: dict):
         super().__init__(timeout=300)
         self.owner_id         = owner_id
+        self.panel_id         = panel_id
+        self.pending          = pending
         self.category_id      = None
         self.log_channel_id   = None
         self.support_role_id  = None
@@ -5676,9 +5789,8 @@ class TicketTypeCategoryView(discord.ui.View):
 
     @discord.ui.button(label="Save Type", style=discord.ButtonStyle.success, row=3)
     async def save_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
-        draft    = _get_ticket_draft(interaction.user.id)
-        pending  = draft.get("_pending_type")
-        panel_id = draft.get("panel_id")
+        pending  = self.pending
+        panel_id = self.panel_id
         if not pending or not panel_id:
             return await interaction.response.send_message(embed=error_embed("This setup expired — start again with the **Add Type** button in the builder."), ephemeral=True)
         if not self.category_id:
@@ -5697,7 +5809,6 @@ class TicketTypeCategoryView(discord.ui.View):
             "support_role": self.support_role_id, "max_tickets": pending["max_tickets"],
         }
         save_config(cfg)
-        draft.pop("_pending_type", None)
 
         resynced = await _resync_panel_message(interaction.guild, panel_id, panel)
         note = "The live panel message was updated to show the new dropdown." if resynced else \
@@ -5713,8 +5824,6 @@ class TicketTypeCategoryView(discord.ui.View):
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=3)
     async def cancel_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
-        draft = _get_ticket_draft(interaction.user.id)
-        draft.pop("_pending_type", None)
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content="Cancelled — no type was added.", view=self)
