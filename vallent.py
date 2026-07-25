@@ -3,7 +3,7 @@ VALLENT EXS — Discord Moderation Bot
 Author  : Niks. (Founder)
 Version : 1.0.0
 
-"No mercy. No limits. Full control."
+"No mercy. No limits. Nocturne Development."
 
 Features:
   - Full moderation suite (kick, ban, timeout, warn, purge, lock, slowmode, etc.)
@@ -63,7 +63,7 @@ import ticket_types
 
 BOT_NAME      = "VALLENT EXS"
 BOT_TAGLINE   = "Nocturne Development."
-BOT_VERSION   = "1.0.0"
+BOT_VERSION   = "1.2.0"
 BOT_BANNER_URL: Optional[str] = None  # populated once in on_ready() from the bot account's Discord banner, if it has one
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -1913,7 +1913,7 @@ async def rotate_status():
     statuses = [
         discord.Activity(type=discord.ActivityType.watching, name="every move."),
         discord.Activity(type=discord.ActivityType.listening, name="!vx help"),
-        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.0"),
+        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.2"),
         discord.Activity(type=discord.ActivityType.watching, name=f"{len(bot.guilds)} servers"),
     ]
     import random as _r
