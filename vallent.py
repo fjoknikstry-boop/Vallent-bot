@@ -1,7 +1,7 @@
 """
 VALLENT EXS — Discord Moderation Bot
 Author  : Niks. (Founder)
-Version : 1.0.0
+Version : 1.2.0
 
 "No mercy. No limits. Full control."
 
@@ -56,6 +56,7 @@ import rank_card
 import antinuke
 import ticket_types
 import vote_system
+import embed_links
 from aiohttp import web as aiohttp_web
 
 
@@ -65,7 +66,7 @@ from aiohttp import web as aiohttp_web
 
 BOT_NAME      = "VALLENT EXS"
 BOT_TAGLINE   = "Nocturne Development."
-BOT_VERSION   = "1.1.1"
+BOT_VERSION   = "1.2.0"
 BOT_BANNER_URL: Optional[str] = None  # populated once in on_ready() from the bot account's Discord banner, if it has one
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -4172,6 +4173,7 @@ def _get_embed_draft(uid: int) -> dict:
     return _EMBED_DRAFTS.setdefault(uid, {
         "title": None, "description": "", "thumbnail": None,
         "image": None, "color": COLOR_PRIMARY, "channel_id": None,
+        "links": [], "target_message_id": None, "target_channel_id": None,
         "_history": [],
     })
 
@@ -4244,16 +4246,74 @@ def _build_draft_embed(draft: dict) -> discord.Embed:
 
 def _draft_summary(ctx, draft: dict) -> str:
     ch = ctx.guild.get_channel(draft.get("channel_id") or 0) if draft.get("channel_id") else None
+    links = draft.get("links") or []
     return (
         f"**Title:** {draft.get('title') or '*(not set)*'}\n"
         f"**Description:** {'✅ set' if draft.get('description') else '*(not set)*'}\n"
         f"**Thumbnail:** {'✅ set' if draft.get('thumbnail') else '*(not set)*'}\n"
         f"**Banner:** {'✅ set' if draft.get('image') else '*(not set)*'}\n"
         f"**Color:** `#{(draft.get('color') or COLOR_PRIMARY):06X}`\n"
+        f"**Link buttons:** {len(links)} configured\n"
         f"**Channel:** {ch.mention if ch else '*(not set)*'}"
+        + ("\n**Mode:** editing an existing message — `embed send` will update it, not post new." if draft.get("target_message_id") else "")
     )
 
-@bot.command(name="embed", aliases=["em", "embedmsg"])
+_MESSAGE_LINK_RE = re.compile(r"discord(?:app)?\.com/channels/(\d+)/(\d+)/(\d+)")
+
+async def _resolve_message_ref(guild: discord.Guild, default_channel: Optional[discord.abc.Messageable], ref: str):
+    """Resolve a user-given message reference — either a full message
+    link (discord.com/channels/guild/channel/message) or a bare message
+    ID (searched in `default_channel`) — into a discord.Message.
+    Returns (message, error_string). error_string is None on success."""
+    ref = (ref or "").strip()
+    if not ref:
+        return None, "Give a message link or ID."
+    m = _MESSAGE_LINK_RE.search(ref)
+    if m:
+        guild_id, channel_id, message_id = (int(x) for x in m.groups())
+        if guild_id != guild.id:
+            return None, "That message link is from a different server."
+        channel = guild.get_channel(int(channel_id))
+        if not channel:
+            return None, "Couldn't find that channel — I might not have access to it."
+    else:
+        if not ref.isdigit():
+            return None, "That doesn't look like a message link or ID."
+        if not default_channel:
+            return None, "Run this in the channel the message is in, or paste the full message link instead."
+        channel, message_id = default_channel, int(ref)
+    try:
+        msg = await channel.fetch_message(message_id)
+    except discord.NotFound:
+        return None, "Couldn't find that message — check the link/ID and try again."
+    except discord.Forbidden:
+        return None, "I don't have permission to read messages in that channel."
+    return msg, None
+
+def _load_message_into_draft(uid: int, msg: discord.Message) -> Optional[str]:
+    """Replace the user's current embed draft with the contents of an
+    already-sent message, so /embed edit can continue where that message
+    left off. Returns an error string (draft left untouched) or None on
+    success. Only the bot's OWN messages can be edited later (Discord
+    restriction — you can never edit another user's/bot's message)."""
+    if msg.author.id != bot.user.id:
+        return "I can only edit embeds that this bot sent."
+    if not msg.embeds:
+        return "That message doesn't have an embed to edit."
+    em = msg.embeds[0]
+    _EMBED_DRAFTS[uid] = {
+        "title": em.title, "description": em.description or "",
+        "thumbnail": em.thumbnail.url if em.thumbnail else None,
+        "image": em.image.url if em.image else None,
+        "color": em.color.value if em.color is not None else COLOR_PRIMARY,
+        "channel_id": msg.channel.id,
+        "links": embed_links.parse_links_from_message(msg),
+        "target_message_id": msg.id, "target_channel_id": msg.channel.id,
+        "_history": [],
+    }
+    return None
+
+
 async def pfx_embed(ctx, sub: str = "", *, rest: str = ""):
     """Build a custom embed piece-by-piece (title, description, thumbnail,
     banner, a divider/separator line, color) and send it to any channel.
@@ -4318,25 +4378,87 @@ async def pfx_embed(ctx, sub: str = "", *, rest: str = ""):
         if not ch:
             return await ctx.send(embed=error_embed("Mention a channel: `embed channel #channel`"))
         draft["channel_id"] = ch.id
+        # Clear any leftover edit-mode targeting from a previous `embed edit`
+        # — otherwise `embed send` would silently update that old message.
+        draft["target_message_id"] = None
+        draft["target_channel_id"] = None
         await ctx.send(embed=success_embed(f"Target channel set to {ch.mention}."))
+
+    elif sub == "edit":
+        ref = rest.strip()
+        if not ref:
+            return await ctx.send(embed=error_embed("Usage: `embed edit <message link or ID>` (run it in the same channel if using just an ID)."))
+        msg, err = await _resolve_message_ref(ctx.guild, ctx.channel, ref)
+        if err:
+            return await ctx.send(embed=error_embed(err))
+        err = _load_message_into_draft(ctx.author.id, msg)
+        if err:
+            return await ctx.send(embed=error_embed(err))
+        await ctx.send(embed=success_embed(f"Loaded that message into your draft — `embed send` now **updates it in place** instead of posting new."))
+
+    elif sub == "link":
+        parts = rest.split(" ", 1)
+        action = (parts[0] if parts else "").lower()
+        arg    = parts[1] if len(parts) > 1 else ""
+        links  = draft.setdefault("links", [])
+        if action == "add":
+            bits  = [b.strip() for b in arg.split("|")]
+            if len(bits) < 2:
+                return await ctx.send(embed=error_embed("Usage: `embed link add <label> | <url> [| emoji]`"))
+            label, url = bits[0], bits[1]
+            emoji = bits[2] if len(bits) > 2 else ""
+            err = embed_links.add_link(links, label, url, emoji)
+            if err:
+                return await ctx.send(embed=error_embed(err))
+            await ctx.send(embed=success_embed(f"Added link button **{label}** ({len(links)}/{embed_links.MAX_LINKS})."))
+        elif action == "remove":
+            if not arg.strip().isdigit() or not (1 <= int(arg.strip()) <= len(links)):
+                return await ctx.send(embed=error_embed(f"Usage: `embed link remove <number>` — see `embed link list` for numbers."))
+            removed = links.pop(int(arg.strip()) - 1)
+            await ctx.send(embed=success_embed(f"Removed link button **{removed['label']}**."))
+        elif action == "list":
+            if not links:
+                return await ctx.send(embed=info_embed("Link Buttons", "None configured yet — `embed link add <label> | <url>`"))
+            await ctx.send(embed=info_embed("Link Buttons", "\n".join(f"**{i+1}.** {l['label']} — {l['url']}" for i, l in enumerate(links))))
+        else:
+            await ctx.send(embed=error_embed("Usage: `embed link add <label> | <url> [| emoji]` / `embed link remove <number>` / `embed link list`"))
 
     elif sub == "preview":
         if not draft.get("title") and not draft.get("description"):
             return await ctx.send(embed=error_embed("Nothing to preview yet — set a title or description first."))
-        await ctx.send(content="**Preview** *(not sent yet)*:", embed=_build_draft_embed(draft))
+        await ctx.send(content="**Preview** *(not sent yet)*:", embed=_build_draft_embed(draft), view=embed_links.build_link_view(draft.get("links", [])))
 
     elif sub == "reset":
         _EMBED_DRAFTS.pop(ctx.author.id, None)
         await ctx.send(embed=success_embed("Embed draft cleared."))
 
     elif sub == "send":
+        links = draft.get("links", [])
+        link_view = embed_links.build_link_view(links)
+        if not draft.get("title") and not draft.get("description"):
+            return await ctx.send(embed=error_embed("Nothing to send yet — set a title or description first."))
+
+        target_channel_id = draft.get("target_channel_id")
+        target_message_id = draft.get("target_message_id")
+        if target_channel_id and target_message_id:
+            ch = ctx.guild.get_channel(target_channel_id)
+            if not ch:
+                return await ctx.send(embed=error_embed("Can't find the original channel anymore — the message may have been deleted."))
+            try:
+                msg = await ch.fetch_message(target_message_id)
+                await msg.edit(embed=_build_draft_embed(draft), view=link_view)
+            except discord.NotFound:
+                return await ctx.send(embed=error_embed("That message doesn't exist anymore — run `embed reset` and send it as new instead."))
+            except discord.Forbidden:
+                return await ctx.send(embed=error_embed("I don't have permission to edit messages in that channel."))
+            _EMBED_DRAFTS.pop(ctx.author.id, None)
+            return await ctx.send(embed=success_embed(f"Updated the existing embed in {ch.mention}. Draft cleared."))
+
         ch = ctx.guild.get_channel(draft.get("channel_id") or 0)
         if not ch:
             return await ctx.send(embed=error_embed("No target channel set yet — run `embed channel #channel` first."))
-        if not draft.get("title") and not draft.get("description"):
-            return await ctx.send(embed=error_embed("Nothing to send yet — set a title or description first."))
         try:
-            await ch.send(embed=_build_draft_embed(draft))
+            await ch.send(embed=_build_draft_embed(draft), view=link_view)
         except discord.Forbidden:
             return await ctx.send(embed=error_embed("I don't have permission to send messages in that channel."))
         _EMBED_DRAFTS.pop(ctx.author.id, None)
@@ -4351,9 +4473,12 @@ async def pfx_embed(ctx, sub: str = "", *, rest: str = ""):
             "`embed thumbnail <url>` *(or attach an image)* — small image, top-right\n"
             "`embed banner <url>` *(or attach an image)* — big image at the bottom\n"
             "`embed color <hex>` — e.g. `embed color FF0000`\n"
-            "`embed channel #channel` — where it gets sent\n"
+            "`embed channel #channel` — where it gets sent (for a NEW embed)\n"
+            "`embed edit <message link or ID>` — load an already-sent embed to edit it instead of making a new one\n"
+            "`embed link add <label> | <url> [| emoji]` — add a link button (works with or without editing)\n"
+            "`embed link remove <number>` / `embed link list` — manage link buttons\n"
             "`embed preview` — see it before sending\n"
-            "`embed send` — post it to the target channel\n"
+            "`embed send` — post it new, or **update** the original message if you used `embed edit`\n"
             "`embed reset` — clear the draft and start over\n\n"
             f"**Current draft:**\n{_draft_summary(ctx, draft)}"
         )))
@@ -5458,12 +5583,21 @@ async def slash_help(i: discord.Interaction):
 
 def _panel_render_kwargs(draft: dict) -> dict:
     """Live-preview payload for the /embed panel message — shows the embed
-    exactly as it currently stands, or a placeholder if nothing's set yet."""
+    exactly as it currently stands, or a placeholder if nothing's set yet.
+    Content line reflects edit-mode / configured link buttons so both
+    stay visible across every re-render (title change, undo, etc)."""
     if draft.get("title") or draft.get("description"):
         embed = _build_draft_embed(draft)
     else:
         embed = discord.Embed(description="*Nothing set yet — use the buttons below to start building.*", color=COLOR_PRIMARY)
-    return {"embed": embed}
+    notes = []
+    if draft.get("target_message_id"):
+        notes.append("editing an existing message — **Update** applies changes to it")
+    links = draft.get("links") or []
+    if links:
+        notes.append(f"🔗 {len(links)} link button(s) configured")
+    content = "**Embed Builder**" + ((" — " + " · ".join(notes)) if notes else "")
+    return {"content": content, "embed": embed}
 
 class EmbedFieldModal(discord.ui.Modal):
     """Generic single-field modal used by every text-entry button on the
@@ -5522,16 +5656,85 @@ class SeparatorSelect(discord.ui.Select):
         draft["description"] = (draft.get("description", "") + f"\n{SEPARATOR_STYLES[style]}\n").strip("\n")[:4000]
         await interaction.response.edit_message(**_panel_render_kwargs(draft))
 
+class EmbedLinkModal(discord.ui.Modal, title="Add Link Button"):
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.label_input = discord.ui.TextInput(label="Button label", max_length=80, placeholder="e.g. Visit Our Website")
+        self.url_input   = discord.ui.TextInput(label="URL", max_length=512, placeholder="https://...")
+        self.emoji_input = discord.ui.TextInput(label="Emoji (optional)", required=False, max_length=100, placeholder="e.g. 🔗 or a custom emoji")
+        self.add_item(self.label_input)
+        self.add_item(self.url_input)
+        self.add_item(self.emoji_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        draft = _get_embed_draft(interaction.user.id)
+        links = draft.setdefault("links", [])
+        resolved_emoji, warning = ticket_types.resolve_emoji_input(interaction.guild, self.emoji_input.value)
+        err = embed_links.add_link(links, self.label_input.value, self.url_input.value, resolved_emoji or "")
+        if err:
+            return await interaction.response.send_message(embed=error_embed(err), ephemeral=True)
+        render = _panel_render_kwargs(draft)
+        if warning:
+            render["content"] = f"⚠️ {warning}\n\n" + render["content"]
+        await interaction.response.edit_message(**render)
+
+
+class EmbedLinkRemoveSelect(discord.ui.Select):
+    def __init__(self, links: list):
+        options = [discord.SelectOption(label=f"{i+1}. {l['label']}"[:100], value=str(i)) for i, l in enumerate(links)]
+        super().__init__(placeholder="Choose a link button to remove…", options=options[:25], min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        view.selected_index = int(self.values[0])
+        await interaction.response.edit_message(content=f"Selected **{self.values[0]}** — hit **Remove Selected** to confirm.", view=view)
+
+
+class EmbedLinkManageView(discord.ui.View):
+    def __init__(self, owner_id: int, links: list):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.selected_index = None
+        self.add_item(EmbedLinkRemoveSelect(links))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(embed=error_embed("This isn't your embed builder — run `/embed` yourself."), ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Remove Selected", style=discord.ButtonStyle.danger, row=1)
+    async def remove_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        if self.selected_index is None:
+            return await interaction.response.send_message(embed=error_embed("Pick a link from the dropdown first."), ephemeral=True)
+        draft = _get_embed_draft(interaction.user.id)
+        links = draft.get("links", [])
+        if self.selected_index >= len(links):
+            return await interaction.response.send_message(embed=error_embed("That link no longer exists — the list may have changed."), ephemeral=True)
+        removed = links.pop(self.selected_index)
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content=f"✅ Removed link button **{removed['label']}**. Go back to the builder to see the updated preview.", view=self)
+
+
 class EmbedBuilderPanel(discord.ui.View):
     """The full /embed builder — every field from the prefix `!vx embed`
     command, but as clickable buttons + modals instead of chat subcommands.
     Shares the same in-memory draft store, so switching between `/embed`
-    and `!vx embed` mid-build works seamlessly."""
-    def __init__(self, channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel], owner_id: int):
+    and `!vx embed` mid-build works seamlessly. Also handles editing an
+    already-sent message (is_edit=True relabels Send -> Update) and
+    optional link buttons (skipped entirely — a plain embed with no view —
+    if none are configured)."""
+    def __init__(self, channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel], owner_id: int, is_edit: bool = False):
         super().__init__(timeout=900)
         self.channel  = channel
         self.owner_id = owner_id
+        self.is_edit  = is_edit
         self.add_item(SeparatorSelect())
+        if is_edit:
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.style == discord.ButtonStyle.success:
+                    item.label = "Update"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -5586,18 +5789,53 @@ class EmbedBuilderPanel(discord.ui.View):
         draft = _get_embed_draft(interaction.user.id)
         _snapshot_draft(draft)
         ch_id = draft.get("channel_id")
-        for k in ("title", "description", "thumbnail", "image", "color"):
+        for k in ("title", "description", "thumbnail", "image", "color", "links"):
             draft.pop(k, None)
-        draft.update({"title": None, "description": "", "thumbnail": None, "image": None, "color": COLOR_PRIMARY, "channel_id": ch_id})
+        draft.update({"title": None, "description": "", "thumbnail": None, "image": None, "color": COLOR_PRIMARY, "channel_id": ch_id, "links": []})
+        # Reset only clears the embed's own content, not edit-mode targeting —
+        # if you're editing an existing message, Reset lets you start the
+        # embed's fields over without losing track of WHICH message you're updating.
         await interaction.response.edit_message(**_panel_render_kwargs(draft))
+
+    @discord.ui.button(label="Add Link", style=discord.ButtonStyle.secondary, row=1)
+    async def add_link_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        await interaction.response.send_modal(EmbedLinkModal())
+
+    @discord.ui.button(label="Manage Links", style=discord.ButtonStyle.secondary, row=1)
+    async def manage_links_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_embed_draft(interaction.user.id)
+        links = draft.get("links") or []
+        if not links:
+            return await interaction.response.send_message(embed=error_embed("No link buttons configured yet — use **Add Link** first."), ephemeral=True)
+        await interaction.response.send_message(content="Manage this embed's link buttons:", view=EmbedLinkManageView(interaction.user.id, links), ephemeral=True)
 
     @discord.ui.button(label="Send", style=discord.ButtonStyle.success, emoji=e(ICON_EMBED_SEND, "✅"), row=3)
     async def send_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
         draft = _get_embed_draft(interaction.user.id)
         if not draft.get("title") and not draft.get("description"):
             return await interaction.response.send_message(embed=error_embed("Nothing to send yet — set a title or description first."), ephemeral=True)
+        link_view = embed_links.build_link_view(draft.get("links", []))
+
+        target_channel_id = draft.get("target_channel_id")
+        target_message_id = draft.get("target_message_id")
+        if target_channel_id and target_message_id:
+            ch = interaction.guild.get_channel(target_channel_id)
+            if not ch:
+                return await interaction.response.send_message(embed=error_embed("Can't find the original channel anymore — the message may have been deleted."), ephemeral=True)
+            try:
+                msg = await ch.fetch_message(target_message_id)
+                await msg.edit(embed=_build_draft_embed(draft), view=link_view)
+            except discord.NotFound:
+                return await interaction.response.send_message(embed=error_embed("That message doesn't exist anymore — `embed reset` and send it as new instead."), ephemeral=True)
+            except discord.Forbidden:
+                return await interaction.response.send_message(embed=error_embed("I don't have permission to edit messages in that channel."), ephemeral=True)
+            _EMBED_DRAFTS.pop(interaction.user.id, None)
+            for item in self.children:
+                item.disabled = True
+            return await interaction.response.edit_message(content=f"✅ Updated the existing embed in {ch.mention} — draft cleared.", view=self)
+
         try:
-            await self.channel.send(embed=_build_draft_embed(draft))
+            await self.channel.send(embed=_build_draft_embed(draft), view=link_view)
         except discord.Forbidden:
             return await interaction.response.send_message(embed=error_embed("I don't have permission to send messages in that channel."), ephemeral=True)
         _EMBED_DRAFTS.pop(interaction.user.id, None)
@@ -5605,18 +5843,43 @@ class EmbedBuilderPanel(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(content=f"✅ Sent to {self.channel.mention} — draft cleared.", view=self)
 
-@bot.tree.command(name="embed", description="Build a custom embed and send it to a channel.")
-@app_commands.describe(channel="Channel the embed will be sent to")
-async def slash_embed(i: discord.Interaction, channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel]):
+@bot.tree.command(name="embed", description="Build a custom embed, or edit one this bot already sent.")
+@app_commands.describe(
+    channel="Channel to send a NEW embed to (omit if using message_link to edit one)",
+    message_link="Link to an existing embed message (this bot's own) to edit instead of creating new",
+)
+async def slash_embed(
+    i: discord.Interaction,
+    channel: Optional[Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel]] = None,
+    message_link: Optional[str] = None,
+):
     if i.user.id != bot.owner_id and not i.user.guild_permissions.manage_guild:
         return await i.response.send_message(embed=error_embed("Only members with **Manage Server** or the owner can use the embed builder."), ephemeral=True)
+    if not channel and not message_link:
+        return await i.response.send_message(embed=error_embed("Give either `channel` (to create a new embed) or `message_link` (to edit an existing one)."), ephemeral=True)
+
+    is_edit = False
+    if message_link:
+        msg, err = await _resolve_message_ref(i.guild, channel, message_link)
+        if err:
+            return await i.response.send_message(embed=error_embed(err), ephemeral=True)
+        err = _load_message_into_draft(i.user.id, msg)
+        if err:
+            return await i.response.send_message(embed=error_embed(err), ephemeral=True)
+        channel  = msg.channel
+        is_edit  = True
+    else:
+        draft = _get_embed_draft(i.user.id)
+        draft["channel_id"] = channel.id
+        # Clear any leftover edit-mode targeting from a previous `/embed
+        # message_link=` session for this user — otherwise Send would
+        # silently try to edit that old message instead of posting new.
+        draft["target_message_id"] = None
+        draft["target_channel_id"] = None
+
     draft = _get_embed_draft(i.user.id)
-    draft["channel_id"] = channel.id
-    view = EmbedBuilderPanel(channel, i.user.id)
-    await i.response.send_message(
-        content=f"**Embed Builder** — building for {channel.mention}. Use the buttons below (this shares the same draft as `!vx embed`).",
-        view=view, **_panel_render_kwargs(draft), ephemeral=True
-    )
+    view  = EmbedBuilderPanel(channel, i.user.id, is_edit=is_edit)
+    await i.response.send_message(view=view, **_panel_render_kwargs(draft), ephemeral=True)
 
 # ══════════════════════════════════════════════════════════════════
 # /ticketpanel — same builder pattern as /embed, but for ticket panels:
