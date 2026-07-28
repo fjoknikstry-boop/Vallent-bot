@@ -1,7 +1,7 @@
 """
 VALLENT EXS — Discord Moderation Bot
 Author  : Niks. (Founder)
-Version : 1.0.0
+Version : 1.2.0
 
 "No mercy. No limits. Full control."
 
@@ -66,7 +66,7 @@ from aiohttp import web as aiohttp_web
 
 BOT_NAME      = "VALLENT EXS"
 BOT_TAGLINE   = "Nocturne Development."
-BOT_VERSION   = "1.0.0"
+BOT_VERSION   = "1.2.0"
 BOT_BANNER_URL: Optional[str] = None  # populated once in on_ready() from the bot account's Discord banner, if it has one
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -211,6 +211,7 @@ def _init_guild(gc: dict):
     gc.setdefault("autoresponses_enabled", True)
     gc.setdefault("autoresponses", {})   # trigger(lower) -> {"trigger","response","match","case_sensitive"}
     gc.setdefault("afk_users", {})   # uid(str) -> {"reason": str, "since": unix_ts}
+    gc.setdefault("afk_free_users", [])  # uid(int) list — manually granted bypass of the AFK slot limit, no vote needed
     gc.setdefault("antinuke", {
         "enabled":     False,
         "log_channel": None,
@@ -1273,17 +1274,20 @@ async def do_afk_set(guild: discord.Guild, author: discord.abc.User, reason: str
 
     Only AFK_FREE_SLOTS members can be AFK at once PER SERVER. Updating an
     already-AFK member's reason never consumes a new slot. Once full, a
-    NEW member can still use AFK if they've voted on top.gg in the last
-    ~12h (vote_system's own cooldown window) — voting temporarily unlocks
-    the feature past the free cap, on top of its existing XP boost reward.
+    NEW member can still use AFK if EITHER:
+      - they've voted on top.gg in the last ~12h (vote_system's cooldown
+        window — voting temporarily unlocks the feature past the cap), or
+      - a Manage Server admin manually whitelisted them via
+        `afkfree add` / `/afkfree add` (permanent, no vote needed).
     """
     gc      = guild_cfg(cfg, guild.id)
     afk_map = gc.setdefault("afk_users", {})
     uid_key = str(author.id)
 
     if uid_key not in afk_map and len(afk_map) >= AFK_FREE_SLOTS:
+        whitelisted   = author.id in gc.get("afk_free_users", [])
         voted_recently = TOPGG_VOTE_URL and vote_system.next_vote_time(cfg.get("votes", {}), uid_key) is not None
-        if not voted_recently:
+        if not (whitelisted or voted_recently):
             embed = error_embed(
                 f"AFK is full on this server ({AFK_FREE_SLOTS}/{AFK_FREE_SLOTS} slots in use). "
                 + ("Vote for the bot to unlock it temporarily!" if TOPGG_VOTE_URL else "Ask an admin to free up a slot.")
@@ -1997,7 +2001,7 @@ async def rotate_status():
     statuses = [
         discord.Activity(type=discord.ActivityType.watching, name="every move."),
         discord.Activity(type=discord.ActivityType.listening, name="!vx help"),
-        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.0"),
+        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.2"),
         discord.Activity(type=discord.ActivityType.watching, name=f"{len(bot.guilds)} servers"),
     ]
     import random as _r
@@ -2816,6 +2820,40 @@ async def pfx_ping(ctx):
 @bot.command(name="afk", aliases=["away"])
 async def pfx_afk(ctx, *, reason: str = ""):
     await do_afk_set(ctx.guild, ctx.author, reason, ctx.send)
+
+@bot.command(name="afkfree", aliases=["afkwhitelist"])
+async def pfx_afkfree(ctx, sub: str = "", member: discord.Member = None):
+    if ctx.author.id != bot.owner_id:
+        return await ctx.send(embed=error_embed("Only the bot owner can manage the AFK whitelist."))
+    gc   = guild_cfg(cfg, ctx.guild.id)
+    free = gc.setdefault("afk_free_users", [])
+    sub  = sub.lower()
+    if sub == "add":
+        if not member:
+            return await ctx.send(embed=error_embed("Usage: `afkfree add @member`"))
+        if member.id in free:
+            return await ctx.send(embed=error_embed(f"{member.mention} is already whitelisted."))
+        free.append(member.id)
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"{member.mention} can now use AFK anytime, even when the {AFK_FREE_SLOTS} slots are full — no vote needed."))
+    elif sub == "remove":
+        if not member or member.id not in free:
+            return await ctx.send(embed=error_embed("That member isn't on the AFK whitelist."))
+        free.remove(member.id)
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Removed {member.mention} from the AFK whitelist."))
+    elif sub == "list":
+        if not free:
+            return await ctx.send(embed=info_embed("AFK Whitelist", "No one whitelisted yet — `afkfree add @member`"))
+        lines = [f"<@{uid}>" for uid in free]
+        await ctx.send(embed=info_embed("AFK Whitelist", "\n".join(lines)))
+    else:
+        await ctx.send(embed=info_embed("AFK Whitelist", (
+            f"Bypasses the **{AFK_FREE_SLOTS}**-slot AFK limit for specific members permanently — no vote needed.\n\n"
+            "`afkfree add @member` — grant free AFK access\n"
+            "`afkfree remove @member` — revoke it\n"
+            "`afkfree list` — see who's whitelisted"
+        )))
 
 @bot.command(name="addemoji", aliases=["ae"])
 async def pfx_addemoji(ctx, emoji_or_url: str = "", *, name: str = ""):
@@ -5255,7 +5293,8 @@ HELP_CATEGORIES = [
         "`afk [reason]` (alias `away`) · `/afk` — set yourself as AFK\n"
         "Sending any message automatically clears your AFK status.\n"
         "Anyone who @mentions you while you're AFK gets notified with your reason.\n"
-        f"-# Only **{AFK_FREE_SLOTS}** members can be AFK at once per server — once full, voting for the bot unlocks it temporarily."
+        f"-# Only **{AFK_FREE_SLOTS}** members can be AFK at once per server — once full, voting for the bot unlocks it temporarily, "
+        "or a Manage Server admin can permanently whitelist someone with `afkfree add @member` / `/afkfree add`."
     )),
     ("ticket", "Ticket", ICON_TICKET, "🎫", (
         "`ticket setup` · `ticket panel` · `ticket edit` · `ticket welcome` · `ticket list` · `ticket delete` · `ticket close`\n"
@@ -5599,6 +5638,44 @@ async def slash_ping(i: discord.Interaction):
 @app_commands.describe(reason="Optional reason shown to people who mention you (default: 'AFK')")
 async def slash_afk(i: discord.Interaction, reason: Optional[str] = None):
     await do_afk_set(i.guild, i.user, reason or "", i.response.send_message)
+
+afkfree_group = app_commands.Group(name="afkfree", description="Manage who can bypass the AFK slot limit without voting.")
+
+@afkfree_group.command(name="add", description="Let a member use AFK anytime, even when the slots are full — no vote needed.")
+async def slash_afkfree_add(i: discord.Interaction, member: discord.Member):
+    if i.user.id != bot.owner_id:
+        return await i.response.send_message(embed=error_embed("Only the bot owner can manage the AFK whitelist."), ephemeral=True)
+    gc   = guild_cfg(cfg, i.guild.id)
+    free = gc.setdefault("afk_free_users", [])
+    if member.id in free:
+        return await i.response.send_message(embed=error_embed(f"{member.mention} is already whitelisted."), ephemeral=True)
+    free.append(member.id)
+    save_config(cfg)
+    await i.response.send_message(embed=success_embed(f"{member.mention} can now use AFK anytime, even when the {AFK_FREE_SLOTS} slots are full — no vote needed."))
+
+@afkfree_group.command(name="remove", description="Revoke a member's AFK slot-limit bypass.")
+async def slash_afkfree_remove(i: discord.Interaction, member: discord.Member):
+    if i.user.id != bot.owner_id:
+        return await i.response.send_message(embed=error_embed("Only the bot owner can manage the AFK whitelist."), ephemeral=True)
+    gc   = guild_cfg(cfg, i.guild.id)
+    free = gc.setdefault("afk_free_users", [])
+    if member.id not in free:
+        return await i.response.send_message(embed=error_embed("That member isn't on the AFK whitelist."), ephemeral=True)
+    free.remove(member.id)
+    save_config(cfg)
+    await i.response.send_message(embed=success_embed(f"Removed {member.mention} from the AFK whitelist."))
+
+@afkfree_group.command(name="list", description="See who's whitelisted to bypass the AFK slot limit.")
+async def slash_afkfree_list(i: discord.Interaction):
+    if i.user.id != bot.owner_id:
+        return await i.response.send_message(embed=error_embed("Only the bot owner can manage the AFK whitelist."), ephemeral=True)
+    gc   = guild_cfg(cfg, i.guild.id)
+    free = gc.get("afk_free_users", [])
+    if not free:
+        return await i.response.send_message(embed=info_embed("AFK Whitelist", "No one whitelisted yet."), ephemeral=True)
+    await i.response.send_message(embed=info_embed("AFK Whitelist", "\n".join(f"<@{uid}>" for uid in free)), ephemeral=True)
+
+bot.tree.add_command(afkfree_group)
 
 @bot.tree.command(name="help", description="View every VALLENT EXS command.")
 async def slash_help(i: discord.Interaction):
