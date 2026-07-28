@@ -1,7 +1,7 @@
 """
 VALLENT EXS — Discord Moderation Bot
 Author  : Niks. (Founder)
-Version : 1.2.0
+Version : 1.0.0
 
 "No mercy. No limits. Full control."
 
@@ -66,7 +66,7 @@ from aiohttp import web as aiohttp_web
 
 BOT_NAME      = "VALLENT EXS"
 BOT_TAGLINE   = "Nocturne Development."
-BOT_VERSION   = "1.2.0"
+BOT_VERSION   = "1.0.0"
 BOT_BANNER_URL: Optional[str] = None  # populated once in on_ready() from the bot account's Discord banner, if it has one
 BOT_PREFIX    = "!vx "
 CONFIG_PATH   = "data/config.json"
@@ -1264,15 +1264,40 @@ async def do_ping(reply_fn):
     embed = base_embed("Pong!", f"Latency: **{lat}ms**", COLOR_SUCCESS if lat < 100 else COLOR_WARNING)
     await reply_fn(embed=embed)
 
+AFK_FREE_SLOTS = 4  # max concurrently-AFK members per server without voting
+
 async def do_afk_set(guild: discord.Guild, author: discord.abc.User, reason: str, reply_fn):
     """Mark `author` as AFK in this guild. Any message they send afterwards
     (other than re-running `afk`) automatically clears it — see on_message.
-    Anyone who @mentions them while AFK gets an embed with their reason."""
-    gc       = guild_cfg(cfg, guild.id)
-    afk_map  = gc.setdefault("afk_users", {})
+    Anyone who @mentions them while AFK gets an embed with their reason.
+
+    Only AFK_FREE_SLOTS members can be AFK at once PER SERVER. Updating an
+    already-AFK member's reason never consumes a new slot. Once full, a
+    NEW member can still use AFK if they've voted on top.gg in the last
+    ~12h (vote_system's own cooldown window) — voting temporarily unlocks
+    the feature past the free cap, on top of its existing XP boost reward.
+    """
+    gc      = guild_cfg(cfg, guild.id)
+    afk_map = gc.setdefault("afk_users", {})
+    uid_key = str(author.id)
+
+    if uid_key not in afk_map and len(afk_map) >= AFK_FREE_SLOTS:
+        voted_recently = TOPGG_VOTE_URL and vote_system.next_vote_time(cfg.get("votes", {}), uid_key) is not None
+        if not voted_recently:
+            embed = error_embed(
+                f"AFK is full on this server ({AFK_FREE_SLOTS}/{AFK_FREE_SLOTS} slots in use). "
+                + ("Vote for the bot to unlock it temporarily!" if TOPGG_VOTE_URL else "Ask an admin to free up a slot.")
+            )
+            kwargs = {"embed": embed}
+            if TOPGG_VOTE_URL:
+                view = discord.ui.View()
+                view.add_item(discord.ui.Button(label="Vote", style=discord.ButtonStyle.link, url=TOPGG_VOTE_URL))
+                kwargs["view"] = view
+            return await reply_fn(**kwargs)
+
     reason   = (reason or "").strip()[:200] or "AFK"
     since_ts = int(discord.utils.utcnow().timestamp())
-    afk_map[str(author.id)] = {"reason": reason, "since": since_ts}
+    afk_map[uid_key] = {"reason": reason, "since": since_ts}
     save_config(cfg)
 
     embed = base_embed(
@@ -1972,7 +1997,7 @@ async def rotate_status():
     statuses = [
         discord.Activity(type=discord.ActivityType.watching, name="every move."),
         discord.Activity(type=discord.ActivityType.listening, name="!vx help"),
-        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.2"),
+        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.0"),
         discord.Activity(type=discord.ActivityType.watching, name=f"{len(bot.guilds)} servers"),
     ]
     import random as _r
@@ -5229,7 +5254,8 @@ HELP_CATEGORIES = [
     ("afk", "AFK System", ICON_AFK, "💤", (
         "`afk [reason]` (alias `away`) · `/afk` — set yourself as AFK\n"
         "Sending any message automatically clears your AFK status.\n"
-        "Anyone who @mentions you while you're AFK gets notified with your reason."
+        "Anyone who @mentions you while you're AFK gets notified with your reason.\n"
+        f"-# Only **{AFK_FREE_SLOTS}** members can be AFK at once per server — once full, voting for the bot unlocks it temporarily."
     )),
     ("ticket", "Ticket", ICON_TICKET, "🎫", (
         "`ticket setup` · `ticket panel` · `ticket edit` · `ticket welcome` · `ticket list` · `ticket delete` · `ticket close`\n"
