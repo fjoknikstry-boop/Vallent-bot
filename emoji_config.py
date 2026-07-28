@@ -22,15 +22,15 @@ Contoh:
 # BADGE EMOJI
 # ══════════════════════════════════════════════════════════════════
 
-BADGE_FOUNDER    = "<:emoji_46:1528958923472769186>"   # Emoji untuk badge FOUNDER
-BADGE_DEVELOPER  = "<:emoji_50:1528959036626567258>"   # Emoji untuk badge DEVELOPER
+BADGE_FOUNDER    = "<:owner:1531552182573203486>"   # Emoji untuk badge FOUNDER
+BADGE_DEVELOPER  = "<:Dev:1531552304447098950>"   # Emoji untuk badge DEVELOPER
 BADGE_MANAGEMENT = "<:emoji_47:1528958972441137202>"   # Emoji untuk badge MANAGEMENT
 BADGE_MODERATOR       = "<:emoji_68:1530536974723715222>"   # Emoji untuk badge MODERATOR — isi ID emoji lu di sini
 BADGE_SERVER_MANAGER  = "<:emoji_49:1528959014304481311>"   # Emoji untuk badge SERVER MANAGER — isi ID emoji lu di sini
 BADGE_STAFF      = "<:emoji_54:1528959142297997332>"   # Emoji untuk badge STAFF
 BADGE_PREMIUM    = "<:premium:1528961463094612110>"   # Emoji untuk badge PREMIUM
 BADGE_NOPREFIX   = "<:emoji_51:1528919382389035018>"   # Emoji untuk badge NO PREFIX
-BADGE_USER       = "<:emoji_52:1528959097259688006>"   # Emoji untuk badge USER
+BADGE_USER       = "<:users:1531551241132441722>"   # Emoji untuk badge USER
 BADGE_MOONKEEPER = "<a:emoji_55:1528919570918670396>"   # Emoji untuk badge MOONKEEPER — isi ID emoji lu di sini (fallback: 🌙)
 
 # ══════════════════════════════════════════════════════════════════
@@ -38,24 +38,24 @@ BADGE_MOONKEEPER = "<a:emoji_55:1528919570918670396>"   # Emoji untuk badge MOON
 # ══════════════════════════════════════════════════════════════════
 
 # Section headers di !vx help
-ICON_MODERATION  = "<:emoji_52:1529987703125442700>"   # Icon untuk section Moderation
-ICON_ROLE        = "<:emoji_58:1529987879802241034>"   # Icon untuk section Role & Voice
-ICON_INFO        = "<:emoji_51:1529987677850702055>"   # Icon untuk section Info
-ICON_TICKET      = "<:emoji_55:1529987766849376407>"   # Icon untuk section Ticket
-ICON_LEVEL       = "<:emoji_56:1529987791746760805>"   # Icon untuk section Level & XP
-ICON_GIVEAWAY    = "<:emoji_63:1529987959410004008>"   # Icon untuk section Giveaway
-ICON_ANTISPAM    = "<:emoji_63:1529987994742816900>"   # Icon untuk section Antispam
-ICON_OWNER       = "<:emoji_49:1529987523135410196>"   # Icon untuk section Owner Only
-ICON_BOOST       = "<:emoji_65:1529988809352151181>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
-ICON_ANTINUKE    = "<:emoji_61:1529987932180582540>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
-ICON_VERIFICATION = "<:emoji_50:1529987543813062898>"   # Icon untuk section & panel Verifikasi (captcha) — isi ID emoji lu di sini (fallback: 🔐)
-ICON_IGNORE      = "<:emoji_59:1529987896189124842>"
-ICON_AUTOMOD     = "<:emoji_57:1529987833354387577>"
-ICON_AUTORESPONSE = "<:emoji_54:1529987747337732310>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
-ICON_AFK          = "<:emoji_46:1529987166225039450>"   # Icon untuk section & notifikasi AFK — isi ID emoji lu di sini (fallback: 💤)
+ICON_MODERATION  = "<:topgg_ico_bonk:1531543654785745067>"   # Icon untuk section Moderation
+ICON_ROLE        = "<:topgg_ico_sparkles:1531544618779283517>"   # Icon untuk section Role & Voice
+ICON_INFO        = "<:topgg_ico_info:1531543563077419030>"   # Icon untuk section Info
+ICON_TICKET      = "<:topgg_ico_note:1531544350100816034>"   # Icon untuk section Ticket
+ICON_LEVEL       = "<:topgg_ico_chart:1531543437210419392>"   # Icon untuk section Level & XP
+ICON_GIVEAWAY    = "<:topgg_ico_tada:1531542901652324406>"   # Icon untuk section Giveaway
+ICON_ANTISPAM    = "<:topgg_ico_taskforce:1531544158928638042>"   # Icon untuk section Antispam
+ICON_OWNER       = "<:topgg_ico_fire:1531544694356443176>"   # Icon untuk section Owner Only
+ICON_BOOST       = "<:topgg_ico_rocket:1531543284529233983>>"   # Icon default notifikasi server boost — isi ID emoji boost lu di sini
+ICON_ANTINUKE    = "<:topgg_ico_flag:1531548767986385007>"   # Icon untuk section & alert Anti-Nuke — isi ID emoji lu di sini
+ICON_VERIFICATION = "<:topgg_ico_lock:1531543141423906867>"   # Icon untuk section & panel Verifikasi (captcha) — isi ID emoji lu di sini (fallback: 🔐)
+ICON_IGNORE      = "<:topgg_ico_question:1531549041748480021>"
+ICON_AUTOMOD     = "<:topgg_ico_bot:1531542791014846564>"
+ICON_AUTORESPONSE = "<:topgg_ico_chat:1531547645313814560>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
+ICON_AFK          = "<:topgg_ico_cookie:1531550441169617018>"   # Icon untuk section & notifikasi AFK — isi ID emoji lu di sini (fallback: 💤)
 # Status / result icons
-ICON_SUCCESS     = "<:emoji_37:1528930134349058248>"   # Icon sukses (checklist, dll)
-ICON_ERROR       = "<:emoji_38:1528930169950310441>"   # Icon error / gagal
+ICON_SUCCESS     = "<:topgg_opt_yes:1531543705989677069>"   # Icon sukses (checklist, dll)
+ICON_ERROR       = "<:topgg_opt_no:1531543760079556718>"   # Icon error / gagal
 ICON_WARNING     = "<:emoji_32:1528929890038972466>"   # Icon warning / peringatan
 ICON_LOADING     = "<a:emoji_53:1529240301539954778>"   # Icon loading / proses
 
