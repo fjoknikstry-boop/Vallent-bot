@@ -1824,26 +1824,51 @@ def _build_ticket_panel_embed(panel: dict) -> discord.Embed:
     embed.set_footer(text=BOT_NAME)
     return embed
 
-class TicketOpenView(discord.ui.View):
-    """One instance per panel — custom_id stores the panel_id so the
-    control always knows which panel to open, even after a bot restart.
-    Three possible layouts, checked in order:
+class TicketPanelLayout(discord.ui.LayoutView):
+    """Components V2 rendering of the LIVE ticket panel message — title,
+    description, thumbnail, banner, and the open control (button or
+    dropdown) all live in ONE Container, replacing the old
+    _build_ticket_panel_embed() + legacy embed/View combo for whatever
+    actually gets posted/edited in a server channel. The `/ticketpanel`
+    builder's own ephemeral preview is a separate admin-only tool and
+    still uses the plain-embed _ticket_render_kwargs — this class is only
+    for the final send/edit call sites.
+
+    Three possible open-control layouts, checked in order (same logic the
+    old view used):
     1. Multi-category dropdown — if the panel has 2+ configured `types`
        (see ticket_types.py), one option per type; each opens with that
        type's own category/log/role.
     2. Single-option dropdown — `open_type` is "dropdown" but no real
        types configured; a purely cosmetic choice (still opens the panel's
        one category).
-    3. Plain button — the classic default."""
+    3. Plain button — the classic default.
+
+    Persistent custom_id scheme unchanged, so bot.add_view() in on_ready
+    keeps it working after a restart."""
     def __init__(self, panel_id: str, panel: dict = None):
         super().__init__(timeout=None)
         self.panel_id = panel_id
         panel = panel or {}
+
+        title       = panel.get("title") or "Support Tickets"
+        description = panel.get("description") or "Click the button below to open a support ticket."
+        color       = panel.get("color") or COLOR_PRIMARY
+        thumbnail   = panel.get("thumbnail")
+        banner      = panel.get("image")
+
         label     = panel.get("button_label") or "Open Ticket"
         emoji     = ticket_types.safe_emoji(panel.get("button_emoji")) or (ICON_TICKET_OPEN if ICON_TICKET_OPEN else "🎫")
         style     = BUTTON_STYLES.get(panel.get("button_style"), discord.ButtonStyle.danger)
         open_type = panel.get("open_type", "button")
 
+        text_parts = [f"# {title}", description]
+        content_item = (
+            discord.ui.Section(*text_parts, accessory=discord.ui.Thumbnail(thumbnail))
+            if thumbnail else discord.ui.TextDisplay("\n\n".join(text_parts))
+        )
+
+        row = discord.ui.ActionRow()
         type_options = ticket_types.build_type_select_options(panel)
         if type_options:
             select = discord.ui.Select(
@@ -1852,7 +1877,7 @@ class TicketOpenView(discord.ui.View):
                 min_values=1, max_values=1,
             )
             select.callback = self._open_callback
-            self.add_item(select)
+            row.add_item(select)
         elif open_type == "dropdown":
             select = discord.ui.Select(
                 placeholder=label,
@@ -1861,11 +1886,21 @@ class TicketOpenView(discord.ui.View):
                 min_values=1, max_values=1,
             )
             select.callback = self._open_callback
-            self.add_item(select)
+            row.add_item(select)
         else:
             btn = discord.ui.Button(label=label, style=style, emoji=emoji or None, custom_id=f"vx_ticket_open:{panel_id}")
             btn.callback = self._open_callback
-            self.add_item(btn)
+            row.add_item(btn)
+
+        items = [content_item]
+        if banner:
+            items.append(discord.ui.Separator())
+            items.append(discord.ui.MediaGallery(discord.MediaGalleryItem(media=banner)))
+        items.append(discord.ui.Separator())
+        items.append(row)
+        items.append(discord.ui.TextDisplay(f"-# {BOT_NAME}"))
+
+        self.add_item(discord.ui.Container(*items, accent_color=discord.Color(color)))
 
     async def _open_callback(self, interaction: discord.Interaction):
         type_key = None
@@ -2001,7 +2036,7 @@ async def rotate_status():
     statuses = [
         discord.Activity(type=discord.ActivityType.watching, name="every move."),
         discord.Activity(type=discord.ActivityType.listening, name="!vx help"),
-        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.2"),
+        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.0"),
         discord.Activity(type=discord.ActivityType.watching, name=f"{len(bot.guilds)} servers"),
     ]
     import random as _r
@@ -2071,7 +2106,7 @@ async def on_ready():
             (gcfg["ticket"]["panels"][pid] for gcfg in cfg.get("guilds", {}).values() if pid in gcfg.get("ticket", {}).get("panels", {})),
             None
         )
-        bot.add_view(TicketOpenView(pid, matching_panel))
+        bot.add_view(TicketPanelLayout(pid, matching_panel))
     bot.add_view(VerificationView())
 
     if not cleanup_spam_cache.is_running():
@@ -3430,7 +3465,7 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
             return await ctx.send(embed=error_embed(f"Panel `{panel_id}` hasn't been set up yet. Run `ticket setup` first."))
         title, desc = parse_title_desc(parts[1] if len(parts) > 1 else "", panel["title"], panel["description"])
         panel["title"], panel["description"] = title, desc
-        msg = await ctx.send(embed=_build_ticket_panel_embed(panel), view=TicketOpenView(panel_id, panel))
+        msg = await ctx.send(view=TicketPanelLayout(panel_id, panel))
         panel["message_id"], panel["channel_id"] = msg.id, msg.channel.id
         save_config(cfg)
 
@@ -3453,7 +3488,7 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
             if ch:
                 try:
                     msg = await ch.fetch_message(panel["message_id"])
-                    await msg.edit(embed=_build_ticket_panel_embed(panel))
+                    await msg.edit(view=TicketPanelLayout(panel_id, panel))
                     edited = True
                 except Exception:
                     pass
@@ -4307,6 +4342,43 @@ def _build_draft_embed(draft: dict) -> discord.Embed:
     embed.set_footer(text=BOT_NAME)
     return embed
 
+def build_embed_layout(draft: dict) -> discord.ui.LayoutView:
+    """Components V2 rendering of the /embed builder's FINAL output —
+    title, description, thumbnail, banner, and any link buttons all live
+    in ONE Container, replacing the old discord.Embed + link-button View
+    combo. This is what actually gets sent/edited to the target channel;
+    the builder's own ephemeral configuration UI (_panel_render_kwargs)
+    is a separate admin-only tool and still uses a plain embed preview.
+    If no link buttons are configured, no ActionRow is added at all — it
+    stays a plain text/image container, never an empty button row."""
+    title       = draft.get("title")
+    description = draft.get("description") or ""
+    thumbnail   = draft.get("thumbnail")
+    banner      = draft.get("image")
+    color       = draft.get("color") or COLOR_PRIMARY
+    links       = draft.get("links") or []
+
+    text_parts = ([f"# {title}"] if title else []) + ([description] if description else [])
+    if not text_parts:
+        text_parts = ["*Nothing set yet.*"]
+
+    content_item = (
+        discord.ui.Section(*text_parts, accessory=discord.ui.Thumbnail(thumbnail))
+        if thumbnail else discord.ui.TextDisplay("\n\n".join(text_parts))
+    )
+
+    items = [content_item]
+    if banner:
+        items.append(discord.ui.Separator())
+        items.append(discord.ui.MediaGallery(discord.MediaGalleryItem(media=banner)))
+    if links:
+        items.append(discord.ui.Separator())
+        items.extend(embed_links.build_link_action_rows(links))
+
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(*items, accent_color=discord.Color(color)))
+    return view
+
 def _draft_summary(ctx, draft: dict) -> str:
     ch = ctx.guild.get_channel(draft.get("channel_id") or 0) if draft.get("channel_id") else None
     links = draft.get("links") or []
@@ -4353,22 +4425,78 @@ async def _resolve_message_ref(guild: discord.Guild, default_channel: Optional[d
         return None, "I don't have permission to read messages in that channel."
     return msg, None
 
+def _parse_layout_message(msg: discord.Message) -> Optional[dict]:
+    """Best-effort reader for a Components V2 (Container-based) message —
+    used by /embed edit once a message was sent as a Container instead of
+    a discord.Embed. Component attribute names for READING back a message
+    are less firmly documented than for building one, so this stays
+    defensive (getattr chains, broad except) and returns None rather than
+    guessing wrong if the shape doesn't match what this bot itself sends."""
+    try:
+        container = next((c for c in (msg.components or []) if type(c).__name__ == "Container"), None)
+        if not container:
+            return None
+        title, desc_lines, thumbnail, banner = None, [], None, None
+        for child in getattr(container, "children", []) or []:
+            kind = type(child).__name__
+            if kind == "Section":
+                texts = getattr(child, "components", None) or getattr(child, "children", None) or []
+                for t in texts:
+                    content = getattr(t, "content", "") or ""
+                    if content.startswith("# ") and title is None:
+                        title = content[2:].strip()
+                    elif content:
+                        desc_lines.append(content)
+                accessory = getattr(child, "accessory", None)
+                media = getattr(accessory, "media", None)
+                if media is not None:
+                    thumbnail = getattr(media, "url", None) or str(media)
+            elif kind == "TextDisplay":
+                content = getattr(child, "content", "") or ""
+                if content.startswith("# ") and title is None:
+                    title = content[2:].strip()
+                elif content:
+                    desc_lines.append(content)
+            elif kind == "MediaGallery":
+                items = getattr(child, "items", None) or []
+                if items:
+                    media = getattr(items[0], "media", None)
+                    banner = getattr(media, "url", None) or (str(media) if media else None)
+        color = getattr(container, "accent_colour", None) or getattr(container, "accent_color", None)
+        return {
+            "title": title, "description": "\n\n".join(desc_lines),
+            "thumbnail": thumbnail, "image": banner,
+            "color": color.value if color is not None else COLOR_PRIMARY,
+        }
+    except Exception:
+        return None
+
 def _load_message_into_draft(uid: int, msg: discord.Message) -> Optional[str]:
     """Replace the user's current embed draft with the contents of an
     already-sent message, so /embed edit can continue where that message
     left off. Returns an error string (draft left untouched) or None on
     success. Only the bot's OWN messages can be edited later (Discord
-    restriction — you can never edit another user's/bot's message)."""
+    restriction — you can never edit another user's/bot's message).
+    Handles both the old discord.Embed messages (pre-Components-V2) and
+    the new Container-based ones this bot now sends."""
     if msg.author.id != bot.user.id:
         return "I can only edit embeds that this bot sent."
-    if not msg.embeds:
-        return "That message doesn't have an embed to edit."
-    em = msg.embeds[0]
+
+    if msg.embeds:
+        em = msg.embeds[0]
+        base = {
+            "title": em.title, "description": em.description or "",
+            "thumbnail": em.thumbnail.url if em.thumbnail else None,
+            "image": em.image.url if em.image else None,
+            "color": em.color.value if em.color is not None else COLOR_PRIMARY,
+        }
+    else:
+        base = _parse_layout_message(msg)
+        if base is None:
+            return "Couldn't read this message's content automatically — it may not be something this bot built. Try rebuilding it as a new embed instead."
+
     _EMBED_DRAFTS[uid] = {
-        "title": em.title, "description": em.description or "",
-        "thumbnail": em.thumbnail.url if em.thumbnail else None,
-        "image": em.image.url if em.image else None,
-        "color": em.color.value if em.color is not None else COLOR_PRIMARY,
+        **base,
         "channel_id": msg.channel.id,
         "links": embed_links.parse_links_from_message(msg),
         "target_message_id": msg.id, "target_channel_id": msg.channel.id,
@@ -4489,17 +4617,17 @@ async def pfx_embed(ctx, sub: str = "", *, rest: str = ""):
     elif sub == "preview":
         if not draft.get("title") and not draft.get("description"):
             return await ctx.send(embed=error_embed("Nothing to preview yet — set a title or description first."))
-        await ctx.send(content="**Preview** *(not sent yet)*:", embed=_build_draft_embed(draft), view=embed_links.build_link_view(draft.get("links", [])))
+        await ctx.send("**Preview** *(not sent yet)*:")
+        await ctx.send(view=build_embed_layout(draft))
 
     elif sub == "reset":
         _EMBED_DRAFTS.pop(ctx.author.id, None)
         await ctx.send(embed=success_embed("Embed draft cleared."))
 
     elif sub == "send":
-        links = draft.get("links", [])
-        link_view = embed_links.build_link_view(links)
         if not draft.get("title") and not draft.get("description"):
             return await ctx.send(embed=error_embed("Nothing to send yet — set a title or description first."))
+        layout = build_embed_layout(draft)
 
         target_channel_id = draft.get("target_channel_id")
         target_message_id = draft.get("target_message_id")
@@ -4509,7 +4637,7 @@ async def pfx_embed(ctx, sub: str = "", *, rest: str = ""):
                 return await ctx.send(embed=error_embed("Can't find the original channel anymore — the message may have been deleted."))
             try:
                 msg = await ch.fetch_message(target_message_id)
-                await msg.edit(embed=_build_draft_embed(draft), view=link_view)
+                await msg.edit(view=layout)
             except discord.NotFound:
                 return await ctx.send(embed=error_embed("That message doesn't exist anymore — run `embed reset` and send it as new instead."))
             except discord.Forbidden:
@@ -4521,7 +4649,7 @@ async def pfx_embed(ctx, sub: str = "", *, rest: str = ""):
         if not ch:
             return await ctx.send(embed=error_embed("No target channel set yet — run `embed channel #channel` first."))
         try:
-            await ch.send(embed=_build_draft_embed(draft), view=link_view)
+            await ch.send(view=layout)
         except discord.Forbidden:
             return await ctx.send(embed=error_embed("I don't have permission to send messages in that channel."))
         _EMBED_DRAFTS.pop(ctx.author.id, None)
@@ -5917,7 +6045,7 @@ class EmbedBuilderPanel(discord.ui.View):
         draft = _get_embed_draft(interaction.user.id)
         if not draft.get("title") and not draft.get("description"):
             return await interaction.response.send_message(embed=error_embed("Nothing to send yet — set a title or description first."), ephemeral=True)
-        link_view = embed_links.build_link_view(draft.get("links", []))
+        layout = build_embed_layout(draft)
 
         target_channel_id = draft.get("target_channel_id")
         target_message_id = draft.get("target_message_id")
@@ -5927,7 +6055,7 @@ class EmbedBuilderPanel(discord.ui.View):
                 return await interaction.response.send_message(embed=error_embed("Can't find the original channel anymore — the message may have been deleted."), ephemeral=True)
             try:
                 msg = await ch.fetch_message(target_message_id)
-                await msg.edit(embed=_build_draft_embed(draft), view=link_view)
+                await msg.edit(view=layout)
             except discord.NotFound:
                 return await interaction.response.send_message(embed=error_embed("That message doesn't exist anymore — `embed reset` and send it as new instead."), ephemeral=True)
             except discord.Forbidden:
@@ -5938,7 +6066,7 @@ class EmbedBuilderPanel(discord.ui.View):
             return await interaction.response.edit_message(content=f"✅ Updated the existing embed in {ch.mention} — draft cleared.", view=self)
 
         try:
-            await self.channel.send(embed=_build_draft_embed(draft), view=link_view)
+            await self.channel.send(view=layout)
         except discord.Forbidden:
             return await interaction.response.send_message(embed=error_embed("I don't have permission to send messages in that channel."), ephemeral=True)
         _EMBED_DRAFTS.pop(interaction.user.id, None)
@@ -6086,7 +6214,7 @@ async def _resync_panel_message(guild: discord.Guild, panel_id: str, panel: dict
         return False
     try:
         msg = await ch.fetch_message(panel["message_id"])
-        await msg.edit(view=TicketOpenView(panel_id, panel))
+        await msg.edit(view=TicketPanelLayout(panel_id, panel))
         return True
     except Exception:
         return False
@@ -6418,7 +6546,7 @@ class TicketPanelBuilderView(discord.ui.View):
             if old_channel:
                 try:
                     old_msg = await old_channel.fetch_message(old_message_id)
-                    await old_msg.edit(embed=_build_ticket_panel_embed(panel), view=TicketOpenView(panel_id, panel))
+                    await old_msg.edit(view=TicketPanelLayout(panel_id, panel))
                     panel["channel_id"] = old_channel.id
                     target_channel      = old_channel
                     edited_existing     = True
@@ -6427,7 +6555,7 @@ class TicketPanelBuilderView(discord.ui.View):
 
         if not edited_existing:
             try:
-                msg = await self.post_channel.send(embed=_build_ticket_panel_embed(panel), view=TicketOpenView(panel_id, panel))
+                msg = await self.post_channel.send(view=TicketPanelLayout(panel_id, panel))
             except discord.Forbidden:
                 return await interaction.followup.send(embed=error_embed("I don't have permission to send messages in that channel."), ephemeral=True)
             except discord.HTTPException as ex:
