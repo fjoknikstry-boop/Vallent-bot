@@ -18,7 +18,7 @@ Features:
   - Multi-language support
   - Owner supreme — overrides all permission checks
 """
- 
+
 import discord
 import aiohttp
 from discord import app_commands
@@ -1898,7 +1898,6 @@ class TicketPanelLayout(discord.ui.LayoutView):
             items.append(discord.ui.MediaGallery(discord.MediaGalleryItem(media=banner)))
         items.append(discord.ui.Separator())
         items.append(row)
-        items.append(discord.ui.TextDisplay(f"-# {BOT_NAME}"))
 
         self.add_item(discord.ui.Container(*items, accent_color=discord.Color(color)))
 
