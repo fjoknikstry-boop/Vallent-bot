@@ -65,7 +65,7 @@ from aiohttp import web as aiohttp_web
 # ══════════════════════════════════════════════════════════════════
 
 BOT_NAME      = "VALLENT EXS"
-BOT_TAGLINE   = "Nocturne Development."
+BOT_TAGLINE   = "by Nikoliesamphink."
 BOT_VERSION   = "1.2.0"
 BOT_BANNER_URL: Optional[str] = None  # populated once in on_ready() from the bot account's Discord banner, if it has one
 BOT_PREFIX    = "!vx "
@@ -2034,8 +2034,9 @@ async def rotate_status():
         return
     statuses = [
         discord.Activity(type=discord.ActivityType.watching, name="every move."),
+        discord.Activity(type=discord.ActivityType.playing, name="hyper moderation."),
         discord.Activity(type=discord.ActivityType.listening, name="!vx help"),
-        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.0"),
+        discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.2"),
         discord.Activity(type=discord.ActivityType.watching, name=f"{len(bot.guilds)} servers"),
     ]
     import random as _r
