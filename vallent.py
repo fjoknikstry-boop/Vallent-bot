@@ -18,7 +18,7 @@ Features:
   - Multi-language support
   - Owner supreme — overrides all permission checks
 """
-
+ 
 import discord
 import aiohttp
 from discord import app_commands
