@@ -14,7 +14,8 @@ draft's "links" key is just a plain list of
 `{"label": str, "url": str, "emoji": str|None}` dicts — nothing here
 depends on any bot/cfg state, so it's trivial to test or reuse.
 
-If a draft has zero links, build_link_view() returns None on purpose —
+If a draft has zero links, build_link_action_rows() returns an empty
+list on purpose —
 callers should then send/edit the message with NO `view` argument at
 all, so it stays a completely ordinary embed message (no empty button
 row silently attached).
@@ -52,31 +53,38 @@ def add_link(links: list, label: str, url: str, emoji: str = "") -> Optional[str
     return None
 
 
-def build_link_view(links: list) -> Optional[discord.ui.View]:
-    """Build the real View to send/edit onto the final message. Returns
-    None for an empty list on purpose — see module docstring."""
-    if not links:
-        return None
-    view = discord.ui.View(timeout=None)  # link buttons never expire — nothing here has a callback to time out
-    for link in links[:MAX_LINKS]:
-        view.add_item(discord.ui.Button(
-            label=(link.get("label") or "Link")[:80],
-            url=link["url"],
-            style=discord.ButtonStyle.link,
-            emoji=link.get("emoji") or None,
-        ))
-    return view
+def build_link_action_rows(links: list) -> list:
+    """Build the ActionRows to drop straight into a discord.ui.Container —
+    max 5 buttons per row (Discord's own limit), chunked automatically.
+    Returns an empty list for no links — callers should then build the
+    Container with no ActionRow at all, so the message stays a plain
+    text/image container, never an empty button row."""
+    rows = []
+    for i in range(0, min(len(links), MAX_LINKS), 5):
+        row = discord.ui.ActionRow()
+        for link in links[i:i + 5]:
+            row.add_item(discord.ui.Button(
+                label=(link.get("label") or "Link")[:80],
+                url=link["url"],
+                style=discord.ButtonStyle.link,
+                emoji=link.get("emoji") or None,
+            ))
+        rows.append(row)
+    return rows
 
 
 def parse_links_from_message(message: discord.Message) -> list:
     """Pull existing link buttons off an already-sent message — used when
     loading a message into the builder for editing, so any link buttons
     it already had aren't silently lost if the user doesn't touch them.
-    Non-link components (there shouldn't be any on a plain embed message,
-    but be defensive) are skipped."""
+    Walks recursively since Components V2 messages nest buttons inside
+    Container > ActionRow, one level deeper than the legacy ActionRow >
+    Button structure this originally only handled. Non-link components
+    are skipped."""
     links = []
-    for row in getattr(message, "components", []) or []:
-        for comp in getattr(row, "children", []) or []:
+
+    def _walk(items):
+        for comp in items or []:
             url = getattr(comp, "url", None)
             if url:
                 links.append({
@@ -84,4 +92,9 @@ def parse_links_from_message(message: discord.Message) -> list:
                     "url": url,
                     "emoji": str(comp.emoji) if getattr(comp, "emoji", None) else None,
                 })
+            children = getattr(comp, "children", None)
+            if children:
+                _walk(children)
+
+    _walk(getattr(message, "components", []))
     return links[:MAX_LINKS]
