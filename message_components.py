@@ -48,37 +48,94 @@ BUTTON_STYLE_CHOICES = {
 }
 
 
+def build_link_button(label: str, url: str, emoji: str = ""):
+    """Validate + build a link-type button dict. Returns (dict_or_None,
+    error_or_None) — used for BOTH adding a new link button and editing
+    an existing one in place."""
+    if not (label or "").strip():
+        return None, "Label can't be empty."
+    if not (url or "").strip() or not _URL_RE.match(url.strip()):
+        return None, "URL must start with `http://` or `https://`."
+    return {"kind": "link", "label": label.strip()[:80], "url": url.strip(), "emoji": (emoji or "").strip() or None}, None
+
+
 def add_link_button(buttons: list, label: str, url: str, emoji: str = "") -> Optional[str]:
     """Append a link-type button spec to `buttons` IN PLACE. Returns an
     error string (leaving `buttons` untouched) if invalid or already at
     the cap, else None on success."""
     if len(buttons) >= MAX_BUTTONS:
         return f"This message already has the max {MAX_BUTTONS} buttons Discord allows."
-    if not (label or "").strip():
-        return "Label can't be empty."
-    if not (url or "").strip() or not _URL_RE.match(url.strip()):
-        return "URL must start with `http://` or `https://`."
-    buttons.append({"kind": "link", "label": label.strip()[:80], "url": url.strip(), "emoji": (emoji or "").strip() or None})
+    built, err = build_link_button(label, url, emoji)
+    if err:
+        return err
+    buttons.append(built)
     return None
 
 
+def edit_link_button(buttons: list, index: int, label: str, url: str, emoji: str = "") -> Optional[str]:
+    """Replace the link-type button at `index` IN PLACE (keeps its
+    position in the list). Returns an error string (leaving `buttons`
+    untouched) if invalid or index out of range."""
+    if not (0 <= index < len(buttons)):
+        return "That button no longer exists — the list may have changed."
+    built, err = build_link_button(label, url, emoji)
+    if err:
+        return err
+    buttons[index] = built
+    return None
+
+
+_MAX_RESPONSE_TEXT = 4000  # Discord's own hard cap on a single modal TextInput / TextDisplay — can't go higher than this
+
+
+def build_response_button(label: str, response_title: str, response_description: str, emoji: str = "",
+                           style: str = "secondary", response_thumbnail: str = "", response_banner: str = ""):
+    """Validate + build a response-type button dict. Returns (dict_or_None,
+    error_or_None) — used for BOTH adding a new response button and
+    editing an existing one in place (caller decides append vs replace),
+    so validation only lives in one place."""
+    if not (label or "").strip():
+        return None, "Label can't be empty."
+    if not (response_title or "").strip() and not (response_description or "").strip():
+        return None, "Set at least a response title or description — the button needs something to show when clicked."
+    for field_name, val in (("thumbnail", response_thumbnail), ("banner", response_banner)):
+        if val and not val.strip().startswith(("http://", "https://")):
+            return None, f"Response {field_name} must be a direct image URL (starting with http:// or https://)."
+    return {
+        "kind": "response", "label": label.strip()[:80], "emoji": (emoji or "").strip() or None,
+        "style": style if style in BUTTON_STYLE_CHOICES else "secondary",
+        "response_title": (response_title or "").strip()[:256],
+        "response_description": (response_description or "").strip()[:_MAX_RESPONSE_TEXT],
+        "response_thumbnail": (response_thumbnail or "").strip() or None,
+        "response_banner": (response_banner or "").strip() or None,
+    }, None
+
+
 def add_response_button(buttons: list, label: str, response_title: str, response_description: str,
-                         emoji: str = "", style: str = "secondary") -> Optional[str]:
+                         emoji: str = "", style: str = "secondary", response_thumbnail: str = "", response_banner: str = "") -> Optional[str]:
     """Append a response-type button spec to `buttons` IN PLACE. Returns
     an error string (leaving `buttons` untouched) if invalid or already
     at the cap, else None on success."""
     if len(buttons) >= MAX_BUTTONS:
         return f"This message already has the max {MAX_BUTTONS} buttons Discord allows."
-    if not (label or "").strip():
-        return "Label can't be empty."
-    if not (response_title or "").strip() and not (response_description or "").strip():
-        return "Set at least a response title or description — the button needs something to show when clicked."
-    buttons.append({
-        "kind": "response", "label": label.strip()[:80], "emoji": (emoji or "").strip() or None,
-        "style": style if style in BUTTON_STYLE_CHOICES else "secondary",
-        "response_title": (response_title or "").strip()[:256],
-        "response_description": (response_description or "").strip()[:4000],
-    })
+    built, err = build_response_button(label, response_title, response_description, emoji, style, response_thumbnail, response_banner)
+    if err:
+        return err
+    buttons.append(built)
+    return None
+
+
+def edit_response_button(buttons: list, index: int, label: str, response_title: str, response_description: str,
+                          emoji: str = "", style: str = "secondary", response_thumbnail: str = "", response_banner: str = "") -> Optional[str]:
+    """Replace the response-type button at `index` IN PLACE (keeps its
+    position in the list, unlike remove+re-add). Returns an error string
+    (leaving `buttons` untouched) if invalid or index out of range."""
+    if not (0 <= index < len(buttons)):
+        return "That button no longer exists — the list may have changed."
+    built, err = build_response_button(label, response_title, response_description, emoji, style, response_thumbnail, response_banner)
+    if err:
+        return err
+    buttons[index] = built
     return None
 
 
