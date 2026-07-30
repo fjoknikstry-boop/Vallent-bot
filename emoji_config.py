@@ -54,7 +54,7 @@ ICON_AUTOMOD     = "<:emoji_53:1531719087405793510>"
 ICON_AUTORESPONSE = "<:emoji_68:1531722117702221945>"   # Icon untuk section Auto-Response — isi ID emoji lu di sini
 ICON_AFK          = "<:emoji_68:1531720475380814008>"   # Icon untuk section & notifikasi AFK — isi ID emoji lu di sini (fallback: 💤)
 # Status / result icons
-ICON_SUCCESS     = "<:topgg_opt_yes:1531543705989677069>"   # Icon sukses (checklist, dll)
+ICON_SUCCESS     = "<:emoji_70:1532220901431578644>"   # Icon sukses (checklist, dll)
 ICON_ERROR       = "<:emoji_67:1531720428257542174>"   # Icon error / gagal
 ICON_WARNING     = "<:emoji_43:1531718404560388198>"   # Icon warning / peringatan
 ICON_LOADING     = "<a:emoji_53:1529240301539954778>"   # Icon loading / proses
@@ -77,6 +77,7 @@ ICON_STATUS_DEGRADED    = "<a:Loading:1529932224655527948>"   # isi ID emoji lu 
  
 ICON_EMBED       = "<:emoji_58:1531719226270810273>"   # Icon untuk section Embed Builder di help menu — isi ID emoji lu di sini (fallback: 🖼️)
 ICON_EMBED_SEND  = "<:emoji_64:1531719425626083348>"   # Icon untuk tombol Send di panel /embed — isi ID emoji lu di sini (fallback: ✅)
+ICON_COMPONENT   = "<:emoji_73:1532220978581733416>"   # Icon untuk section Message Component Builder (/component) di help menu — isi ID emoji lu di sini (fallback: 🔘)
  
 # Profile card icons
 ICON_PROFILE     = "<:emoji_52:1528948967314817024>"   # Icon di header profile
