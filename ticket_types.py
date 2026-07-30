@@ -89,6 +89,27 @@ def safe_emoji(raw: Optional[str]) -> Optional[str]:
     return None
 
 
+def safe_emoji_for_guild(guild: Optional[discord.Guild], raw: Optional[str]) -> Optional[str]:
+    """Same as safe_emoji(), but ALSO confirms a custom emoji tag
+    (`<:name:id>` / `<a:name:id>`) still actually exists in `guild` before
+    trusting it. A syntactically-valid tag whose emoji was later deleted
+    from the server (or copy-pasted from a config edit / a different
+    server) passes safe_emoji()'s regex fine but gets rejected by
+    Discord's API with a 400 Invalid Form Body — and because that happens
+    while building a whole Select's options list, ONE bad emoji takes
+    down the entire dropdown with it. This is the version to use anywhere
+    a stored emoji ends up inside a discord.ui.Select/SelectOption, so a
+    stale emoji degrades to "no emoji shown" instead of a broken menu."""
+    resolved = safe_emoji(raw)
+    if not resolved or not guild:
+        return resolved
+    m = _CUSTOM_EMOJI_RE.match(resolved)
+    if not m:
+        return resolved  # plain unicode emoji — nothing to verify
+    emoji_id = int(m.group(3))
+    return resolved if discord.utils.get(guild.emojis, id=emoji_id) else None
+
+
 def slugify_type_id(label: str, existing: dict) -> str:
     """Turn a type's label into a short, stable dict key (e.g. 'Billing
     Support' -> 'billing_support'). Uniquified against keys already used
@@ -128,21 +149,29 @@ def get_type_config(panel: dict, type_key: Optional[str]) -> dict:
     }
 
 
-def build_type_select_options(panel: dict) -> list:
+def build_type_select_options(panel: dict, guild: Optional[discord.Guild] = None) -> list:
     """discord.SelectOption list from a panel's configured types. Returns
     an empty list if the panel has no multi-type config (0 or 1 types
     isn't worth a "pick your type" dropdown) — caller should fall back to
-    its existing single button/select behavior in that case."""
+    its existing single button/select behavior in that case.
+
+    Pass `guild` when it's available (e.g. from an interaction) so any
+    custom emoji that's been deleted since it was configured gets quietly
+    dropped instead of causing Discord to reject the whole dropdown with
+    a 400 Invalid Form Body. Safe to omit `guild` (e.g. building this at
+    process startup for a persistent view with no guild context yet) —
+    it just falls back to the non-guild-checked safe_emoji()."""
     types = panel.get("types") or {}
     if len(types) < 2:
         return []
     options = []
     for key, t in types.items():
+        emoji = safe_emoji_for_guild(guild, t.get("emoji")) if guild else safe_emoji(t.get("emoji"))
         options.append(discord.SelectOption(
             label=(t.get("label") or key)[:100],
             value=key,
             description=(t.get("description") or "")[:100] or None,
-            emoji=safe_emoji(t.get("emoji")) or None,
+            emoji=emoji or None,
         ))
     return options[:MAX_TYPES_PER_PANEL]
 
