@@ -75,7 +75,7 @@ ICON_STATUS_DEGRADED    = "<a:Loading:1529932224655527948>"   # isi ID emoji lu 
 # section icon & tombol Send di panel builder)
 # ══════════════════════════════════════════════════════════════════
  
-ICON_EMBED       = "<:emoji_58:1531719226270810273>"   # Icon untuk section Embed Builder di help menu — isi ID emoji lu di sini (fallback: 🖼️)
+ICON_EMBED       = "<:emoji_76:1532226202872316075>"   # Icon untuk section Embed Builder di help menu — isi ID emoji lu di sini (fallback: 🖼️)
 ICON_EMBED_SEND  = "<:emoji_64:1531719425626083348>"   # Icon untuk tombol Send di panel /embed — isi ID emoji lu di sini (fallback: ✅)
 ICON_COMPONENT   = "<:emoji_73:1532220978581733416>"   # Icon untuk section Message Component Builder (/component) di help menu — isi ID emoji lu di sini (fallback: 🔘)
  
