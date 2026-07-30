@@ -49,7 +49,7 @@ from emoji_config import (
     ICON_AFK, ICON_VERIFICATION,
     ICON_STATUS_ONLINE, ICON_STATUS_OFFLINE, ICON_STATUS_MAINTENANCE,
     ICON_STATUS_UPDATE, ICON_STATUS_DEGRADED,
-    ICON_EMBED, ICON_EMBED_SEND,
+    ICON_EMBED, ICON_EMBED_SEND, ICON_COMPONENT,
     e
 )
 import rank_card
@@ -57,6 +57,7 @@ import antinuke
 import ticket_types
 import vote_system
 import embed_links
+import message_components
 from aiohttp import web as aiohttp_web
 
 
@@ -212,6 +213,7 @@ def _init_guild(gc: dict):
     gc.setdefault("autoresponses", {})   # trigger(lower) -> {"trigger","response","match","case_sensitive"}
     gc.setdefault("afk_users", {})   # uid(str) -> {"reason": str, "since": unix_ts}
     gc.setdefault("afk_free_users", [])  # uid(int) list — manually granted bypass of the AFK slot limit, no vote needed
+    gc.setdefault("message_components", {})  # component_id -> {title, description, thumbnail, image, color, buttons, message_id, channel_id}
     gc.setdefault("antinuke", {
         "enabled":     False,
         "log_channel": None,
@@ -2033,8 +2035,7 @@ async def rotate_status():
             pass
         return
     statuses = [
-        discord.Activity(type=discord.ActivityType.watching, name="every move."),
-        discord.Activity(type=discord.ActivityType.playing, name="hyper moderation."),
+        discord.Activity(type=discord.ActivityType.watching, name="Hyper moderation."),
         discord.Activity(type=discord.ActivityType.listening, name="!vx help"),
         discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.2"),
         discord.Activity(type=discord.ActivityType.watching, name=f"{len(bot.guilds)} servers"),
@@ -2108,6 +2109,12 @@ async def on_ready():
         )
         bot.add_view(TicketPanelLayout(pid, matching_panel))
     bot.add_view(VerificationView())
+
+    # Re-register persistent views for /component messages (only response
+    # buttons actually need this — link buttons work statelessly forever).
+    for gcfg in cfg.get("guilds", {}).values():
+        for cid, comp in gcfg.get("message_components", {}).items():
+            bot.add_view(MessageComponentLayout(cid, comp))
 
     if not cleanup_spam_cache.is_running():
         cleanup_spam_cache.start()
@@ -4275,6 +4282,18 @@ def _get_embed_draft(uid: int) -> dict:
         "_history": [],
     })
 
+# ── /component draft store — same generic snapshot/undo helpers above ──
+
+_COMPONENT_DRAFTS: dict = {}   # uid -> draft dict
+
+def _get_component_draft(uid: int) -> dict:
+    return _COMPONENT_DRAFTS.setdefault(uid, {
+        "component_id": None, "title": None, "description": "", "thumbnail": None,
+        "image": None, "color": COLOR_PRIMARY, "channel_id": None,
+        "buttons": [], "target_message_id": None, "target_channel_id": None,
+        "_history": [],
+    })
+
 def _snapshot_draft(draft: dict) -> None:
     """Push a copy of the draft's current content onto its undo stack,
     right before applying a new change. Capped so it can't grow forever."""
@@ -4378,6 +4397,69 @@ def build_embed_layout(draft: dict) -> discord.ui.LayoutView:
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.Container(*items, accent_color=discord.Color(color)))
     return view
+
+async def handle_component_button_click(interaction: discord.Interaction):
+    """Routes a response-type button click back to its stored response
+    text. custom_id shape: vx_msgcomp:{component_id}:{button_index}."""
+    custom_id = (interaction.data or {}).get("custom_id", "")
+    try:
+        _, component_id, idx_str = custom_id.split(":", 2)
+        idx = int(idx_str)
+    except (ValueError, AttributeError):
+        return
+    gc  = guild_cfg(cfg, interaction.guild.id)
+    comp = gc.get("message_components", {}).get(component_id)
+    if not comp or idx >= len(comp.get("buttons", [])):
+        return await interaction.response.send_message(embed=error_embed("This button's data couldn't be found — it may have been removed or the message rebuilt."), ephemeral=True)
+    btn = comp["buttons"][idx]
+    if btn.get("kind") != "response":
+        return
+
+    text_parts = ([f"# {btn['response_title']}"] if btn.get("response_title") else []) + \
+                 ([btn["response_description"]] if btn.get("response_description") else [])
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(
+        discord.ui.TextDisplay("\n\n".join(text_parts) or "*(nothing set)*"),
+        accent_color=discord.Color(comp.get("color") or COLOR_PRIMARY),
+    ))
+    await interaction.response.send_message(view=view, ephemeral=True)
+
+class MessageComponentLayout(discord.ui.LayoutView):
+    """Components V2 rendering of a LIVE /component message — title,
+    description, thumbnail, banner, and its link/response buttons all in
+    ONE Container. Persistent (timeout=None) and re-registered via
+    bot.add_view() in on_ready for every entry in each guild's
+    `message_components` store, exactly like TicketPanelLayout, since
+    response-type buttons need a live interaction handler to survive a
+    bot restart (link-type buttons don't — Discord opens those directly,
+    no bot involvement at all)."""
+    def __init__(self, component_id: str, comp: dict = None):
+        super().__init__(timeout=None)
+        comp = comp or {}
+        title       = comp.get("title")
+        description = comp.get("description") or ""
+        thumbnail   = comp.get("thumbnail")
+        banner      = comp.get("image")
+        color       = comp.get("color") or COLOR_PRIMARY
+        buttons     = comp.get("buttons") or []
+
+        text_parts = ([f"# {title}"] if title else []) + ([description] if description else [])
+        if not text_parts:
+            text_parts = ["*Nothing set yet.*"]
+        content_item = (
+            discord.ui.Section(*text_parts, accessory=discord.ui.Thumbnail(thumbnail))
+            if thumbnail else discord.ui.TextDisplay("\n\n".join(text_parts))
+        )
+
+        items = [content_item]
+        if banner:
+            items.append(discord.ui.Separator())
+            items.append(discord.ui.MediaGallery(discord.MediaGalleryItem(media=banner)))
+        if buttons:
+            items.append(discord.ui.Separator())
+            items.extend(message_components.build_action_rows(buttons, component_id, handle_component_button_click))
+
+        self.add_item(discord.ui.Container(*items, accent_color=discord.Color(color)))
 
 def _draft_summary(ctx, draft: dict) -> str:
     ch = ctx.guild.get_channel(draft.get("channel_id") or 0) if draft.get("channel_id") else None
@@ -5414,8 +5496,14 @@ HELP_CATEGORIES = [
     ("embed", "Embed Builder", ICON_EMBED, "🖼️", (
         "`embed title/description/append/separator` — write the content\n"
         "`embed thumbnail/banner/color` — style it (URL or attach an image)\n"
-        "`embed channel #channel` · `embed preview` · `embed send` · `embed reset`\n"
+        "`embed channel #channel` · `embed edit <link/ID>` · `embed link add/remove/list` · `embed preview` · `embed send` · `embed reset`\n"
         "Admin/owner only. Draft is per-user, kept until you send or reset it."
+    )),
+    ("component", "Message Component Builder", ICON_COMPONENT, "🔘", (
+        "`component <id> #channel` · `/component` — same builder as Embed, plus buttons\n"
+        "Buttons can be **links** (open a URL) or **responses** (show the clicker an ephemeral message)\n"
+        "Reuse the same `<id>` later to edit that same message instead of posting a new one\n"
+        "Admin/owner only (Manage Server)."
     )),
     ("afk", "AFK System", ICON_AFK, "💤", (
         "`afk [reason]` (alias `away`) · `/afk` — set yourself as AFK\n"
@@ -6111,6 +6199,420 @@ async def slash_embed(
     draft = _get_embed_draft(i.user.id)
     view  = EmbedBuilderPanel(channel, i.user.id, is_edit=is_edit)
     await i.response.send_message(view=view, **_panel_render_kwargs(draft), ephemeral=True)
+
+# ══════════════════════════════════════════════════════════════════
+# /component — same builder pattern as /embed (title, description,
+# thumbnail, banner, color), but its buttons can be either a link OR a
+# "response" button that shows the clicking user an ephemeral message.
+# Unlike /embed, response buttons need a live interaction handler, so
+# every /component message is persisted in `message_components` and its
+# view re-registered via bot.add_view() in on_ready so it survives
+# restarts — see MessageComponentLayout above.
+# ══════════════════════════════════════════════════════════════════
+
+def _build_component_preview_embed(draft: dict) -> discord.Embed:
+    embed = discord.Embed(color=draft.get("color") or COLOR_PRIMARY, timestamp=discord.utils.utcnow())
+    embed.title = draft.get("title") or None
+    embed.description = draft.get("description") or "*Nothing set yet — use the buttons below to start building.*"
+    if draft.get("thumbnail"):
+        embed.set_thumbnail(url=draft["thumbnail"])
+    if draft.get("image"):
+        embed.set_image(url=draft["image"])
+    embed.set_footer(text=BOT_NAME)
+    return embed
+
+def _component_render_kwargs(draft: dict) -> dict:
+    buttons = draft.get("buttons") or []
+    notes = []
+    if draft.get("target_message_id"):
+        notes.append("editing an existing message — **Update** applies changes to it")
+    if buttons:
+        notes.append(f"🔘 {len(buttons)} button(s) configured")
+    content = f"**Message Component Builder** `{draft.get('component_id')}`" + ((" — " + " · ".join(notes)) if notes else "")
+    return {"content": content, "embed": _build_component_preview_embed(draft)}
+
+class ComponentFieldModal(discord.ui.Modal):
+    """Generic single-field modal for the component builder's text
+    fields — mirrors EmbedFieldModal exactly, just pointed at the
+    component draft store instead."""
+    def __init__(self, field: str, label: str,
+                 current: str = "", style=discord.TextStyle.short, max_length: int = 256, placeholder: str = ""):
+        super().__init__(title=label, timeout=300)
+        self.field = field
+        self.value_input = discord.ui.TextInput(
+            label=label, style=style, required=False, default=current,
+            max_length=max_length, placeholder=placeholder
+        )
+        self.add_item(self.value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        draft = _get_component_draft(interaction.user.id)
+        val   = self.value_input.value.strip()
+
+        if self.field == "color":
+            hex_txt = val.lstrip("#")
+            if hex_txt:
+                try:
+                    int(hex_txt, 16)
+                except ValueError:
+                    return await interaction.response.send_message(embed=error_embed("Invalid hex color — try something like `8B0000`."), ephemeral=True)
+        elif self.field in ("thumbnail", "image") and val and not val.startswith("http"):
+            return await interaction.response.send_message(embed=error_embed("Must be a direct image URL."), ephemeral=True)
+
+        _snapshot_draft(draft)
+        if self.field == "append":
+            if val:
+                draft["description"] = (draft.get("description", "") + "\n" + val).strip()[:4000]
+        elif self.field == "color":
+            draft["color"] = int(val.lstrip("#"), 16) if val else COLOR_PRIMARY
+        elif self.field in ("thumbnail", "image"):
+            draft[self.field] = val or None
+        else:  # title / description
+            draft[self.field] = val or None
+
+        await interaction.response.edit_message(**_component_render_kwargs(draft))
+
+class ComponentSeparatorSelect(discord.ui.Select):
+    def __init__(self):
+        options = [discord.SelectOption(label=s.capitalize(), value=s, description=SEPARATOR_STYLES[s][:40]) for s in SEPARATOR_STYLES]
+        super().__init__(placeholder="Insert a separator line…", options=options, min_values=1, max_values=1, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        draft = _get_component_draft(interaction.user.id)
+        style = self.values[0]
+        _snapshot_draft(draft)
+        draft["description"] = (draft.get("description", "") + f"\n{SEPARATOR_STYLES[style]}\n").strip("\n")[:4000]
+        await interaction.response.edit_message(**_component_render_kwargs(draft))
+
+class ComponentLinkModal(discord.ui.Modal, title="Add Link Button"):
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.label_input = discord.ui.TextInput(label="Button label", max_length=80, placeholder="e.g. Visit Our Website")
+        self.url_input   = discord.ui.TextInput(label="URL", max_length=512, placeholder="https://...")
+        self.emoji_input = discord.ui.TextInput(label="Emoji (optional)", required=False, max_length=100, placeholder="e.g. 🔗 or a custom emoji")
+        self.add_item(self.label_input)
+        self.add_item(self.url_input)
+        self.add_item(self.emoji_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        draft   = _get_component_draft(interaction.user.id)
+        buttons = draft.setdefault("buttons", [])
+        resolved_emoji, warning = ticket_types.resolve_emoji_input(interaction.guild, self.emoji_input.value)
+        err = message_components.add_link_button(buttons, self.label_input.value, self.url_input.value, resolved_emoji or "")
+        if err:
+            return await interaction.response.send_message(embed=error_embed(err), ephemeral=True)
+        render = _component_render_kwargs(draft)
+        if warning:
+            render["content"] = f"⚠️ {warning}\n\n" + render["content"]
+        await interaction.response.edit_message(**render)
+
+class ComponentResponseModal(discord.ui.Modal, title="Add Response Button"):
+    """A button that, when a member clicks it, shows THEM an ephemeral
+    message with the title/description set here — no link, no ticket,
+    just information only the clicker sees."""
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.label_input = discord.ui.TextInput(label="Button label", max_length=80, placeholder="e.g. Rules")
+        self.emoji_input = discord.ui.TextInput(label="Emoji (optional)", required=False, max_length=100, placeholder="e.g. 📜 or a custom emoji")
+        self.title_input = discord.ui.TextInput(label="Response title (optional)", required=False, max_length=256, placeholder="Shown when clicked")
+        self.desc_input  = discord.ui.TextInput(label="Response text", required=False, style=discord.TextStyle.paragraph, max_length=1000, placeholder="What the clicking member sees")
+        self.add_item(self.label_input)
+        self.add_item(self.emoji_input)
+        self.add_item(self.title_input)
+        self.add_item(self.desc_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        draft   = _get_component_draft(interaction.user.id)
+        buttons = draft.setdefault("buttons", [])
+        resolved_emoji, warning = ticket_types.resolve_emoji_input(interaction.guild, self.emoji_input.value)
+        err = message_components.add_response_button(
+            buttons, self.label_input.value, self.title_input.value, self.desc_input.value, resolved_emoji or ""
+        )
+        if err:
+            return await interaction.response.send_message(embed=error_embed(err), ephemeral=True)
+        render = _component_render_kwargs(draft)
+        if warning:
+            render["content"] = f"⚠️ {warning}\n\n" + render["content"]
+        await interaction.response.edit_message(**render)
+
+class ComponentButtonRemoveSelect(discord.ui.Select):
+    def __init__(self, buttons: list):
+        options = [
+            discord.SelectOption(label=f"{i+1}. {('🔗' if b['kind']=='link' else '💬')} {b['label']}"[:100], value=str(i))
+            for i, b in enumerate(buttons)
+        ]
+        super().__init__(placeholder="Choose a button to remove…", options=options[:25], min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        view.selected_index = int(self.values[0])
+        await interaction.response.edit_message(content=f"Selected **{self.values[0]}** — hit **Remove Selected** to confirm.", view=view)
+
+class ComponentButtonManageView(discord.ui.View):
+    def __init__(self, owner_id: int, buttons: list):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.selected_index = None
+        self.add_item(ComponentButtonRemoveSelect(buttons))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(embed=error_embed("This isn't your component builder — run `/component` yourself."), ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Remove Selected", style=discord.ButtonStyle.danger, row=1)
+    async def remove_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        if self.selected_index is None:
+            return await interaction.response.send_message(embed=error_embed("Pick a button from the dropdown first."), ephemeral=True)
+        draft   = _get_component_draft(interaction.user.id)
+        buttons = draft.get("buttons", [])
+        removed = message_components.remove_button(buttons, self.selected_index)
+        if removed is None:
+            return await interaction.response.send_message(embed=error_embed("That button no longer exists — the list may have changed."), ephemeral=True)
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content=f"✅ Removed button **{removed['label']}**. Go back to the builder to see the updated preview.", view=self)
+
+class ComponentBuilderPanel(discord.ui.View):
+    """The /component builder — same layout style as EmbedBuilderPanel,
+    with two ways to add a button: a link (opens a URL) or a response
+    (shows the clicker an ephemeral message). Sending/updating always
+    persists this message's full state to `message_components` so
+    response buttons keep working after a bot restart."""
+    def __init__(self, channel: Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel], owner_id: int, is_edit: bool = False):
+        super().__init__(timeout=900)
+        self.channel  = channel
+        self.owner_id = owner_id
+        self.is_edit  = is_edit
+        self.add_item(ComponentSeparatorSelect())
+        if is_edit:
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.style == discord.ButtonStyle.success:
+                    item.label = "Update"
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(embed=error_embed("This isn't your component builder — run `/component` yourself."), ephemeral=True)
+            return False
+        return True
+
+    async def _open_modal(self, interaction, field, label, current="", **kw):
+        await interaction.response.send_modal(ComponentFieldModal(field, label, current=current, **kw))
+
+    @discord.ui.button(label="Title", style=discord.ButtonStyle.secondary, row=0)
+    async def title_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_component_draft(interaction.user.id)
+        await self._open_modal(interaction, "title", "Title", current=draft.get("title") or "", max_length=256)
+
+    @discord.ui.button(label="Description", style=discord.ButtonStyle.secondary, row=0)
+    async def desc_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_component_draft(interaction.user.id)
+        await self._open_modal(interaction, "description", "Description", current=draft.get("description") or "",
+                                style=discord.TextStyle.paragraph, max_length=4000, placeholder="Replaces the whole body")
+
+    @discord.ui.button(label="Add Line", style=discord.ButtonStyle.secondary, row=0)
+    async def append_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        await self._open_modal(interaction, "append", "Text to add", style=discord.TextStyle.paragraph,
+                                max_length=1000, placeholder="Added as a new line onto the existing description")
+
+    @discord.ui.button(label="Thumbnail", style=discord.ButtonStyle.secondary, row=0)
+    async def thumb_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_component_draft(interaction.user.id)
+        await self._open_modal(interaction, "thumbnail", "Thumbnail URL", current=draft.get("thumbnail") or "", placeholder="Direct image link")
+
+    @discord.ui.button(label="Banner", style=discord.ButtonStyle.secondary, row=0)
+    async def banner_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_component_draft(interaction.user.id)
+        await self._open_modal(interaction, "image", "Banner / Image URL", current=draft.get("image") or "", placeholder="Direct image link")
+
+    @discord.ui.button(label="Color", style=discord.ButtonStyle.secondary, row=1)
+    async def color_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_component_draft(interaction.user.id)
+        current = f"{(draft.get('color') or COLOR_PRIMARY):06X}"
+        await self._open_modal(interaction, "color", "Color (hex)", current=current, max_length=7, placeholder="e.g. 8B0000")
+
+    @discord.ui.button(label="Undo", style=discord.ButtonStyle.secondary, row=1)
+    async def undo_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_component_draft(interaction.user.id)
+        if not _undo_draft(draft):
+            return await interaction.response.send_message(embed=error_embed("Nothing to undo yet."), ephemeral=True)
+        await interaction.response.edit_message(**_component_render_kwargs(draft))
+
+    @discord.ui.button(label="Reset", style=discord.ButtonStyle.danger, row=1)
+    async def reset_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_component_draft(interaction.user.id)
+        _snapshot_draft(draft)
+        keep = {k: draft.get(k) for k in ("component_id", "channel_id", "target_message_id", "target_channel_id")}
+        draft.clear()
+        draft.update(keep)
+        draft.update({"title": None, "description": "", "thumbnail": None, "image": None, "color": COLOR_PRIMARY, "buttons": []})
+        await interaction.response.edit_message(**_component_render_kwargs(draft))
+
+    @discord.ui.button(label="Add Link", style=discord.ButtonStyle.secondary, row=1)
+    async def add_link_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        await interaction.response.send_modal(ComponentLinkModal())
+
+    @discord.ui.button(label="Add Button", style=discord.ButtonStyle.secondary, row=3)
+    async def add_response_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        await interaction.response.send_modal(ComponentResponseModal())
+
+    @discord.ui.button(label="Manage Buttons", style=discord.ButtonStyle.secondary, row=3)
+    async def manage_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft   = _get_component_draft(interaction.user.id)
+        buttons = draft.get("buttons") or []
+        if not buttons:
+            return await interaction.response.send_message(embed=error_embed("No buttons configured yet — use **Add Link** or **Add Button** first."), ephemeral=True)
+        await interaction.response.send_message(content="Manage this message's buttons:", view=ComponentButtonManageView(interaction.user.id, buttons), ephemeral=True)
+
+    @discord.ui.button(label="Send", style=discord.ButtonStyle.success, emoji=e(ICON_EMBED_SEND, "✅"), row=3)
+    async def send_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        draft = _get_component_draft(interaction.user.id)
+        if not draft.get("title") and not draft.get("description"):
+            return await interaction.response.send_message(embed=error_embed("Nothing to send yet — set a title or description first."), ephemeral=True)
+
+        component_id = draft["component_id"]
+        gc = guild_cfg(cfg, interaction.guild.id)
+        comp = gc["message_components"].setdefault(component_id, {})
+        comp.update({
+            "title": draft.get("title"), "description": draft.get("description") or "",
+            "thumbnail": draft.get("thumbnail"), "image": draft.get("image"),
+            "color": draft.get("color") or COLOR_PRIMARY, "buttons": draft.get("buttons") or [],
+        })
+
+        target_channel_id = draft.get("target_channel_id")
+        target_message_id = draft.get("target_message_id")
+        if target_channel_id and target_message_id:
+            ch = interaction.guild.get_channel(target_channel_id)
+            if not ch:
+                return await interaction.response.send_message(embed=error_embed("Can't find the original channel anymore — the message may have been deleted."), ephemeral=True)
+            try:
+                msg = await ch.fetch_message(target_message_id)
+                layout = MessageComponentLayout(component_id, comp)
+                await msg.edit(view=layout)
+            except discord.NotFound:
+                return await interaction.response.send_message(embed=error_embed("That message doesn't exist anymore — `Reset` and send it as new instead."), ephemeral=True)
+            except discord.Forbidden:
+                return await interaction.response.send_message(embed=error_embed("I don't have permission to edit messages in that channel."), ephemeral=True)
+            comp["channel_id"], comp["message_id"] = ch.id, msg.id
+            save_config(cfg)
+            bot.add_view(layout)
+            _COMPONENT_DRAFTS.pop(interaction.user.id, None)
+            for item in self.children:
+                item.disabled = True
+            return await interaction.response.edit_message(content=f"✅ Updated the existing message in {ch.mention} — draft cleared.", view=self)
+
+        try:
+            layout = MessageComponentLayout(component_id, comp)
+            msg = await self.channel.send(view=layout)
+        except discord.Forbidden:
+            return await interaction.response.send_message(embed=error_embed("I don't have permission to send messages in that channel."), ephemeral=True)
+        comp["channel_id"], comp["message_id"] = self.channel.id, msg.id
+        save_config(cfg)
+        bot.add_view(layout)
+        _COMPONENT_DRAFTS.pop(interaction.user.id, None)
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content=f"✅ Sent to {self.channel.mention} — draft cleared.", view=self)
+
+@bot.tree.command(name="component", description="Build a message with link and/or response buttons.")
+@app_commands.describe(
+    component_id="A short ID for this message (reuse it later to edit the same message)",
+    channel="Channel to send a NEW message to (omit if component_id already exists — it'll load that one to edit)",
+)
+async def slash_component(
+    i: discord.Interaction,
+    component_id: str,
+    channel: Optional[Union[discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel]] = None,
+):
+    if i.user.id != bot.owner_id and not i.user.guild_permissions.manage_guild:
+        return await i.response.send_message(embed=error_embed("Only members with **Manage Server** or the owner can use the component builder."), ephemeral=True)
+
+    component_id = re.sub(r"[^a-z0-9_-]+", "-", component_id.lower()).strip("-") or "component"
+    gc = guild_cfg(cfg, i.guild.id)
+    existing = gc["message_components"].get(component_id)
+    draft = _get_component_draft(i.user.id)
+    draft.clear()
+
+    if existing:
+        draft.update({
+            "component_id": component_id,
+            "title": existing.get("title"), "description": existing.get("description") or "",
+            "thumbnail": existing.get("thumbnail"), "image": existing.get("image"),
+            "color": existing.get("color") or COLOR_PRIMARY,
+            "buttons": [dict(b) for b in existing.get("buttons", [])],
+            "channel_id": existing.get("channel_id"),
+            "target_message_id": existing.get("message_id"), "target_channel_id": existing.get("channel_id"),
+            "_history": [],
+        })
+        is_edit = True
+        target_channel = channel or i.guild.get_channel(existing.get("channel_id") or 0)
+        if not target_channel:
+            return await i.response.send_message(embed=error_embed("Couldn't find the original channel anymore — give `channel` explicitly."), ephemeral=True)
+    else:
+        if not channel:
+            return await i.response.send_message(embed=error_embed(f"No message component `{component_id}` exists yet — give `channel` to create a new one."), ephemeral=True)
+        draft.update({
+            "component_id": component_id, "title": None, "description": "", "thumbnail": None,
+            "image": None, "color": COLOR_PRIMARY, "channel_id": channel.id,
+            "buttons": [], "target_message_id": None, "target_channel_id": None, "_history": [],
+        })
+        is_edit = False
+        target_channel = channel
+
+    view = ComponentBuilderPanel(target_channel, i.user.id, is_edit=is_edit)
+    await i.response.send_message(view=view, **_component_render_kwargs(draft), ephemeral=True)
+
+@bot.command(name="component", aliases=["comp"])
+async def pfx_component(ctx, component_id: str = "", *, rest: str = ""):
+    """Prefix entry point for the same builder as /component — opens the
+    interactive panel (buttons need a real interaction, which prefix
+    commands can trigger a message with, same pattern as !vx embed)."""
+    if ctx.author.id != bot.owner_id and not ctx.author.guild_permissions.manage_guild:
+        return await ctx.send(embed=error_embed("Only members with **Manage Server** or the owner can use the component builder."))
+    if not component_id:
+        return await ctx.send(embed=info_embed("Message Component Builder", (
+            "`component <id> #channel` — start a NEW message (or continue an existing `<id>` in that channel)\n"
+            "`component <id>` — reopen an existing message component's builder (no channel needed if it already exists)\n\n"
+            "Buttons can be **links** (open a URL) or **responses** (show the clicking member an ephemeral message) — "
+            "add/manage both from the builder that opens."
+        )))
+
+    component_id = re.sub(r"[^a-z0-9_-]+", "-", component_id.lower()).strip("-") or "component"
+    channel = ctx.message.channel_mentions[0] if ctx.message.channel_mentions else None
+    gc = guild_cfg(cfg, ctx.guild.id)
+    existing = gc["message_components"].get(component_id)
+    draft = _get_component_draft(ctx.author.id)
+    draft.clear()
+
+    if existing:
+        draft.update({
+            "component_id": component_id,
+            "title": existing.get("title"), "description": existing.get("description") or "",
+            "thumbnail": existing.get("thumbnail"), "image": existing.get("image"),
+            "color": existing.get("color") or COLOR_PRIMARY,
+            "buttons": [dict(b) for b in existing.get("buttons", [])],
+            "channel_id": existing.get("channel_id"),
+            "target_message_id": existing.get("message_id"), "target_channel_id": existing.get("channel_id"),
+            "_history": [],
+        })
+        is_edit = True
+        target_channel = channel or ctx.guild.get_channel(existing.get("channel_id") or 0)
+        if not target_channel:
+            return await ctx.send(embed=error_embed("Couldn't find the original channel anymore — mention a channel explicitly."))
+    else:
+        if not channel:
+            return await ctx.send(embed=error_embed(f"No message component `{component_id}` exists yet — mention a channel: `component {component_id} #channel`"))
+        draft.update({
+            "component_id": component_id, "title": None, "description": "", "thumbnail": None,
+            "image": None, "color": COLOR_PRIMARY, "channel_id": channel.id,
+            "buttons": [], "target_message_id": None, "target_channel_id": None, "_history": [],
+        })
+        is_edit = False
+        target_channel = channel
+
+    view = ComponentBuilderPanel(target_channel, ctx.author.id, is_edit=is_edit)
+    await ctx.send(view=view, **_component_render_kwargs(draft))
 
 # ══════════════════════════════════════════════════════════════════
 # /ticketpanel — same builder pattern as /embed, but for ticket panels:
