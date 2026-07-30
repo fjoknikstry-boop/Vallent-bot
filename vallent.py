@@ -4400,7 +4400,7 @@ def build_embed_layout(draft: dict) -> discord.ui.LayoutView:
 
 async def handle_component_button_click(interaction: discord.Interaction):
     """Routes a response-type button click back to its stored response
-    content. custom_id shape: vx_msgcomp:{component_id}:{button_index}."""
+    text. custom_id shape: vx_msgcomp:{component_id}:{button_index}."""
     custom_id = (interaction.data or {}).get("custom_id", "")
     try:
         _, component_id, idx_str = custom_id.split(":", 2)
@@ -4417,18 +4417,11 @@ async def handle_component_button_click(interaction: discord.Interaction):
 
     text_parts = ([f"# {btn['response_title']}"] if btn.get("response_title") else []) + \
                  ([btn["response_description"]] if btn.get("response_description") else [])
-    thumbnail = btn.get("response_thumbnail")
-    banner    = btn.get("response_banner")
-    content_item = (
-        discord.ui.Section(*(text_parts or ["*(nothing set)*"]), accessory=discord.ui.Thumbnail(thumbnail))
-        if thumbnail else discord.ui.TextDisplay("\n\n".join(text_parts) or "*(nothing set)*")
-    )
-    items = [content_item]
-    if banner:
-        items.append(discord.ui.Separator())
-        items.append(discord.ui.MediaGallery(discord.MediaGalleryItem(media=banner)))
     view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.Container(*items, accent_color=discord.Color(comp.get("color") or COLOR_PRIMARY)))
+    view.add_item(discord.ui.Container(
+        discord.ui.TextDisplay("\n\n".join(text_parts) or "*(nothing set)*"),
+        accent_color=discord.Color(comp.get("color") or COLOR_PRIMARY),
+    ))
     await interaction.response.send_message(view=view, ephemeral=True)
 
 class MessageComponentLayout(discord.ui.LayoutView):
@@ -6291,16 +6284,12 @@ class ComponentSeparatorSelect(discord.ui.Select):
         draft["description"] = (draft.get("description", "") + f"\n{SEPARATOR_STYLES[style]}\n").strip("\n")[:4000]
         await interaction.response.edit_message(**_component_render_kwargs(draft))
 
-class ComponentLinkModal(discord.ui.Modal):
-    """Add OR edit a link button — pass edit_index+existing to prefill
-    and replace in place instead of appending a new one."""
-    def __init__(self, edit_index: Optional[int] = None, existing: Optional[dict] = None):
-        super().__init__(title="Edit Link Button" if edit_index is not None else "Add Link Button", timeout=300)
-        self.edit_index = edit_index
-        existing = existing or {}
-        self.label_input = discord.ui.TextInput(label="Button label", max_length=80, default=existing.get("label", ""), placeholder="e.g. Visit Our Website")
-        self.url_input   = discord.ui.TextInput(label="URL", max_length=512, default=existing.get("url", ""), placeholder="https://...")
-        self.emoji_input = discord.ui.TextInput(label="Emoji (optional)", required=False, max_length=100, default=existing.get("emoji") or "", placeholder="e.g. 🔗 or a custom emoji")
+class ComponentLinkModal(discord.ui.Modal, title="Add Link Button"):
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.label_input = discord.ui.TextInput(label="Button label", max_length=80, placeholder="e.g. Visit Our Website")
+        self.url_input   = discord.ui.TextInput(label="URL", max_length=512, placeholder="https://...")
+        self.emoji_input = discord.ui.TextInput(label="Emoji (optional)", required=False, max_length=100, placeholder="e.g. 🔗 or a custom emoji")
         self.add_item(self.label_input)
         self.add_item(self.url_input)
         self.add_item(self.emoji_input)
@@ -6309,10 +6298,7 @@ class ComponentLinkModal(discord.ui.Modal):
         draft   = _get_component_draft(interaction.user.id)
         buttons = draft.setdefault("buttons", [])
         resolved_emoji, warning = ticket_types.resolve_emoji_input(interaction.guild, self.emoji_input.value)
-        if self.edit_index is not None:
-            err = message_components.edit_link_button(buttons, self.edit_index, self.label_input.value, self.url_input.value, resolved_emoji or "")
-        else:
-            err = message_components.add_link_button(buttons, self.label_input.value, self.url_input.value, resolved_emoji or "")
+        err = message_components.add_link_button(buttons, self.label_input.value, self.url_input.value, resolved_emoji or "")
         if err:
             return await interaction.response.send_message(embed=error_embed(err), ephemeral=True)
         render = _component_render_kwargs(draft)
@@ -6320,75 +6306,34 @@ class ComponentLinkModal(discord.ui.Modal):
             render["content"] = f"⚠️ {warning}\n\n" + render["content"]
         await interaction.response.edit_message(**render)
 
-class ComponentResponseModalStep2(discord.ui.Modal):
-    """Step 2/2 of Add/Edit Response Button — the response content
-    itself. Split from step 1 because a modal caps out at 5 text
-    fields, and Label+Emoji+Thumbnail+Banner+Title+Text would be 6."""
-    def __init__(self, label: str, emoji: str, thumbnail: str, banner: str,
-                 edit_index: Optional[int] = None, existing: Optional[dict] = None, warning: Optional[str] = None):
-        super().__init__(title="Add Response Button (2/2)" if edit_index is None else "Edit Response Button (2/2)", timeout=300)
-        self.label, self.emoji, self.thumbnail, self.banner, self.edit_index, self.warning = label, emoji, thumbnail, banner, edit_index, warning
-        existing = existing or {}
-        self.title_input = discord.ui.TextInput(label="Response title (optional)", required=False, max_length=256, default=existing.get("response_title", ""), placeholder="Shown when clicked")
-        self.desc_input  = discord.ui.TextInput(
-            label="Response text", required=False, style=discord.TextStyle.paragraph,
-            max_length=message_components._MAX_RESPONSE_TEXT, default=existing.get("response_description", ""),
-            placeholder="What the clicking member sees (up to 4000 characters — Discord's own limit on a single field)"
-        )
+class ComponentResponseModal(discord.ui.Modal, title="Add Response Button"):
+    """A button that, when a member clicks it, shows THEM an ephemeral
+    message with the title/description set here — no link, no ticket,
+    just information only the clicker sees."""
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.label_input = discord.ui.TextInput(label="Button label", max_length=80, placeholder="e.g. Rules")
+        self.emoji_input = discord.ui.TextInput(label="Emoji (optional)", required=False, max_length=100, placeholder="e.g. 📜 or a custom emoji")
+        self.title_input = discord.ui.TextInput(label="Response title (optional)", required=False, max_length=256, placeholder="Shown when clicked")
+        self.desc_input  = discord.ui.TextInput(label="Response text", required=False, style=discord.TextStyle.paragraph, max_length=1000, placeholder="What the clicking member sees")
+        self.add_item(self.label_input)
+        self.add_item(self.emoji_input)
         self.add_item(self.title_input)
         self.add_item(self.desc_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         draft   = _get_component_draft(interaction.user.id)
         buttons = draft.setdefault("buttons", [])
-        if self.edit_index is not None:
-            err = message_components.edit_response_button(
-                buttons, self.edit_index, self.label, self.title_input.value, self.desc_input.value,
-                self.emoji, response_thumbnail=self.thumbnail, response_banner=self.banner,
-            )
-        else:
-            err = message_components.add_response_button(
-                buttons, self.label, self.title_input.value, self.desc_input.value,
-                self.emoji, response_thumbnail=self.thumbnail, response_banner=self.banner,
-            )
+        resolved_emoji, warning = ticket_types.resolve_emoji_input(interaction.guild, self.emoji_input.value)
+        err = message_components.add_response_button(
+            buttons, self.label_input.value, self.title_input.value, self.desc_input.value, resolved_emoji or ""
+        )
         if err:
             return await interaction.response.send_message(embed=error_embed(err), ephemeral=True)
         render = _component_render_kwargs(draft)
-        if self.warning:
-            render["content"] = f"⚠️ {self.warning}\n\n" + render["content"]
+        if warning:
+            render["content"] = f"⚠️ {warning}\n\n" + render["content"]
         await interaction.response.edit_message(**render)
-
-class ComponentResponseModalStep1(discord.ui.Modal):
-    """Step 1/2 of Add/Edit Response Button — label/emoji/thumbnail/
-    banner, then chains straight into step 2 for the actual response
-    title/text. A button clicked by a member shows THEM an ephemeral
-    message with everything set across both steps — no link, no
-    ticket, just information only the clicker sees."""
-    def __init__(self, edit_index: Optional[int] = None, existing: Optional[dict] = None):
-        super().__init__(title="Add Response Button (1/2)" if edit_index is None else "Edit Response Button (1/2)", timeout=300)
-        self.edit_index = edit_index
-        self.existing = existing or {}
-        self.label_input = discord.ui.TextInput(label="Button label", max_length=80, default=self.existing.get("label", ""), placeholder="e.g. Rules")
-        self.emoji_input = discord.ui.TextInput(label="Emoji (optional)", required=False, max_length=100, default=self.existing.get("emoji") or "", placeholder="e.g. 📜 or a custom emoji")
-        self.thumb_input = discord.ui.TextInput(label="Response thumbnail URL (optional)", required=False, max_length=512, default=self.existing.get("response_thumbnail") or "", placeholder="Small image, top-right")
-        self.banner_input = discord.ui.TextInput(label="Response banner URL (optional)", required=False, max_length=512, default=self.existing.get("response_banner") or "", placeholder="Big image at the bottom")
-        self.add_item(self.label_input)
-        self.add_item(self.emoji_input)
-        self.add_item(self.thumb_input)
-        self.add_item(self.banner_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        for field_name, val in (("thumbnail", self.thumb_input.value), ("banner", self.banner_input.value)):
-            if val and not val.strip().startswith(("http://", "https://")):
-                return await interaction.response.send_message(embed=error_embed(f"Response {field_name} must be a direct image URL."), ephemeral=True)
-        resolved_emoji, warning = ticket_types.resolve_emoji_input(interaction.guild, self.emoji_input.value)
-        # A modal's on_submit interaction can only get ONE response — since
-        # step 2 must be sent as a modal, any emoji warning gets carried
-        # along and shown once step 2 actually completes, not here.
-        await interaction.response.send_modal(ComponentResponseModalStep2(
-            self.label_input.value, resolved_emoji or "", self.thumb_input.value, self.banner_input.value,
-            edit_index=self.edit_index, existing=self.existing, warning=warning,
-        ))
 
 class ComponentButtonRemoveSelect(discord.ui.Select):
     def __init__(self, buttons: list):
@@ -6396,12 +6341,12 @@ class ComponentButtonRemoveSelect(discord.ui.Select):
             discord.SelectOption(label=f"{i+1}. {('🔗' if b['kind']=='link' else '💬')} {b['label']}"[:100], value=str(i))
             for i, b in enumerate(buttons)
         ]
-        super().__init__(placeholder="Choose a button…", options=options[:25], min_values=1, max_values=1)
+        super().__init__(placeholder="Choose a button to remove…", options=options[:25], min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
         view = self.view
         view.selected_index = int(self.values[0])
-        await interaction.response.edit_message(content=f"Selected **{self.values[0]}** — **Edit Selected** to change it, or **Remove Selected** to delete it.", view=view)
+        await interaction.response.edit_message(content=f"Selected **{self.values[0]}** — hit **Remove Selected** to confirm.", view=view)
 
 class ComponentButtonManageView(discord.ui.View):
     def __init__(self, owner_id: int, buttons: list):
@@ -6415,20 +6360,6 @@ class ComponentButtonManageView(discord.ui.View):
             await interaction.response.send_message(embed=error_embed("This isn't your component builder — run `/component` yourself."), ephemeral=True)
             return False
         return True
-
-    @discord.ui.button(label="Edit Selected", style=discord.ButtonStyle.primary, row=1)
-    async def edit_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
-        if self.selected_index is None:
-            return await interaction.response.send_message(embed=error_embed("Pick a button from the dropdown first."), ephemeral=True)
-        draft   = _get_component_draft(interaction.user.id)
-        buttons = draft.get("buttons", [])
-        if not (0 <= self.selected_index < len(buttons)):
-            return await interaction.response.send_message(embed=error_embed("That button no longer exists — the list may have changed."), ephemeral=True)
-        existing = buttons[self.selected_index]
-        if existing["kind"] == "link":
-            await interaction.response.send_modal(ComponentLinkModal(edit_index=self.selected_index, existing=existing))
-        else:
-            await interaction.response.send_modal(ComponentResponseModalStep1(edit_index=self.selected_index, existing=existing))
 
     @discord.ui.button(label="Remove Selected", style=discord.ButtonStyle.danger, row=1)
     async def remove_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
@@ -6524,7 +6455,7 @@ class ComponentBuilderPanel(discord.ui.View):
 
     @discord.ui.button(label="Add Button", style=discord.ButtonStyle.secondary, row=3)
     async def add_response_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
-        await interaction.response.send_modal(ComponentResponseModalStep1())
+        await interaction.response.send_modal(ComponentResponseModal())
 
     @discord.ui.button(label="Manage Buttons", style=discord.ButtonStyle.secondary, row=3)
     async def manage_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
@@ -6952,13 +6883,17 @@ class TicketTypeManageView(discord.ui.View):
         panel = gc["ticket"]["panels"].get(self.panel_id)
         if not panel or self.selected_key not in panel.get("types", {}):
             return await interaction.response.send_message(embed=error_embed("That type no longer exists."), ephemeral=True)
+        # Defer FIRST — _resync_panel_message() below does a real Discord
+        # API call (fetch + edit the live panel message), which can
+        # occasionally take longer than the 3-second ack window.
+        await interaction.response.defer()
         removed = panel["types"].pop(self.selected_key)
         save_config(cfg)
         resynced = await _resync_panel_message(interaction.guild, self.panel_id, panel)
         note = "The live panel message was updated." if resynced else "The panel message wasn't found — update it from the builder if needed."
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"✅ Removed type `{self.selected_key}` (**{removed.get('label', self.selected_key)}**) from panel `{self.panel_id}`.\n{note}",
             view=self
         )
@@ -7058,13 +6993,17 @@ class TicketPanelBuilderView(discord.ui.View):
 
     @discord.ui.button(label="Manage Types", style=discord.ButtonStyle.secondary, row=4)
     async def manage_types_btn(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        # Defer FIRST — avoids "didn't respond in time" if anything (config
+        # lookup, guild_cfg init/save) takes a beat longer than Discord's
+        # 3-second ack window, same fix already applied to create_btn above.
+        await interaction.response.defer(ephemeral=True)
         draft    = _get_ticket_draft(interaction.user.id)
         panel_id = draft.get("panel_id")
         gc       = guild_cfg(cfg, interaction.guild.id)
         panel    = gc["ticket"]["panels"].get(panel_id)
         if not panel or not panel.get("types"):
-            return await interaction.response.send_message(embed=error_embed("This panel has no ticket types configured yet — use **Add Type** first."), ephemeral=True)
-        await interaction.response.send_message(
+            return await interaction.followup.send(embed=error_embed("This panel has no ticket types configured yet — use **Add Type** first."), ephemeral=True)
+        await interaction.followup.send(
             content=f"Manage ticket types on panel `{panel_id}`:",
             view=TicketTypeManageView(interaction.user.id, panel_id, panel),
             ephemeral=True
