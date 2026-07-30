@@ -1848,7 +1848,7 @@ class TicketPanelLayout(discord.ui.LayoutView):
 
     Persistent custom_id scheme unchanged, so bot.add_view() in on_ready
     keeps it working after a restart."""
-    def __init__(self, panel_id: str, panel: dict = None):
+    def __init__(self, panel_id: str, panel: dict = None, guild: discord.Guild = None):
         super().__init__(timeout=None)
         self.panel_id = panel_id
         panel = panel or {}
@@ -1860,7 +1860,7 @@ class TicketPanelLayout(discord.ui.LayoutView):
         banner      = panel.get("image")
 
         label     = panel.get("button_label") or "Open Ticket"
-        emoji     = ticket_types.safe_emoji(panel.get("button_emoji")) or (ICON_TICKET_OPEN if ICON_TICKET_OPEN else "🎫")
+        emoji     = ticket_types.safe_emoji_for_guild(guild, panel.get("button_emoji")) or (ICON_TICKET_OPEN if ICON_TICKET_OPEN else "🎫")
         style     = BUTTON_STYLES.get(panel.get("button_style"), discord.ButtonStyle.danger)
         open_type = panel.get("open_type", "button")
 
@@ -1871,7 +1871,7 @@ class TicketPanelLayout(discord.ui.LayoutView):
         )
 
         row = discord.ui.ActionRow()
-        type_options = ticket_types.build_type_select_options(panel)
+        type_options = ticket_types.build_type_select_options(panel, guild=guild)
         if type_options:
             select = discord.ui.Select(
                 placeholder=label, options=type_options,
@@ -2101,13 +2101,13 @@ async def on_ready():
 
     # Re-register persistent views (tickets) so buttons keep working after a restart.
     bot.add_view(TicketControlView())
-    panel_ids = {pid for gcfg in cfg.get("guilds", {}).values() for pid in gcfg.get("ticket", {}).get("panels", {}).keys()}
-    for pid in panel_ids:
-        matching_panel = next(
-            (gcfg["ticket"]["panels"][pid] for gcfg in cfg.get("guilds", {}).values() if pid in gcfg.get("ticket", {}).get("panels", {})),
-            None
-        )
-        bot.add_view(TicketPanelLayout(pid, matching_panel))
+    for gid_str, gcfg in cfg.get("guilds", {}).items():
+        panels = gcfg.get("ticket", {}).get("panels", {})
+        if not panels:
+            continue
+        guild_obj = bot.get_guild(int(gid_str))
+        for pid, panel in panels.items():
+            bot.add_view(TicketPanelLayout(pid, panel, guild=guild_obj))
     bot.add_view(VerificationView())
 
     # Re-register persistent views for /component messages (only response
@@ -3472,7 +3472,7 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
             return await ctx.send(embed=error_embed(f"Panel `{panel_id}` hasn't been set up yet. Run `ticket setup` first."))
         title, desc = parse_title_desc(parts[1] if len(parts) > 1 else "", panel["title"], panel["description"])
         panel["title"], panel["description"] = title, desc
-        msg = await ctx.send(view=TicketPanelLayout(panel_id, panel))
+        msg = await ctx.send(view=TicketPanelLayout(panel_id, panel, guild=ctx.guild))
         panel["message_id"], panel["channel_id"] = msg.id, msg.channel.id
         save_config(cfg)
 
@@ -3495,7 +3495,7 @@ async def pfx_ticket(ctx, sub: str = "", *, rest: str = ""):
             if ch:
                 try:
                     msg = await ch.fetch_message(panel["message_id"])
-                    await msg.edit(view=TicketPanelLayout(panel_id, panel))
+                    await msg.edit(view=TicketPanelLayout(panel_id, panel, guild=ctx.guild))
                     edited = True
                 except Exception:
                     pass
@@ -6716,7 +6716,7 @@ async def _resync_panel_message(guild: discord.Guild, panel_id: str, panel: dict
         return False
     try:
         msg = await ch.fetch_message(panel["message_id"])
-        await msg.edit(view=TicketPanelLayout(panel_id, panel))
+        await msg.edit(view=TicketPanelLayout(panel_id, panel, guild=guild))
         return True
     except Exception:
         return False
@@ -6846,11 +6846,11 @@ class TicketTypeCategoryView(discord.ui.View):
 
 
 class TicketTypeRemoveSelect(discord.ui.Select):
-    def __init__(self, panel: dict):
+    def __init__(self, panel: dict, guild: discord.Guild = None):
         types = panel.get("types", {})
         options = [
             discord.SelectOption(label=(t.get("label") or key)[:100], value=key,
-                                  emoji=ticket_types.safe_emoji(t.get("emoji")) or None)
+                                  emoji=ticket_types.safe_emoji_for_guild(guild, t.get("emoji")) or None)
             for key, t in types.items()
         ][:25]
         super().__init__(placeholder="Choose a type to remove…", options=options, min_values=1, max_values=1, row=0)
@@ -6862,12 +6862,12 @@ class TicketTypeRemoveSelect(discord.ui.Select):
 
 
 class TicketTypeManageView(discord.ui.View):
-    def __init__(self, owner_id: int, panel_id: str, panel: dict):
+    def __init__(self, owner_id: int, panel_id: str, panel: dict, guild: discord.Guild = None):
         super().__init__(timeout=300)
         self.owner_id      = owner_id
         self.panel_id      = panel_id
         self.selected_key  = None
-        self.add_item(TicketTypeRemoveSelect(panel))
+        self.add_item(TicketTypeRemoveSelect(panel, guild))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
@@ -7005,7 +7005,7 @@ class TicketPanelBuilderView(discord.ui.View):
             return await interaction.followup.send(embed=error_embed("This panel has no ticket types configured yet — use **Add Type** first."), ephemeral=True)
         await interaction.followup.send(
             content=f"Manage ticket types on panel `{panel_id}`:",
-            view=TicketTypeManageView(interaction.user.id, panel_id, panel),
+            view=TicketTypeManageView(interaction.user.id, panel_id, panel, guild=interaction.guild),
             ephemeral=True
         )
 
@@ -7056,7 +7056,7 @@ class TicketPanelBuilderView(discord.ui.View):
             if old_channel:
                 try:
                     old_msg = await old_channel.fetch_message(old_message_id)
-                    await old_msg.edit(view=TicketPanelLayout(panel_id, panel))
+                    await old_msg.edit(view=TicketPanelLayout(panel_id, panel, guild=interaction.guild))
                     panel["channel_id"] = old_channel.id
                     target_channel      = old_channel
                     edited_existing     = True
@@ -7065,7 +7065,7 @@ class TicketPanelBuilderView(discord.ui.View):
 
         if not edited_existing:
             try:
-                msg = await self.post_channel.send(view=TicketPanelLayout(panel_id, panel))
+                msg = await self.post_channel.send(view=TicketPanelLayout(panel_id, panel, guild=interaction.guild))
             except discord.Forbidden:
                 return await interaction.followup.send(embed=error_embed("I don't have permission to send messages in that channel."), ephemeral=True)
             except discord.HTTPException as ex:
