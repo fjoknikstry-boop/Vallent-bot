@@ -4297,7 +4297,7 @@ async def pfx_verification(ctx, sub: str = "", *, rest: str = ""):
 _EMBED_DRAFTS: dict = {}   # uid -> draft dict
 
 SEPARATOR_STYLES = {
-    "line":  "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
+    "line":  "──────────────────────────────",
     "dots":  "· · · · · · · · · · · · · · · · · · · ·",
     "stars": "✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦ ✦",
     "wave":  "〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜〜",
