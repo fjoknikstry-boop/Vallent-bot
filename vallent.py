@@ -1267,7 +1267,7 @@ async def do_ping(reply_fn):
     embed = base_embed("Pong!", f"Latency: **{lat}ms**", COLOR_SUCCESS if lat < 100 else COLOR_WARNING)
     await reply_fn(embed=embed)
 
-AFK_FREE_SLOTS = 4  # max concurrently-AFK members per server without voting
+AFK_FREE_SLOTS = 8  # max concurrently-AFK members per server without voting
 
 async def do_afk_set(guild: discord.Guild, author: discord.abc.User, reason: str, reply_fn):
     """Mark `author` as AFK in this guild. Any message they send afterwards
@@ -1303,7 +1303,29 @@ async def do_afk_set(guild: discord.Guild, author: discord.abc.User, reason: str
 
     reason   = (reason or "").strip()[:200] or "AFK"
     since_ts = int(discord.utils.utcnow().timestamp())
-    afk_map[uid_key] = {"reason": reason, "since": since_ts}
+    already_afk = uid_key in afk_map
+
+    # Prefix their nickname with "[AFK] " so it's visible at a glance in the
+    # member list / chat, not just when someone mentions them. We store the
+    # PRE-AFK nick (None means "no custom nick, was just using their
+    # username") so it can be restored exactly when they come back — see
+    # the matching restore in on_message. Captured ONLY on a fresh AFK (not
+    # when they're just updating their reason while already AFK — at that
+    # point display_name is already "[AFK] ...", so re-capturing here would
+    # clobber the real original nick with the prefixed one). Silently
+    # skipped if the bot can't manage this member's nickname (they outrank
+    # the bot, they're the server owner, missing Manage Nicknames, etc.) —
+    # AFK still works fine without it, this is just a nice-to-have.
+    member = guild.get_member(author.id) or author
+    original_nick = afk_map.get(uid_key, {}).get("original_nick") if already_afk else getattr(member, "nick", None)
+    if not already_afk and isinstance(member, discord.Member):
+        try:
+            new_nick = f"[AFK] {member.display_name}"[:32]
+            await member.edit(nick=new_nick, reason="AFK status set")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    afk_map[uid_key] = {"reason": reason, "since": since_ts, "original_nick": original_nick}
     save_config(cfg)
 
     embed = base_embed(
@@ -2236,6 +2258,13 @@ async def on_message(message: discord.Message):
             entry = afk_map.pop(author_key, None)
             save_config(cfg)
             if entry:
+                # Restore whatever nick they had before "[AFK] " got
+                # prepended — None means they had no custom nick, so
+                # setting nick=None just reverts them to their username.
+                try:
+                    await message.author.edit(nick=entry.get("original_nick"), reason="AFK status cleared")
+                except (discord.Forbidden, discord.HTTPException, AttributeError):
+                    pass
                 since_ts = entry.get("since")
                 since_txt = f" (AFK since <t:{since_ts}:R>)" if since_ts else ""
                 try:
