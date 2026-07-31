@@ -2060,6 +2060,7 @@ async def rotate_status():
         discord.Activity(type=discord.ActivityType.watching, name="Hyper moderation."),
         discord.Activity(type=discord.ActivityType.listening, name="!vx help"),
         discord.Activity(type=discord.ActivityType.playing, name="VALLENT EXS v1.2"),
+        discord.Activity(type=discord.ActivityType.listening, name="Protect your server now!"),
         discord.Activity(type=discord.ActivityType.watching, name=f"{len(bot.guilds)} servers"),
     ]
     import random as _r
