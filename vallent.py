@@ -6353,7 +6353,29 @@ class ComponentResponseModal(discord.ui.Modal):
             "style": self._current.get("style", "secondary"),
             "_warning": warning,
         }
-        await interaction.response.send_modal(ComponentResponseModalStep2(pending, self.edit_index))
+        # Discord does NOT allow a modal submission to respond with
+        # another modal (only a message component click can open one) —
+        # so instead of chaining straight into step 2, send a tiny bridge
+        # message with one button; THAT button's click is a component
+        # interaction, which CAN validly open the step-2 modal.
+        msg = "Almost done — click below to set the response message text:"
+        if warning:
+            msg = f"⚠️ {warning}\n\n{msg}"
+        await interaction.response.send_message(content=msg, view=ComponentResponseStep2Prompt(pending, self.edit_index), ephemeral=True)
+
+
+class ComponentResponseStep2Prompt(discord.ui.View):
+    """Bridge between step 1 and step 2 of the response-button modal flow
+    — see the comment in ComponentResponseModal.on_submit for why this
+    extra click is necessary."""
+    def __init__(self, pending: dict, edit_index: Optional[int]):
+        super().__init__(timeout=300)
+        self.pending    = pending
+        self.edit_index = edit_index
+
+    @discord.ui.button(label="Set Response Message", style=discord.ButtonStyle.primary, emoji="📝")
+    async def open_step2(self, interaction: discord.Interaction, _btn: discord.ui.Button):
+        await interaction.response.send_modal(ComponentResponseModalStep2(self.pending, self.edit_index))
 
 
 class ComponentResponseModalStep2(discord.ui.Modal, title="Response Message"):
@@ -6384,16 +6406,11 @@ class ComponentResponseModalStep2(discord.ui.Modal, title="Response Message"):
             err = message_components.edit_response_button(buttons, self.edit_index, *args)
         if err:
             return await interaction.response.send_message(embed=error_embed(err), ephemeral=True)
-        warning = p.get("_warning")
-        if self.edit_index is not None:
-            msg = f"✅ Updated button **{p['label']}**. Go back to the builder to see the updated preview."
-            if warning:
-                msg = f"⚠️ {warning}\n\n{msg}"
-            return await interaction.response.edit_message(content=msg)
-        render = _component_render_kwargs(draft)
-        if warning:
-            render["content"] = f"⚠️ {warning}\n\n" + render["content"]
-        await interaction.response.edit_message(**render)
+        action = "Updated" if self.edit_index is not None else "Added"
+        await interaction.response.edit_message(
+            content=f"✅ {action} button **{p['label']}**. Go back to the builder to see the updated preview.",
+            view=None,
+        )
 
 class ComponentButtonRemoveSelect(discord.ui.Select):
     def __init__(self, buttons: list):
