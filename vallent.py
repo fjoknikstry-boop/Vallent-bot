@@ -4409,9 +4409,23 @@ async def handle_component_button_click(interaction: discord.Interaction):
 
     text_parts = ([f"# {btn['response_title']}"] if btn.get("response_title") else []) + \
                  ([btn["response_description"]] if btn.get("response_description") else [])
+    if not text_parts:
+        text_parts = ["*(nothing set)*"]
+    thumbnail = btn.get("response_thumbnail")
+    banner    = btn.get("response_banner")
+
+    content_item = (
+        discord.ui.Section(*text_parts, accessory=discord.ui.Thumbnail(thumbnail))
+        if thumbnail else discord.ui.TextDisplay("\n\n".join(text_parts))
+    )
+    items = [content_item]
+    if banner:
+        items.append(discord.ui.Separator())
+        items.append(discord.ui.MediaGallery(discord.MediaGalleryItem(media=banner)))
+
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.Container(
-        discord.ui.TextDisplay("\n\n".join(text_parts) or "*(nothing set)*"),
+        *items,
         accent_color=discord.Color(comp.get("color") or COLOR_PRIMARY),
     ))
     await interaction.response.send_message(view=view, ephemeral=True)
