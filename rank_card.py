@@ -26,6 +26,7 @@ import logging
 import math
 import os
 import random
+from typing import Optional
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
@@ -191,6 +192,27 @@ def _safe_avatar(avatar_bytes: bytes) -> Image.Image:
         ImageDraw.Draw(placeholder).ellipse([48, 40, 208, 200], fill=(90, 90, 90, 255))
         return placeholder
 
+def cover_image(image_bytes: bytes, size) -> Optional[Image.Image]:
+    """Decode a user-supplied background image and crop/scale it to fully
+    cover `size` (W, H) — same idea as CSS `background-size: cover`, so an
+    arbitrary aspect-ratio upload never stretches or leaves gaps. Returns
+    None (never raises) on any decode failure so a bad/dead image URL just
+    falls back to the normal gradient background instead of crashing the
+    whole card render."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    except Exception as e:
+        log.warning(f"Custom rank card background gagal di-decode: {e}")
+        return None
+    w, h = size
+    src_w, src_h = img.size
+    scale = max(w / src_w, h / src_h)
+    new_w, new_h = math.ceil(src_w * scale), math.ceil(src_h * scale)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    left = (new_w - w) // 2
+    top  = (new_h - h) // 2
+    return img.crop((left, top, left + w, top + h))
+
 def _circle_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_width: int = 6) -> Image.Image:
     avatar_img = avatar_img.convert("RGBA").resize((diameter, diameter), Image.LANCZOS)
     mask = Image.new("L", (diameter, diameter), 0)
@@ -343,24 +365,44 @@ def _segmented_bar(draw: ImageDraw.ImageDraw, x, y, w, h, pct, segments, track_c
         if amt > 0:
             draw.rectangle([sx, y, sx + seg_w * amt, y + h], fill=fill_color)
 
-def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = False) -> Image.Image:
+def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = False, background_bytes: Optional[bytes] = None) -> Image.Image:
     """Shared background stack for both cards: gradient + blood glow +
     VX watermark + grain texture, clipped to the angled card silhouette.
     `premium=True` swaps the whole palette to gold instead of crimson, so
     a premium card is unmistakably different at a glance, not just the
-    avatar ring."""
+    avatar ring.
+
+    `background_bytes` (premium-only feature, caller enforces that) swaps
+    the flat gradient for a user-uploaded image, cropped to cover the full
+    card. A dark scrim + the existing noise/watermark layers are still
+    composited on top so text stays readable no matter how bright/busy the
+    uploaded image is — the border, corner brackets and glow are untouched
+    either way, so a custom background still unmistakably reads as a
+    VALLENT EXS card, not a random image with text slapped on."""
     bg_top    = GOLD_BG_TOP if premium else BG_TOP
     bg_bottom = GOLD_BG_BTM if premium else BG_BOTTOM
     border    = GOLD_DARK   if premium else DARK_RED
     corner    = GOLD        if premium else CRIMSON
     blood     = GOLD_DARK   if premium else BLOOD
 
-    base = _vertical_gradient((W, H), bg_top, bg_bottom).convert("RGBA")
-    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    bx, by = blood_xy or (-180, H - 220)
-    gd.ellipse([bx, by, bx + 560, by + 460], fill=(*blood, 80))
-    base = Image.alpha_composite(base, glow)
+    custom_bg = cover_image(background_bytes, (W, H)) if background_bytes else None
+    if custom_bg is not None:
+        base = custom_bg.convert("RGBA")
+        scrim = Image.new("RGBA", (W, H), (5, 3, 4, 150))
+        base = Image.alpha_composite(base, scrim)
+        # extra scrim behind where the avatar/text sit (left ~60% of the
+        # card) so a bright/busy background never fights with the name.
+        side_scrim = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(side_scrim).rectangle([0, 0, int(W * 0.62), H], fill=(5, 3, 4, 110))
+        side_scrim = side_scrim.filter(ImageFilter.GaussianBlur(40))
+        base = Image.alpha_composite(base, side_scrim)
+    else:
+        base = _vertical_gradient((W, H), bg_top, bg_bottom).convert("RGBA")
+        glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        bx, by = blood_xy or (-180, H - 220)
+        gd.ellipse([bx, by, bx + 560, by + 460], fill=(*blood, 80))
+        base = Image.alpha_composite(base, glow)
     base = Image.alpha_composite(base, _vx_watermark((W, H)))
     base = Image.alpha_composite(base, _noise_texture((W, H)))
     clip = _diagonal_clip_mask(W, H, cut=cut)
@@ -432,11 +474,12 @@ def render_rank_card(
     total_xp: int,
     is_premium: bool = False,
     messages: int = 0,
+    background_bytes: Optional[bytes] = None,
 ) -> io.BytesIO:
     W, H = 934, 300
     cut  = 50
     accent = GOLD if is_premium else CRIMSON
-    canvas = _card_base(W, H, cut=cut, premium=is_premium)
+    canvas = _card_base(W, H, cut=cut, premium=is_premium, background_bytes=background_bytes if is_premium else None)
     draw   = ImageDraw.Draw(canvas)
 
     av = _safe_avatar(avatar_bytes)
