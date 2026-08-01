@@ -544,20 +544,29 @@ def render_rank_card(
 # LEVEL-UP CARD — dipakai di notifikasi level up otomatis
 # ══════════════════════════════════════════════════════════════════
 
-def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_level: int, is_premium: bool = False, role_names: list | None = None) -> io.BytesIO:
+def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_level: int, is_premium: bool = False, role_names: list | None = None, background_bytes: Optional[bytes] = None) -> io.BytesIO:
     W, H = 934, 282
     bg_top    = GOLD_BG_TOP if is_premium else (18, 4, 6)
     bg_bottom = GOLD_BG_BTM if is_premium else (48, 6, 10)
     accent    = GOLD if is_premium else CRIMSON
     border    = GOLD_DARK if is_premium else DARK_RED
-    card = _vertical_gradient((W, H), bg_top, bg_bottom).convert("RGBA")
 
-    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    cx, cy = 160, H // 2
-    for r, a in [(230, 26), (170, 40), (110, 60)]:
-        gd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*accent, a))
-    card = Image.alpha_composite(card, glow)
+    custom_bg = cover_image(background_bytes, (W, H)) if (is_premium and background_bytes) else None
+    if custom_bg is not None:
+        card = custom_bg.convert("RGBA")
+        card = Image.alpha_composite(card, Image.new("RGBA", (W, H), (5, 3, 4, 150)))
+        side_scrim = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(side_scrim).rectangle([0, 0, int(W * 0.55), H], fill=(5, 3, 4, 110))
+        side_scrim = side_scrim.filter(ImageFilter.GaussianBlur(40))
+        card = Image.alpha_composite(card, side_scrim)
+    else:
+        card = _vertical_gradient((W, H), bg_top, bg_bottom).convert("RGBA")
+        glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        cx, cy = 160, H // 2
+        for r, a in [(230, 26), (170, 40), (110, 60)]:
+            gd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*accent, a))
+        card = Image.alpha_composite(card, glow)
 
     draw = ImageDraw.Draw(card)
     draw.rounded_rectangle([2, 2, W - 3, H - 3], radius=22, outline=(*border, 255), width=3)

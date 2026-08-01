@@ -2421,9 +2421,10 @@ async def on_message(message: discord.Message):
                                 avatar_bytes = await resp.read()
                         is_prem = user_has_premium(message.guild, message.author)
                         role_names = [r.name for r in granted_roles] if granted_roles else None
+                        bg_bytes = await fetch_rank_bg_bytes(is_prem, message.author.id)
                         buf = await asyncio.to_thread(
                             rank_card.render_levelup_card,
-                            avatar_bytes, message.author.name, old_level, data["level"], is_prem, role_names
+                            avatar_bytes, message.author.name, old_level, data["level"], is_prem, role_names, bg_bytes
                         )
                         file = discord.File(buf, filename="levelup.png")
                         await lvl_ch.send(content=content, file=file)
@@ -3077,9 +3078,10 @@ async def pfx_rank(ctx, member: discord.Member = None):
 @bot.command(name="rankbg", aliases=["rankbackground", "cardbg"])
 async def pfx_rankbg(ctx, url: str = ""):
     if not user_has_premium(ctx.guild, ctx.author):
-        return await ctx.send(embed=error_embed(
-            "Custom backgrounds (rank card + profile banner) are a **Premium** perk. Use `vote` or check `premium` to unlock it."
-        ))
+        msg = "Custom backgrounds (rank card + profile banner + level-up card) are a **Premium** perk — ask the bot owner about getting Premium."
+        if SUPPORT_INVITE:
+            msg += f"\n[Join the support server]({SUPPORT_INVITE}) to ask about it."
+        return await ctx.send(embed=error_embed(msg))
     backgrounds = cfg.setdefault("premium_backgrounds", {})
     uid = str(ctx.author.id)
     if not url:
@@ -5813,9 +5815,10 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
 @app_commands.describe(url="Direct image URL (.png/.jpg/.jpeg/.webp) — leave empty to remove your current background")
 async def slash_rankbg(i: discord.Interaction, url: Optional[str] = None):
     if not user_has_premium(i.guild, i.user):
-        return await i.response.send_message(embed=error_embed(
-            "Custom backgrounds (rank card + profile banner) are a **Premium** perk. Use `/vote` or check `/premium` to unlock it."
-        ), ephemeral=True)
+        msg = "Custom backgrounds (rank card + profile banner + level-up card) are a **Premium** perk — ask the bot owner about getting Premium."
+        if SUPPORT_INVITE:
+            msg += f"\n[Join the support server]({SUPPORT_INVITE}) to ask about it."
+        return await i.response.send_message(embed=error_embed(msg), ephemeral=True)
     backgrounds = cfg.setdefault("premium_backgrounds", {})
     uid = str(i.user.id)
     if not url:
