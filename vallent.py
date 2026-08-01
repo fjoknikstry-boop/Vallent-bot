@@ -116,6 +116,7 @@ def load_config() -> dict:
             "role_sync":         {},
             "custom_badges":     {},
             "user_custom_badges": {},
+            "premium_backgrounds": {},   # uid(str) -> image URL, custom rank card background (premium-only)
             "status_channel_id": None,
             "votes":             {},
             "payment_methods": {
@@ -139,6 +140,7 @@ def load_config() -> dict:
     data.setdefault("bot_roles",        {})
     data.setdefault("custom_badges",      {})   # badge_id -> {"name": str, "emoji": str} — owner-defined, free-form badges
     data.setdefault("user_custom_badges", {})   # uid(str) -> [badge_id, ...] — which custom badges each user holds
+    data.setdefault("premium_backgrounds", {})  # uid(str) -> image URL, custom rank card background (premium-only)
     data.setdefault("moonkeeper_users",     [])   # uid list — manual Moonkeeper grants (independent of bot_roles hierarchy)
     data.setdefault("moonkeeper_sync_role", None)  # single Discord role ID synced to Moonkeeper, if any
     data.setdefault("role_sync",        {})
@@ -546,6 +548,29 @@ def user_has_premium(guild: Optional[discord.Guild], user: discord.abc.User) -> 
         return True
     return False
 
+_BG_URL_RE = re.compile(r"^https?://\S+\.(png|jpe?g|webp)(\?\S*)?$", re.IGNORECASE)
+
+async def fetch_rank_bg_bytes(is_prem: bool, target_uid: int) -> Optional[bytes]:
+    """Download the target's custom rank card background, if they're
+    premium and have one set. Returns None (never raises) on any failure
+    — a dead/removed image URL should degrade to the normal gradient
+    background, never break the whole rank card render."""
+    if not is_prem:
+        return None
+    url = cfg.get("premium_backgrounds", {}).get(str(target_uid))
+    if not url:
+        return None
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return None
+                return await resp.read()
+    except Exception:
+        logging.warning(f"[{BOT_NAME}] Gagal download custom rank card background dari {url}")
+        return None
+
 async def check_premium_expiry():
     now        = datetime.datetime.now(datetime.timezone.utc)
     expiry_map = cfg.get("premium_expiry", {})
@@ -941,6 +966,15 @@ def build_profile_embed(user: discord.abc.User) -> discord.Embed:
         text=f"{BOT_NAME} • {BOT_TAGLINE}",
         icon_url=user.display_avatar.url
     )
+
+    # Same custom background set via `rankbg`/`/rankbg` doubles as this
+    # profile embed's banner — one background, reused everywhere premium
+    # cares about, instead of a second separate thing to configure.
+    if has_prem:
+        bg_url = cfg.get("premium_backgrounds", {}).get(str(uid))
+        if bg_url:
+            embed.set_image(url=bg_url)
+
     return embed
 
 
@@ -3003,10 +3037,11 @@ async def pfx_rank(ctx, member: discord.Member = None):
             async with aiohttp.ClientSession() as session:
                 async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     avatar_bytes = await resp.read()
+            bg_bytes = await fetch_rank_bg_bytes(is_prem, target.id)
             buf = await asyncio.to_thread(
                 rank_card.render_rank_card,
                 avatar_bytes, target.name, lvl, rank, cx, nx,
-                data["xp"], is_prem, data.get("messages", 0)
+                data["xp"], is_prem, data.get("messages", 0), bg_bytes
             )
             file = discord.File(buf, filename="rank.png")
         except Exception:
@@ -3038,6 +3073,43 @@ async def pfx_rank(ctx, member: discord.Member = None):
     embed.set_thumbnail(url=target.display_avatar.url)
     embed.set_footer(text=BOT_NAME)
     await ctx.send(embed=embed)
+
+@bot.command(name="rankbg", aliases=["rankbackground", "cardbg"])
+async def pfx_rankbg(ctx, url: str = ""):
+    if not user_has_premium(ctx.guild, ctx.author):
+        return await ctx.send(embed=error_embed(
+            "Custom backgrounds (rank card + profile banner) are a **Premium** perk. Use `vote` or check `premium` to unlock it."
+        ))
+    backgrounds = cfg.setdefault("premium_backgrounds", {})
+    uid = str(ctx.author.id)
+    if not url:
+        if uid in backgrounds:
+            backgrounds.pop(uid, None)
+            save_config(cfg)
+            return await ctx.send(embed=success_embed("Custom background removed — your rank card and profile banner are back to the default look."))
+        return await ctx.send(embed=info_embed(
+            "Custom Background",
+            "`rankbg <image url>` — set a custom background for your `rank` card and `profile` banner (must end in `.png`, `.jpg`, `.jpeg`, or `.webp`)\n"
+            "`rankbg` (no url) — remove your current custom background"
+        ))
+    if not _BG_URL_RE.match(url.strip()):
+        return await ctx.send(embed=error_embed("That doesn't look like a valid direct image URL — it needs to start with `http(s)://` and end in `.png`, `.jpg`, `.jpeg`, or `.webp`."))
+    async with ctx.typing():
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url.strip(), timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return await ctx.send(embed=error_embed(f"Couldn't fetch that URL (HTTP {resp.status}) — double-check it's a direct, public image link."))
+                    test_bytes = await resp.read()
+        except Exception:
+            return await ctx.send(embed=error_embed("Couldn't fetch that URL — double-check it's a direct, public image link."))
+        rendered = await asyncio.to_thread(rank_card.cover_image, test_bytes, (934, 300))
+        if rendered is None:
+            return await ctx.send(embed=error_embed("That URL didn't decode as a valid image — try a different link."))
+    backgrounds[uid] = url.strip()
+    save_config(cfg)
+    await ctx.send(embed=success_embed("Custom background set! It'll show on your `rank` card and as your `profile` banner."))
 
 def _vote_command_kwargs(uid: int) -> dict:
     """Shared embed+view builder for /vote and !vote."""
@@ -5523,7 +5595,7 @@ HELP_CATEGORIES = [
         "`/ticketpanel` — full visual builder (title, description, welcome message, thumbnail, "
         "banner, color, button label/emoji/color, button-or-dropdown), same style as `/embed`."
     )),
-    ("level", "Level & XP", ICON_LEVEL, "📈", "`rank` · `leaderboard` (alias `lb`) · `level toggle/setchannel/status` · `xp`"),
+    ("level", "Level & XP", ICON_LEVEL, "📈", "`rank` · `rankbg` (premium) · `leaderboard` (alias `lb`) · `level toggle/setchannel/status` · `xp`"),
     ("giveaway", "Giveaway", ICON_GIVEAWAY, "🎉", "`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`"),
     ("antispam", "Antispam", ICON_ANTISPAM, "🛡️", "`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`"),
     ("antinuke", "Anti-Nuke", ICON_ANTINUKE, "🛡️", "`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`"),
@@ -5710,10 +5782,11 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
         async with aiohttp.ClientSession() as session:
             async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 avatar_bytes = await resp.read()
+        bg_bytes = await fetch_rank_bg_bytes(is_prem, target.id)
         buf = await asyncio.to_thread(
             rank_card.render_rank_card,
             avatar_bytes, target.name, lvl, rank, cx, nx,
-            data["xp"], is_prem, data.get("messages", 0)
+            data["xp"], is_prem, data.get("messages", 0), bg_bytes
         )
         file = discord.File(buf, filename="rank.png")
     except Exception:
@@ -5735,6 +5808,44 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
     embed.set_author(name="Rank Card", icon_url=target.display_avatar.url)
     embed.set_thumbnail(url=target.display_avatar.url)
     await i.followup.send(embed=embed)
+
+@bot.tree.command(name="rankbg", description="Set or remove a custom rank card + profile banner background (Premium perk).")
+@app_commands.describe(url="Direct image URL (.png/.jpg/.jpeg/.webp) — leave empty to remove your current background")
+async def slash_rankbg(i: discord.Interaction, url: Optional[str] = None):
+    if not user_has_premium(i.guild, i.user):
+        return await i.response.send_message(embed=error_embed(
+            "Custom backgrounds (rank card + profile banner) are a **Premium** perk. Use `/vote` or check `/premium` to unlock it."
+        ), ephemeral=True)
+    backgrounds = cfg.setdefault("premium_backgrounds", {})
+    uid = str(i.user.id)
+    if not url:
+        if uid in backgrounds:
+            backgrounds.pop(uid, None)
+            save_config(cfg)
+            return await i.response.send_message(embed=success_embed("Custom background removed — your rank card and profile banner are back to the default look."), ephemeral=True)
+        return await i.response.send_message(embed=info_embed(
+            "Custom Background",
+            "`/rankbg url:<image url>` — set a custom background for your `/rank` card and `/profile` banner (must end in `.png`, `.jpg`, `.jpeg`, or `.webp`)\n"
+            "`/rankbg` (no url) — remove your current custom background"
+        ), ephemeral=True)
+    if not _BG_URL_RE.match(url.strip()):
+        return await i.response.send_message(embed=error_embed("That doesn't look like a valid direct image URL — it needs to start with `http(s)://` and end in `.png`, `.jpg`, `.jpeg`, or `.webp`."), ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url.strip(), timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    return await i.followup.send(embed=error_embed(f"Couldn't fetch that URL (HTTP {resp.status}) — double-check it's a direct, public image link."), ephemeral=True)
+                test_bytes = await resp.read()
+    except Exception:
+        return await i.followup.send(embed=error_embed("Couldn't fetch that URL — double-check it's a direct, public image link."), ephemeral=True)
+    rendered = await asyncio.to_thread(rank_card.cover_image, test_bytes, (934, 300))
+    if rendered is None:
+        return await i.followup.send(embed=error_embed("That URL didn't decode as a valid image — try a different link."), ephemeral=True)
+    backgrounds[uid] = url.strip()
+    save_config(cfg)
+    await i.followup.send(embed=success_embed("Custom background set! It'll show on your `/rank` card and as your `/profile` banner."), ephemeral=True)
 
 @bot.tree.command(name="vote", description="Vote for the bot on top.gg and get a +10% XP Boost for 20 minutes.")
 async def slash_vote(i: discord.Interaction):
@@ -7367,6 +7478,18 @@ async def on_app_command_error(i: discord.Interaction, error: app_commands.AppCo
     msg = str(error)
     if isinstance(error, app_commands.MissingPermissions):
         msg = "You don't have permission to use this command."
+    elif "channel id specified is invalid" in msg.lower():
+        # Known Discord-side glitch: happens when a client (often mobile)
+        # is holding a stale cached copy of this command's option
+        # definitions, so the channel it submits doesn't match what
+        # Discord currently expects. Not something our code can catch
+        # earlier — it fails during Discord's own option resolution,
+        # before our command body ever runs.
+        msg = (
+            "Discord rejected the channel you picked — this usually means your app has a stale cached "
+            "copy of this command. Fully close and reopen Discord (or try from desktop), then run the "
+            "command again."
+        )
     try:
         await i.response.send_message(embed=error_embed(msg), ephemeral=True)
     except discord.InteractionResponded:
