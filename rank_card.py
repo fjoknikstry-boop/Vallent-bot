@@ -177,7 +177,38 @@ def _horizontal_gradient(size, left, right) -> Image.Image:
         base.putpixel((x, 0), tuple(int(left[c] + (right[c] - left[c]) * t) for c in range(3)))
     return base.resize((w, h))
 
-def _rounded_mask(size, radius) -> Image.Image:
+def _lerp_color(c1, c2, t: float) -> tuple:
+    t = max(0.0, min(1.0, t))
+    return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
+
+def _darken(c, factor: float) -> tuple:
+    return tuple(int(ch * factor) for ch in c)
+
+def _lighten(c, factor: float) -> tuple:
+    return tuple(int(ch + (255 - ch) * factor) for ch in c)
+
+def _gradient_text(canvas: Image.Image, xy, text: str, primary_path: str, size: int, color1, color2, bold: bool = True) -> float:
+    """Draw `text` filled with a left-to-right 2-color gradient instead of a
+    flat color — used for the premium accent label when the user has a
+    custom gradient set. `canvas` must be an RGBA image (every card here
+    is). Returns the drawn width so callers can position what comes next.
+    Degrades to nothing drawn (returns 0) for empty text rather than raising."""
+    x, y = xy
+    scratch = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    total_w = int(text_width(scratch, text, primary_path, size, bold)) + 2
+    if total_w <= 0:
+        return 0
+    probe = _font(primary_path, size)
+    ascent, descent = probe.getmetrics()
+    total_h = ascent + descent + 4
+    mask_layer = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+    draw_text(ImageDraw.Draw(mask_layer), (0, 0), text, primary_path, size, (255, 255, 255, 255), bold)
+    grad = _horizontal_gradient((total_w, total_h), color1, color2).convert("RGBA")
+    grad.putalpha(mask_layer.split()[-1])
+    canvas.paste(grad, (int(x), int(y)), grad)
+    return total_w
+
+
     mask = Image.new("L", size, 0)
     ImageDraw.Draw(mask).rounded_rectangle([0, 0, size[0] - 1, size[1] - 1], radius=radius, fill=255)
     return mask
@@ -222,7 +253,16 @@ def _circle_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_widt
     ring_size = diameter + ring_width * 2
     ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
     rd = ImageDraw.Draw(ring)
-    rd.ellipse([0, 0, ring_size, ring_size], fill=ring_color)
+    if isinstance(ring_color[0], (tuple, list)):
+        c1, c2 = ring_color
+        fill_layer = _vertical_gradient((ring_size, ring_size), c1, c2).convert("RGBA")
+        ring_mask = Image.new("L", (ring_size, ring_size), 0)
+        ImageDraw.Draw(ring_mask).ellipse([0, 0, ring_size, ring_size], fill=255)
+        fill_layer.putalpha(ring_mask)
+        ring = fill_layer
+    else:
+        rd.ellipse([0, 0, ring_size, ring_size], fill=ring_color)
+    rd = ImageDraw.Draw(ring)
     rd.ellipse([ring_width, ring_width, ring_width + diameter, ring_width + diameter], fill=(0, 0, 0, 0))
     ring.paste(out, (ring_width, ring_width), out)
     return ring
@@ -269,7 +309,9 @@ def _hex_mask(size: int) -> Image.Image:
 
 def _hex_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_width: int = 6) -> Image.Image:
     """Hexagonal avatar frame — distinctive alternative to the standard
-    circle-crop every rank-card bot uses."""
+    circle-crop every rank-card bot uses. `ring_color` can be a plain (r,g,b)
+    for a solid ring, or a 2-tuple of (r,g,b) for a diagonal gradient ring
+    (used when a premium user has a custom gradient set)."""
     avatar_img = avatar_img.convert("RGBA").resize((diameter, diameter), Image.LANCZOS)
     inner_mask = _hex_mask(diameter)
     inner = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
@@ -277,7 +319,12 @@ def _hex_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_width: 
 
     ring_size  = diameter + ring_width * 2
     outer_mask = _hex_mask(ring_size)
-    ring_layer = Image.new("RGBA", (ring_size, ring_size), (*ring_color, 255))
+    if isinstance(ring_color[0], (tuple, list)):
+        c1, c2 = ring_color
+        ring_layer = _vertical_gradient((ring_size, ring_size), c1, c2).convert("RGBA")
+        ring_layer.putalpha(255)
+    else:
+        ring_layer = Image.new("RGBA", (ring_size, ring_size), (*ring_color, 255))
     ring_layer.putalpha(outer_mask)
 
     hole_mask = Image.new("L", (ring_size, ring_size), 0)
@@ -290,27 +337,42 @@ def _hex_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_width: 
     final.paste(inner, (ring_width, ring_width), inner)
     return final
 
-def _fire_aura(diameter: int, ring_width: int) -> Image.Image:
+def _fire_aura(diameter: int, ring_width: int, colors: Optional[tuple] = None) -> Image.Image:
     """A soft, irregular 'blaze' licking up from behind a premium avatar's
     ring. Instead of sharp radiating spikes, this builds a few overlapping
     wavy coronas (uneven, flame-like bumps around the circumference) —
-    a deep-gold outer glow, a mid-gold layer, and a bright inner-gold lick
-    — each blurred by a different amount so the inner layer reads sharper
-    ("closer to the fire") and the outer layer reads softer (glow bleeding
-    outward). Every layer stays in the same gold family as the rest of the
-    premium theme (no orange/red) so nothing clashes. Deterministic (no
-    randomness) so re-rendering the same card looks the same every time."""
+    a deep outer glow, a mid layer, and a bright inner lick — each blurred
+    by a different amount so the inner layer reads sharper ("closer to the
+    fire") and the outer layer reads softer (glow bleeding outward).
+    Deterministic (no randomness) so re-rendering the same card looks the
+    same every time.
+
+    `colors` is an optional ((r,g,b), (r,g,b)) gradient — when a premium
+    user has set a custom `rankcolor`, the flame itself shifts to match
+    (outer glow leaning into the second color, the hot inner lick leaning
+    into and brightening the first) instead of always burning gold."""
     pad  = max(int(diameter * 0.24), 20)
     size = diameter + ring_width * 2 + pad * 2
     cx = cy = size / 2
     base_r = diameter / 2 + ring_width
 
-    # (color, alpha, extra_radius, bump_amplitude, bump_count, phase, blur)
-    layers = [
-        ((90, 62, 4),    70,  pad * 0.95, pad * 0.55, 5, 0.4, 9),   # deep gold, outer glow
-        ((160, 108, 10), 105, pad * 0.55, pad * 0.40, 6, 2.1, 6),   # mid gold
-        ((245, 176, 60), 140, pad * 0.25, pad * 0.28, 7, 4.0, 3),   # bright gold, inner licks
-    ]
+    if colors:
+        c1, c2 = colors
+        mid = _lerp_color(c1, c2, 0.5)
+        # (color, alpha, extra_radius, bump_amplitude, bump_count, phase, blur)
+        layers = [
+            (_darken(c2, 0.4),   70,  pad * 0.95, pad * 0.55, 5, 0.4, 9),   # outer glow, leans into color 2
+            (mid,                105, pad * 0.55, pad * 0.40, 6, 2.1, 6),   # mid blend
+            (_lighten(c1, 0.4),  140, pad * 0.25, pad * 0.28, 7, 4.0, 3),   # bright inner lick, leans into color 1
+        ]
+    else:
+        # Every layer stays in the same gold family as the rest of the
+        # default premium theme (no orange/red) so nothing clashes.
+        layers = [
+            ((90, 62, 4),    70,  pad * 0.95, pad * 0.55, 5, 0.4, 9),   # deep gold, outer glow
+            ((160, 108, 10), 105, pad * 0.55, pad * 0.40, 6, 2.1, 6),   # mid gold
+            ((245, 176, 60), 140, pad * 0.25, pad * 0.28, 7, 4.0, 3),   # bright gold, inner licks
+        ]
 
     out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     n_pts = 96
@@ -355,7 +417,12 @@ def _vx_watermark(size, opacity: int = 15) -> Image.Image:
     return layer.rotate(-8, resample=Image.BICUBIC)
 
 def _segmented_bar(draw: ImageDraw.ImageDraw, x, y, w, h, pct, segments, track_color, fill_color, gap=3):
-    """HUD-style tick-segmented bar instead of a plain smooth gradient pill."""
+    """HUD-style tick-segmented bar instead of a plain smooth gradient pill.
+    `fill_color` can be a plain (r,g,b) for a solid bar, or a 2-tuple of
+    (r,g,b) so each filled tick shades from the first color (left) to the
+    second (right) across the whole bar — used for the premium custom
+    gradient perk."""
+    is_gradient = isinstance(fill_color[0], (tuple, list))
     seg_w  = (w - gap * (segments - 1)) / segments
     filled = max(0.0, min(pct, 1.0)) * segments
     for i in range(segments):
@@ -363,14 +430,22 @@ def _segmented_bar(draw: ImageDraw.ImageDraw, x, y, w, h, pct, segments, track_c
         draw.rectangle([sx, y, sx + seg_w, y + h], fill=track_color)
         amt = max(0.0, min(1.0, filled - i))
         if amt > 0:
-            draw.rectangle([sx, y, sx + seg_w * amt, y + h], fill=fill_color)
+            seg_fill = _lerp_color(fill_color[0], fill_color[1], i / max(segments - 1, 1)) if is_gradient else fill_color
+            draw.rectangle([sx, y, sx + seg_w * amt, y + h], fill=seg_fill)
 
-def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = False, background_bytes: Optional[bytes] = None) -> Image.Image:
+def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = False, background_bytes: Optional[bytes] = None, accent_colors: Optional[tuple] = None) -> Image.Image:
     """Shared background stack for both cards: gradient + blood glow +
     VX watermark + grain texture, clipped to the angled card silhouette.
     `premium=True` swaps the whole palette to gold instead of crimson, so
     a premium card is unmistakably different at a glance, not just the
     avatar ring.
+
+    `accent_colors` (premium-only, caller enforces that) is an optional
+    ((r,g,b), (r,g,b)) pair — when set, it replaces the fixed gold palette
+    with the user's own 2-color gradient: darker tints for the background,
+    the two colors themselves split across the corner brackets/HUD dots so
+    the frame itself visibly reads as a gradient, not just a single swapped
+    color.
 
     `background_bytes` (premium-only feature, caller enforces that) swaps
     the flat gradient for a user-uploaded image, cropped to cover the full
@@ -379,11 +454,21 @@ def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = Fal
     uploaded image is — the border, corner brackets and glow are untouched
     either way, so a custom background still unmistakably reads as a
     VALLENT EXS card, not a random image with text slapped on."""
-    bg_top    = GOLD_BG_TOP if premium else BG_TOP
-    bg_bottom = GOLD_BG_BTM if premium else BG_BOTTOM
-    border    = GOLD_DARK   if premium else DARK_RED
-    corner    = GOLD        if premium else CRIMSON
-    blood     = GOLD_DARK   if premium else BLOOD
+    if premium and accent_colors:
+        c1, c2   = accent_colors
+        bg_top    = _darken(c1, 0.09)
+        bg_bottom = _darken(c2, 0.22)
+        border    = _darken(c1, 0.5)
+        corner    = c1
+        corner2   = c2
+        blood     = _darken(c2, 0.5)
+    else:
+        bg_top    = GOLD_BG_TOP if premium else BG_TOP
+        bg_bottom = GOLD_BG_BTM if premium else BG_BOTTOM
+        border    = GOLD_DARK   if premium else DARK_RED
+        corner    = GOLD        if premium else CRIMSON
+        corner2   = corner
+        blood     = GOLD_DARK   if premium else BLOOD
 
     custom_bg = cover_image(background_bytes, (W, H)) if background_bytes else None
     if custom_bg is not None:
@@ -435,13 +520,13 @@ def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = Fal
         draw.line(inset_pts, fill=(*corner, 100), width=1)
 
         _corner_bracket(draw, 16, 16, 26, (*corner, 235), width=3)
-        _corner_bracket(draw, 16, H - 16, 26, (*corner, 235), flip_y=True, width=3)
-        _corner_bracket(draw, W - 16, H - 16, 26, (*corner, 235), flip_x=True, flip_y=True, width=3)
+        _corner_bracket(draw, 16, H - 16, 26, (*_lerp_color(corner, corner2, 0.5), 235), flip_y=True, width=3)
+        _corner_bracket(draw, W - 16, H - 16, 26, (*corner2, 235), flip_x=True, flip_y=True, width=3)
 
         # small glowing HUD dots at each bracket's vertex
-        for bx, by in [(16, 16), (16, H - 16), (W - 16, H - 16)]:
-            draw.ellipse([bx - 4, by - 4, bx + 4, by + 4], fill=(*corner, 90))
-            draw.ellipse([bx - 2, by - 2, bx + 2, by + 2], fill=(*corner, 255))
+        for (bx, by), dot_c in [((16, 16), corner), ((16, H - 16), _lerp_color(corner, corner2, 0.5)), ((W - 16, H - 16), corner2)]:
+            draw.ellipse([bx - 4, by - 4, bx + 4, by + 4], fill=(*dot_c, 90))
+            draw.ellipse([bx - 2, by - 2, bx + 2, by + 2], fill=(*dot_c, 255))
     else:
         # ── REGULAR: plain flat outline, unchanged — kept simple on
         # purpose so the premium glow-up above actually stands out. ────
@@ -475,20 +560,22 @@ def render_rank_card(
     is_premium: bool = False,
     messages: int = 0,
     background_bytes: Optional[bytes] = None,
+    accent_colors: Optional[tuple] = None,
 ) -> io.BytesIO:
     W, H = 934, 300
     cut  = 50
-    accent = GOLD if is_premium else CRIMSON
-    canvas = _card_base(W, H, cut=cut, premium=is_premium, background_bytes=background_bytes if is_premium else None)
+    grad = accent_colors if (is_premium and accent_colors) else None
+    accent = grad[0] if grad else (GOLD if is_premium else CRIMSON)
+    canvas = _card_base(W, H, cut=cut, premium=is_premium, background_bytes=background_bytes if is_premium else None, accent_colors=grad)
     draw   = ImageDraw.Draw(canvas)
 
     av = _safe_avatar(avatar_bytes)
-    ring_color = accent
+    ring_color = grad if grad else accent
     avatar_d = 168
     hexring  = _hex_avatar(av, avatar_d, ring_color, ring_width=6)
     ax, ay = 50, (H - hexring.height) // 2
     if is_premium:
-        aura = _fire_aura(avatar_d, ring_width=6)
+        aura = _fire_aura(avatar_d, ring_width=6, colors=grad)
         aura_pos = (int(ax + hexring.width / 2 - aura.width / 2), int(ay + hexring.height / 2 - aura.height / 2))
         canvas.paste(aura, aura_pos, aura)
     canvas.paste(hexring, (ax, ay), hexring)
@@ -507,12 +594,22 @@ def render_rank_card(
     while text_width(draw, uname, F_DISPLAY, size) > max_w and size > 26:
         size -= 2
     draw_text(draw, (text_x, name_y), uname, F_DISPLAY, size, WHITE)
-    draw.rectangle([text_x, name_y + size + 2, text_x + 50, name_y + size + 6], fill=(*accent, 255))
+    if grad:
+        underline = _horizontal_gradient((50, 4), grad[0], grad[1]).convert("RGBA")
+        canvas.paste(underline, (text_x, name_y + size + 2))
+    else:
+        draw.rectangle([text_x, name_y + size + 2, text_x + 50, name_y + size + 6], fill=(*accent, 255))
 
     sub_y = name_y + size + 16
     if is_premium:
-        _draw_diamond(draw, text_x + 7, sub_y + 11, 8, GOLD)
-        draw.text((text_x + 20, sub_y), "PREMIUM MEMBER", font=f_small, fill=GOLD)
+        _draw_diamond(draw, text_x + 7, sub_y + 11, 8, accent)
+        # "PREMIUM" alone reads cleaner than "PREMIUM MEMBER" — same info,
+        # less clutter, and it leaves room to breathe next to the diamond.
+        if grad:
+            _gradient_text(canvas, (text_x + 20, sub_y), "PREMIUM", F_BOLD, 22, grad[0], grad[1])
+            draw = ImageDraw.Draw(canvas)
+        else:
+            draw.text((text_x + 20, sub_y), "PREMIUM", font=f_small, fill=GOLD)
         sub_y += 28
 
     rl_y = sub_y + 6
@@ -527,7 +624,8 @@ def render_rank_card(
     bar_y = rl_y + 42
     bar_w = W - text_x - 90
     bar_h = 22
-    _segmented_bar(draw, text_x, bar_y, bar_w, bar_h, cur_xp / max(need_xp, 1), 20, (35, 16, 18), accent, gap=3)
+    bar_fill = grad if grad else accent
+    _segmented_bar(draw, text_x, bar_y, bar_w, bar_h, cur_xp / max(need_xp, 1), 20, (35, 16, 18), bar_fill, gap=3)
 
     xp_text = f"{cur_xp:,} / {need_xp:,} XP"
     xp_w = draw.textlength(xp_text, font=f_xp)
@@ -544,12 +642,13 @@ def render_rank_card(
 # LEVEL-UP CARD — dipakai di notifikasi level up otomatis
 # ══════════════════════════════════════════════════════════════════
 
-def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_level: int, is_premium: bool = False, role_names: list | None = None, background_bytes: Optional[bytes] = None) -> io.BytesIO:
+def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_level: int, is_premium: bool = False, role_names: list | None = None, background_bytes: Optional[bytes] = None, accent_colors: Optional[tuple] = None) -> io.BytesIO:
     W, H = 934, 282
-    bg_top    = GOLD_BG_TOP if is_premium else (18, 4, 6)
-    bg_bottom = GOLD_BG_BTM if is_premium else (48, 6, 10)
-    accent    = GOLD if is_premium else CRIMSON
-    border    = GOLD_DARK if is_premium else DARK_RED
+    grad = accent_colors if (is_premium and accent_colors) else None
+    accent    = grad[0] if grad else (GOLD if is_premium else CRIMSON)
+    bg_top    = _darken(grad[0], 0.09) if grad else (GOLD_BG_TOP if is_premium else (18, 4, 6))
+    bg_bottom = _darken(grad[1], 0.24) if grad else (GOLD_BG_BTM if is_premium else (48, 6, 10))
+    border    = _darken(grad[0], 0.5) if grad else (GOLD_DARK if is_premium else DARK_RED)
 
     custom_bg = cover_image(background_bytes, (W, H)) if (is_premium and background_bytes) else None
     if custom_bg is not None:
@@ -564,20 +663,20 @@ def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_
         glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         gd = ImageDraw.Draw(glow)
         cx, cy = 160, H // 2
+        glow_color2 = grad[1] if grad else accent
         for r, a in [(230, 26), (170, 40), (110, 60)]:
-            gd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*accent, a))
+            gd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*_lerp_color(accent, glow_color2, min(r / 230, 1)), a))
         card = Image.alpha_composite(card, glow)
 
     draw = ImageDraw.Draw(card)
     draw.rounded_rectangle([2, 2, W - 3, H - 3], radius=22, outline=(*border, 255), width=3)
 
     av = _safe_avatar(avatar_bytes)
-    ring_color = (*accent, 255)
     avatar_d = 176
-    avatar_ring = _circle_avatar(av, avatar_d, ring_color, ring_width=7)
+    avatar_ring = _circle_avatar(av, avatar_d, grad if grad else (*accent, 255), ring_width=7)
     ax, ay = 60, (H - avatar_ring.height) // 2
     if is_premium:
-        aura = _fire_aura(avatar_d, ring_width=7)
+        aura = _fire_aura(avatar_d, ring_width=7, colors=grad)
         aura_pos = (int(ax + avatar_ring.width / 2 - aura.width / 2), int(ay + avatar_ring.height / 2 - aura.height / 2))
         card.paste(aura, aura_pos, aura)
     card.paste(avatar_ring, (ax, ay), avatar_ring)
@@ -587,8 +686,20 @@ def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_
     max_w  = W - text_x - 40
 
     f_tag = _font(F_BOLD, 26)
-    tag_txt = "LEVEL UP  ·  PREMIUM" if is_premium else "LEVEL UP"
-    draw.text((text_x, 46), tag_txt, font=f_tag, fill=(*accent, 255))
+    # "LEVEL UP" alone for regular members; premium gets a small diamond +
+    # "PREMIUM" instead of the old "· PREMIUM" suffix — cleaner two-part tag.
+    if is_premium:
+        draw.text((text_x, 46), "LEVEL UP", font=f_tag, fill=(*accent, 255))
+        lvlup_w = draw.textlength("LEVEL UP   ", font=f_tag)
+        _draw_diamond(draw, text_x + lvlup_w + 7, 46 + 18, 7, accent)
+        if grad:
+            card_canvas = card  # already RGBA
+            _gradient_text(card_canvas, (text_x + lvlup_w + 20, 46), "PREMIUM", F_BOLD, 24, grad[0], grad[1])
+            draw = ImageDraw.Draw(card)
+        else:
+            draw.text((text_x + lvlup_w + 20, 46), "PREMIUM", font=_font(F_BOLD, 24), fill=GOLD)
+    else:
+        draw.text((text_x, 46), "LEVEL UP", font=f_tag, fill=(*accent, 255))
 
     # Level progression, e.g. "LEVEL 6  ➔  LEVEL 7" — auto-shrinks to fit
     prog_txt = f"LEVEL {old_level}  \u2192  LEVEL {new_level}"
@@ -608,7 +719,7 @@ def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_
         rsize = 22
         while text_width(draw, role_txt, F_BOLD, rsize) > max_w and rsize > 14:
             rsize -= 2
-        draw_text(draw, (text_x, 226), role_txt, F_BOLD, rsize, GOLD)
+        draw_text(draw, (text_x, 226), role_txt, F_BOLD, rsize, accent if is_premium else GOLD)
 
     draw = ImageDraw.Draw(card)
     _watermark(draw, card.size)
