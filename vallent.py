@@ -117,6 +117,7 @@ def load_config() -> dict:
             "custom_badges":     {},
             "user_custom_badges": {},
             "premium_backgrounds": {},   # uid(str) -> image URL, custom rank card background (premium-only)
+            "premium_colors": {},        # uid(str) -> [hex1, hex2], custom 2-color gradient accent (premium-only)
             "status_channel_id": None,
             "votes":             {},
             "payment_methods": {
@@ -141,6 +142,7 @@ def load_config() -> dict:
     data.setdefault("custom_badges",      {})   # badge_id -> {"name": str, "emoji": str} — owner-defined, free-form badges
     data.setdefault("user_custom_badges", {})   # uid(str) -> [badge_id, ...] — which custom badges each user holds
     data.setdefault("premium_backgrounds", {})  # uid(str) -> image URL, custom rank card background (premium-only)
+    data.setdefault("premium_colors", {})       # uid(str) -> [hex1, hex2], custom 2-color gradient accent (premium-only)
     data.setdefault("moonkeeper_users",     [])   # uid list — manual Moonkeeper grants (independent of bot_roles hierarchy)
     data.setdefault("moonkeeper_sync_role", None)  # single Discord role ID synced to Moonkeeper, if any
     data.setdefault("role_sync",        {})
@@ -570,6 +572,31 @@ async def fetch_rank_bg_bytes(is_prem: bool, target_uid: int) -> Optional[bytes]
     except Exception:
         logging.warning(f"[{BOT_NAME}] Gagal download custom rank card background dari {url}")
         return None
+
+_HEX_COLOR_RE = re.compile(r"^#?([0-9A-Fa-f]{6})$")
+
+def parse_hex_color(raw: str) -> Optional[tuple]:
+    """'#a672ff' / 'a672ff' -> (166, 114, 255). None for anything invalid."""
+    m = _HEX_COLOR_RE.match((raw or "").strip())
+    if not m:
+        return None
+    hex6 = m.group(1)
+    return tuple(int(hex6[i:i+2], 16) for i in (0, 2, 4))
+
+def get_premium_accent(is_prem: bool, uid: int) -> Optional[tuple]:
+    """The target's custom 2-color gradient accent, if they're premium and
+    have one set — returns ((r,g,b), (r,g,b)) or None (falls back to the
+    default gold theme). Never raises: a corrupted/legacy-bad stored value
+    just degrades to the default gold instead of breaking the card render."""
+    if not is_prem:
+        return None
+    pair = cfg.get("premium_colors", {}).get(str(uid))
+    if not pair or len(pair) != 2:
+        return None
+    c1, c2 = parse_hex_color(pair[0]), parse_hex_color(pair[1])
+    if not c1 or not c2:
+        return None
+    return (c1, c2)
 
 async def check_premium_expiry():
     now        = datetime.datetime.now(datetime.timezone.utc)
@@ -2422,9 +2449,10 @@ async def on_message(message: discord.Message):
                         is_prem = user_has_premium(message.guild, message.author)
                         role_names = [r.name for r in granted_roles] if granted_roles else None
                         bg_bytes = await fetch_rank_bg_bytes(is_prem, message.author.id)
+                        accent_colors = get_premium_accent(is_prem, message.author.id)
                         buf = await asyncio.to_thread(
                             rank_card.render_levelup_card,
-                            avatar_bytes, message.author.name, old_level, data["level"], is_prem, role_names, bg_bytes
+                            avatar_bytes, message.author.name, old_level, data["level"], is_prem, role_names, bg_bytes, accent_colors
                         )
                         file = discord.File(buf, filename="levelup.png")
                         await lvl_ch.send(content=content, file=file)
@@ -3039,10 +3067,11 @@ async def pfx_rank(ctx, member: discord.Member = None):
                 async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     avatar_bytes = await resp.read()
             bg_bytes = await fetch_rank_bg_bytes(is_prem, target.id)
+            accent_colors = get_premium_accent(is_prem, target.id)
             buf = await asyncio.to_thread(
                 rank_card.render_rank_card,
                 avatar_bytes, target.name, lvl, rank, cx, nx,
-                data["xp"], is_prem, data.get("messages", 0), bg_bytes
+                data["xp"], is_prem, data.get("messages", 0), bg_bytes, accent_colors
             )
             file = discord.File(buf, filename="rank.png")
         except Exception:
@@ -3088,10 +3117,10 @@ async def pfx_rankbg(ctx, url: str = ""):
         if uid in backgrounds:
             backgrounds.pop(uid, None)
             save_config(cfg)
-            return await ctx.send(embed=success_embed("Custom background removed — your rank card and profile banner are back to the default look."))
+            return await ctx.send(embed=success_embed("Custom background removed — your rank card, profile banner, and level-up card are back to the default look."))
         return await ctx.send(embed=info_embed(
             "Custom Background",
-            "`rankbg <image url>` — set a custom background for your `rank` card and `profile` banner (must end in `.png`, `.jpg`, `.jpeg`, or `.webp`)\n"
+            "`rankbg <image url>` — set a custom background for your `rank` card, `profile` banner, and level-up card (must end in `.png`, `.jpg`, `.jpeg`, or `.webp`)\n"
             "`rankbg` (no url) — remove your current custom background"
         ))
     if not _BG_URL_RE.match(url.strip()):
@@ -3111,7 +3140,38 @@ async def pfx_rankbg(ctx, url: str = ""):
             return await ctx.send(embed=error_embed("That URL didn't decode as a valid image — try a different link."))
     backgrounds[uid] = url.strip()
     save_config(cfg)
-    await ctx.send(embed=success_embed("Custom background set! It'll show on your `rank` card and as your `profile` banner."))
+    await ctx.send(embed=success_embed("Custom background set! It'll show on your `rank` card, `profile` banner, and level-up card."))
+
+@bot.command(name="rankcolor", aliases=["rankcolors", "cardcolor"])
+async def pfx_rankcolor(ctx, color1: str = "", color2: str = ""):
+    if not user_has_premium(ctx.guild, ctx.author):
+        msg = "A custom gradient color (rank card + level-up card) is a **Premium** perk — ask the bot owner about getting Premium."
+        if SUPPORT_INVITE:
+            msg += f"\n[Join the support server]({SUPPORT_INVITE}) to ask about it."
+        return await ctx.send(embed=error_embed(msg))
+    colors = cfg.setdefault("premium_colors", {})
+    uid = str(ctx.author.id)
+    if not color1:
+        if uid in colors:
+            colors.pop(uid, None)
+            save_config(cfg)
+            return await ctx.send(embed=success_embed("Custom gradient removed — back to the default gold premium look."))
+        return await ctx.send(embed=info_embed(
+            "Rank Card Gradient",
+            "`rankcolor <hex1> <hex2>` — set a custom 2-color gradient for your `rank` card & level-up card (e.g. `rankcolor #a672ff #20dcd2`)\n"
+            "`rankcolor` (no args) — remove your gradient, back to default gold"
+        ))
+    if not color2:
+        return await ctx.send(embed=error_embed("Give two hex colors, e.g. `rankcolor #a672ff #20dcd2`."))
+    c1, c2 = parse_hex_color(color1), parse_hex_color(color2)
+    if not c1 or not c2:
+        return await ctx.send(embed=error_embed("That doesn't look like a valid hex color — use 6-digit hex codes like `#a672ff` or `a672ff`."))
+    colors[uid] = [color1.strip().lstrip("#"), color2.strip().lstrip("#")]
+    save_config(cfg)
+    embed = success_embed("Custom gradient set! It'll show on your `rank` card and level-up card.")
+    embed.add_field(name="Preview", value=f"`#{colors[uid][0]}` → `#{colors[uid][1]}`")
+    embed.color = discord.Color.from_rgb(*c1)
+    await ctx.send(embed=embed)
 
 def _vote_command_kwargs(uid: int) -> dict:
     """Shared embed+view builder for /vote and !vote."""
@@ -5597,7 +5657,7 @@ HELP_CATEGORIES = [
         "`/ticketpanel` — full visual builder (title, description, welcome message, thumbnail, "
         "banner, color, button label/emoji/color, button-or-dropdown), same style as `/embed`."
     )),
-    ("level", "Level & XP", ICON_LEVEL, "📈", "`rank` · `rankbg` (premium) · `leaderboard` (alias `lb`) · `level toggle/setchannel/status` · `xp`"),
+    ("level", "Level & XP", ICON_LEVEL, "📈", "`rank` · `rankbg` (premium) · `rankcolor` (premium) · `leaderboard` (alias `lb`) · `level toggle/setchannel/status` · `xp`"),
     ("giveaway", "Giveaway", ICON_GIVEAWAY, "🎉", "`giveaway start/end/reroll/list`\n`--role <id>` · `--winrole <id>`"),
     ("antispam", "Antispam", ICON_ANTISPAM, "🛡️", "`antispam setchannel` · `logchannel` · `punishment` · `threshold` · `flood` · `ignore` · `status`"),
     ("antinuke", "Anti-Nuke", ICON_ANTINUKE, "🛡️", "`antinuke enable/disable` · `antinuke logchannel` · `antinuke punishment` · `antinuke whitelist` · `antinuke status`"),
@@ -5785,10 +5845,11 @@ async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = 
             async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 avatar_bytes = await resp.read()
         bg_bytes = await fetch_rank_bg_bytes(is_prem, target.id)
+        accent_colors = get_premium_accent(is_prem, target.id)
         buf = await asyncio.to_thread(
             rank_card.render_rank_card,
             avatar_bytes, target.name, lvl, rank, cx, nx,
-            data["xp"], is_prem, data.get("messages", 0), bg_bytes
+            data["xp"], is_prem, data.get("messages", 0), bg_bytes, accent_colors
         )
         file = discord.File(buf, filename="rank.png")
     except Exception:
@@ -5825,10 +5886,10 @@ async def slash_rankbg(i: discord.Interaction, url: Optional[str] = None):
         if uid in backgrounds:
             backgrounds.pop(uid, None)
             save_config(cfg)
-            return await i.response.send_message(embed=success_embed("Custom background removed — your rank card and profile banner are back to the default look."), ephemeral=True)
+            return await i.response.send_message(embed=success_embed("Custom background removed — your rank card, profile banner, and level-up card are back to the default look."), ephemeral=True)
         return await i.response.send_message(embed=info_embed(
             "Custom Background",
-            "`/rankbg url:<image url>` — set a custom background for your `/rank` card and `/profile` banner (must end in `.png`, `.jpg`, `.jpeg`, or `.webp`)\n"
+            "`/rankbg url:<image url>` — set a custom background for your `/rank` card, `/profile` banner, and level-up card (must end in `.png`, `.jpg`, `.jpeg`, or `.webp`)\n"
             "`/rankbg` (no url) — remove your current custom background"
         ), ephemeral=True)
     if not _BG_URL_RE.match(url.strip()):
@@ -5848,7 +5909,39 @@ async def slash_rankbg(i: discord.Interaction, url: Optional[str] = None):
         return await i.followup.send(embed=error_embed("That URL didn't decode as a valid image — try a different link."), ephemeral=True)
     backgrounds[uid] = url.strip()
     save_config(cfg)
-    await i.followup.send(embed=success_embed("Custom background set! It'll show on your `/rank` card and as your `/profile` banner."), ephemeral=True)
+    await i.followup.send(embed=success_embed("Custom background set! It'll show on your `/rank` card, `/profile` banner, and level-up card."), ephemeral=True)
+
+@bot.tree.command(name="rankcolor", description="Set or remove a custom 2-color gradient for your rank/level-up cards (Premium perk).")
+@app_commands.describe(color1="First hex color, e.g. #a672ff", color2="Second hex color, e.g. #20dcd2")
+async def slash_rankcolor(i: discord.Interaction, color1: Optional[str] = None, color2: Optional[str] = None):
+    if not user_has_premium(i.guild, i.user):
+        msg = "A custom gradient color (rank card + level-up card) is a **Premium** perk — ask the bot owner about getting Premium."
+        if SUPPORT_INVITE:
+            msg += f"\n[Join the support server]({SUPPORT_INVITE}) to ask about it."
+        return await i.response.send_message(embed=error_embed(msg), ephemeral=True)
+    colors = cfg.setdefault("premium_colors", {})
+    uid = str(i.user.id)
+    if not color1:
+        if uid in colors:
+            colors.pop(uid, None)
+            save_config(cfg)
+            return await i.response.send_message(embed=success_embed("Custom gradient removed — back to the default gold premium look."), ephemeral=True)
+        return await i.response.send_message(embed=info_embed(
+            "Rank Card Gradient",
+            "`/rankcolor color1:<hex> color2:<hex>` — set a custom 2-color gradient for your `/rank` card & level-up card (e.g. `#a672ff` / `#20dcd2`)\n"
+            "`/rankcolor` (no args) — remove your gradient, back to default gold"
+        ), ephemeral=True)
+    if not color2:
+        return await i.response.send_message(embed=error_embed("Give two hex colors, e.g. `color1: #a672ff color2: #20dcd2`."), ephemeral=True)
+    c1, c2 = parse_hex_color(color1), parse_hex_color(color2)
+    if not c1 or not c2:
+        return await i.response.send_message(embed=error_embed("That doesn't look like a valid hex color — use 6-digit hex codes like `#a672ff` or `a672ff`."), ephemeral=True)
+    colors[uid] = [color1.strip().lstrip("#"), color2.strip().lstrip("#")]
+    save_config(cfg)
+    embed = success_embed("Custom gradient set! It'll show on your `/rank` card and level-up card.")
+    embed.add_field(name="Preview", value=f"`#{colors[uid][0]}` → `#{colors[uid][1]}`")
+    embed.color = discord.Color.from_rgb(*c1)
+    await i.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="vote", description="Vote for the bot on top.gg and get a +10% XP Boost for 20 minutes.")
 async def slash_vote(i: discord.Interaction):
