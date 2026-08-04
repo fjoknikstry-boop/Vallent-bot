@@ -641,19 +641,27 @@ async def fetch_badge_icon_images(uid: int) -> list:
         m = _CUSTOM_EMOJI_ID_RE.match(raw or "")
         if not m:
             return {"kind": "text", "char": raw or "\u2022", "color": (245, 245, 245)}
+        animated = raw.startswith("<a:")
         emoji_id = m.group(1)
-        url = f"https://cdn.discordapp.com/emojis/{emoji_id}.png?size=64"
+        ext = "gif" if animated else "png"
+        url = f"https://cdn.discordapp.com/emojis/{emoji_id}.{ext}?size=64"
+        # A plain aiohttp client with no headers gets blocked/empty-bodied by
+        # some CDN edges that only serve real browser-looking requests — a
+        # normal User-Agent fixes that without needing anything else.
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; VallentEXS/1.0; +https://discord.com)"}
         try:
             import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
+                        logging.warning(f"[{BOT_NAME}] badge emoji fetch: HTTP {resp.status} for {url}")
                         return {"kind": "text", "char": "\u2022", "color": (245, 245, 245)}
                     data = await resp.read()
             img = await asyncio.to_thread(Image.open, io.BytesIO(data))
             img.load()
             return {"kind": "image", "img": img}
-        except Exception:
+        except Exception as ex:
+            logging.warning(f"[{BOT_NAME}] badge emoji fetch failed for {url}: {ex!r}")
             return {"kind": "text", "char": "\u2022", "color": (245, 245, 245)}
 
     if not entries:
