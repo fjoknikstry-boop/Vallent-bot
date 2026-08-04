@@ -208,7 +208,7 @@ def _gradient_text(canvas: Image.Image, xy, text: str, primary_path: str, size: 
     canvas.paste(grad, (int(x), int(y)), grad)
     return total_w
 
-
+def _rounded_mask(size, radius) -> Image.Image:
     mask = Image.new("L", size, 0)
     ImageDraw.Draw(mask).rounded_rectangle([0, 0, size[0] - 1, size[1] - 1], radius=radius, fill=255)
     return mask
