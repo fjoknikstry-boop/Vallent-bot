@@ -28,6 +28,7 @@ from rank_card import (
     WHITE, MUTED, GOLD, CRIMSON,
     _font, draw_text, text_width,
     _vertical_gradient, _horizontal_gradient,
+    _vertical_gradient_multi, _horizontal_gradient_multi, _lerp_multi,
     _lerp_color, _darken, _lighten, _gradient_text,
     _rounded_mask, _noise_texture, _safe_avatar, cover_image, _flatten,
     _draw_diamond,
@@ -53,15 +54,15 @@ MAX_BADGE_ICONS = 7   # beyond this, collapse the rest into a "+N" chip
 def _ribbon(accent) -> Image.Image:
     """Folded-flag logo tab for the top-left corner — a rectangle with a
     triangular notch cut into the bottom, same silhouette language as a
-    classic ID-card corner ribbon. `accent` is a plain (r,g,b) or a 2-tuple
-    gradient pair."""
+    classic ID-card corner ribbon. `accent` is a plain (r,g,b) or a list
+    of 2-3 (r,g,b) gradient stops."""
     w, h = 150, 250
     layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     pts = [(0, 0), (w, 0), (w, h), (w // 2, h - 46), (0, h)]
     mask = Image.new("L", (w, h), 0)
     ImageDraw.Draw(mask).polygon(pts, fill=255)
     if isinstance(accent[0], (tuple, list)):
-        fill = _vertical_gradient((w, h), accent[0], accent[1]).convert("RGBA")
+        fill = _vertical_gradient_multi((w, h), list(accent)).convert("RGBA")
     else:
         fill = Image.new("RGBA", (w, h), (*accent, 255))
     fill.putalpha(mask)
@@ -181,9 +182,9 @@ def render_profile_card(
     background_bytes: Optional[bytes] = None,
     accent_colors: Optional[tuple] = None,
 ) -> io.BytesIO:
-    grad   = accent_colors if (is_premium and accent_colors) else None
+    grad   = list(accent_colors) if (is_premium and accent_colors) else None
     accent = grad[0] if grad else (GOLD if is_premium else ACCENT_DEFAULT)
-    accent2 = grad[1] if grad else accent
+    accent2 = grad[-1] if grad else accent
     border = _darken(grad[0], 0.55) if grad else ((110, 80, 8) if is_premium else BORDER_DEFAULT)
 
     # ── Background ───────────────────────────────────────────────
@@ -195,10 +196,11 @@ def render_profile_card(
         ImageDraw.Draw(side_scrim).rectangle([0, 0, int(W * 0.66), H], fill=(5, 3, 4, 120))
         side_scrim = side_scrim.filter(ImageFilter.GaussianBlur(50))
         canvas = Image.alpha_composite(canvas, side_scrim)
+    elif grad:
+        bg_colors = [_darken(c, 0.07 + i * (0.11 / max(len(grad) - 1, 1))) for i, c in enumerate(grad)]
+        canvas = _vertical_gradient_multi((W, H), bg_colors).convert("RGBA")
     else:
-        bg_top = _darken(accent, 0.07) if is_premium else BG_DEFAULT_TOP
-        bg_btm = _darken(accent2, 0.16) if is_premium else BG_DEFAULT_BTM
-        canvas = _vertical_gradient((W, H), bg_top, bg_btm).convert("RGBA")
+        canvas = _vertical_gradient((W, H), BG_DEFAULT_TOP, BG_DEFAULT_BTM).convert("RGBA")
 
     canvas = Image.alpha_composite(canvas, _noise_texture((W, H), opacity=6))
 
@@ -229,7 +231,7 @@ def render_profile_card(
     draw.text((title_x, 62), "VALLENT", font=_font(F_DISPLAY, 66), fill=WHITE)
     name_w = draw.textlength("VALLENT ", font=_font(F_DISPLAY, 66))
     if grad:
-        _gradient_text(canvas, (title_x + name_w, 62), "ID CARD", F_DISPLAY, 66, grad[0], grad[1])
+        _gradient_text(canvas, (title_x + name_w, 62), "ID CARD", F_DISPLAY, 66, grad)
         draw = ImageDraw.Draw(canvas)
     else:
         draw.text((title_x + name_w, 62), "ID CARD", font=_font(F_DISPLAY, 66), fill=accent)

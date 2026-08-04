@@ -161,21 +161,41 @@ GOLD_BG_BTM  = (42, 28, 4)      # premium equivalent of BG_BOTTOM
 # PRIMITIVES
 # ══════════════════════════════════════════════════════════════════
 
-def _vertical_gradient(size, top, bottom) -> Image.Image:
+def _lerp_multi(colors: list, t: float) -> tuple:
+    """Interpolate a color at position t (0..1) across N>=1 stops evenly
+    spaced along the gradient — generalizes _lerp_color to support the
+    optional 3rd gradient color, while `_lerp_multi([c1, c2], t)` still
+    behaves exactly like the old 2-color _lerp_color."""
+    n = len(colors)
+    if n == 1:
+        return tuple(colors[0])
+    t = max(0.0, min(1.0, t))
+    seg = 1.0 / (n - 1)
+    idx = min(int(t / seg), n - 2)
+    local_t = (t - idx * seg) / seg
+    return _lerp_color(colors[idx], colors[idx + 1], local_t)
+
+def _vertical_gradient_multi(size, colors: list) -> Image.Image:
     w, h = size
     base = Image.new("RGB", (1, h))
     for y in range(h):
         t = y / max(h - 1, 1)
-        base.putpixel((0, y), tuple(int(top[c] + (bottom[c] - top[c]) * t) for c in range(3)))
+        base.putpixel((0, y), _lerp_multi(colors, t))
     return base.resize((w, h))
 
-def _horizontal_gradient(size, left, right) -> Image.Image:
+def _horizontal_gradient_multi(size, colors: list) -> Image.Image:
     w, h = size
     base = Image.new("RGB", (w, 1))
     for x in range(w):
         t = x / max(w - 1, 1)
-        base.putpixel((x, 0), tuple(int(left[c] + (right[c] - left[c]) * t) for c in range(3)))
+        base.putpixel((x, 0), _lerp_multi(colors, t))
     return base.resize((w, h))
+
+def _vertical_gradient(size, top, bottom) -> Image.Image:
+    return _vertical_gradient_multi(size, [top, bottom])
+
+def _horizontal_gradient(size, left, right) -> Image.Image:
+    return _horizontal_gradient_multi(size, [left, right])
 
 def _lerp_color(c1, c2, t: float) -> tuple:
     t = max(0.0, min(1.0, t))
@@ -187,12 +207,13 @@ def _darken(c, factor: float) -> tuple:
 def _lighten(c, factor: float) -> tuple:
     return tuple(int(ch + (255 - ch) * factor) for ch in c)
 
-def _gradient_text(canvas: Image.Image, xy, text: str, primary_path: str, size: int, color1, color2, bold: bool = True) -> float:
-    """Draw `text` filled with a left-to-right 2-color gradient instead of a
-    flat color — used for the premium accent label when the user has a
-    custom gradient set. `canvas` must be an RGBA image (every card here
-    is). Returns the drawn width so callers can position what comes next.
-    Degrades to nothing drawn (returns 0) for empty text rather than raising."""
+def _gradient_text(canvas: Image.Image, xy, text: str, primary_path: str, size: int, colors, bold: bool = True) -> float:
+    """Draw `text` filled with a left-to-right gradient (2 or 3 colors)
+    instead of a flat color — used for the premium accent label when the
+    user has a custom gradient set. `colors` is a list of 2+ (r,g,b)
+    stops. `canvas` must be an RGBA image (every card here is). Returns
+    the drawn width so callers can position what comes next. Degrades to
+    nothing drawn (returns 0) for empty text rather than raising."""
     x, y = xy
     scratch = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     total_w = int(text_width(scratch, text, primary_path, size, bold)) + 2
@@ -203,7 +224,7 @@ def _gradient_text(canvas: Image.Image, xy, text: str, primary_path: str, size: 
     total_h = ascent + descent + 4
     mask_layer = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     draw_text(ImageDraw.Draw(mask_layer), (0, 0), text, primary_path, size, (255, 255, 255, 255), bold)
-    grad = _horizontal_gradient((total_w, total_h), color1, color2).convert("RGBA")
+    grad = _horizontal_gradient_multi((total_w, total_h), list(colors)).convert("RGBA")
     grad.putalpha(mask_layer.split()[-1])
     canvas.paste(grad, (int(x), int(y)), grad)
     return total_w
@@ -254,8 +275,7 @@ def _circle_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_widt
     ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
     rd = ImageDraw.Draw(ring)
     if isinstance(ring_color[0], (tuple, list)):
-        c1, c2 = ring_color
-        fill_layer = _vertical_gradient((ring_size, ring_size), c1, c2).convert("RGBA")
+        fill_layer = _vertical_gradient_multi((ring_size, ring_size), list(ring_color)).convert("RGBA")
         ring_mask = Image.new("L", (ring_size, ring_size), 0)
         ImageDraw.Draw(ring_mask).ellipse([0, 0, ring_size, ring_size], fill=255)
         fill_layer.putalpha(ring_mask)
@@ -310,8 +330,8 @@ def _hex_mask(size: int) -> Image.Image:
 def _hex_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_width: int = 6) -> Image.Image:
     """Hexagonal avatar frame — distinctive alternative to the standard
     circle-crop every rank-card bot uses. `ring_color` can be a plain (r,g,b)
-    for a solid ring, or a 2-tuple of (r,g,b) for a diagonal gradient ring
-    (used when a premium user has a custom gradient set)."""
+    for a solid ring, or a list of 2-3 (r,g,b) stops for a diagonal gradient
+    ring (used when a premium user has a custom gradient set)."""
     avatar_img = avatar_img.convert("RGBA").resize((diameter, diameter), Image.LANCZOS)
     inner_mask = _hex_mask(diameter)
     inner = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
@@ -320,8 +340,7 @@ def _hex_avatar(avatar_img: Image.Image, diameter: int, ring_color, ring_width: 
     ring_size  = diameter + ring_width * 2
     outer_mask = _hex_mask(ring_size)
     if isinstance(ring_color[0], (tuple, list)):
-        c1, c2 = ring_color
-        ring_layer = _vertical_gradient((ring_size, ring_size), c1, c2).convert("RGBA")
+        ring_layer = _vertical_gradient_multi((ring_size, ring_size), list(ring_color)).convert("RGBA")
         ring_layer.putalpha(255)
     else:
         ring_layer = Image.new("RGBA", (ring_size, ring_size), (*ring_color, 255))
@@ -347,23 +366,24 @@ def _fire_aura(diameter: int, ring_width: int, colors: Optional[tuple] = None) -
     Deterministic (no randomness) so re-rendering the same card looks the
     same every time.
 
-    `colors` is an optional ((r,g,b), (r,g,b)) gradient — when a premium
-    user has set a custom `rankcolor`, the flame itself shifts to match
-    (outer glow leaning into the second color, the hot inner lick leaning
-    into and brightening the first) instead of always burning gold."""
+    `colors` is an optional list of 2-3 (r,g,b) gradient stops — when a
+    premium user has set a custom `rankcolor`, the flame itself shifts to
+    match (outer glow leaning into the last color, the hot inner lick
+    leaning into and brightening the first) instead of always burning
+    gold."""
     pad  = max(int(diameter * 0.24), 20)
     size = diameter + ring_width * 2 + pad * 2
     cx = cy = size / 2
     base_r = diameter / 2 + ring_width
 
     if colors:
-        c1, c2 = colors
-        mid = _lerp_color(c1, c2, 0.5)
+        colors = list(colors)
+        mid = _lerp_multi(colors, 0.5)
         # (color, alpha, extra_radius, bump_amplitude, bump_count, phase, blur)
         layers = [
-            (_darken(c2, 0.4),   70,  pad * 0.95, pad * 0.55, 5, 0.4, 9),   # outer glow, leans into color 2
-            (mid,                105, pad * 0.55, pad * 0.40, 6, 2.1, 6),   # mid blend
-            (_lighten(c1, 0.4),  140, pad * 0.25, pad * 0.28, 7, 4.0, 3),   # bright inner lick, leans into color 1
+            (_darken(colors[-1], 0.4),  70,  pad * 0.95, pad * 0.55, 5, 0.4, 9),   # outer glow, leans into last color
+            (mid,                       105, pad * 0.55, pad * 0.40, 6, 2.1, 6),   # mid blend
+            (_lighten(colors[0], 0.4),  140, pad * 0.25, pad * 0.28, 7, 4.0, 3),   # bright inner lick, leans into first color
         ]
     else:
         # Every layer stays in the same gold family as the rest of the
@@ -418,10 +438,9 @@ def _vx_watermark(size, opacity: int = 15) -> Image.Image:
 
 def _segmented_bar(draw: ImageDraw.ImageDraw, x, y, w, h, pct, segments, track_color, fill_color, gap=3):
     """HUD-style tick-segmented bar instead of a plain smooth gradient pill.
-    `fill_color` can be a plain (r,g,b) for a solid bar, or a 2-tuple of
-    (r,g,b) so each filled tick shades from the first color (left) to the
-    second (right) across the whole bar — used for the premium custom
-    gradient perk."""
+    `fill_color` can be a plain (r,g,b) for a solid bar, or a list of 2-3
+    (r,g,b) stops so each filled tick shades across the gradient — used
+    for the premium custom gradient perk."""
     is_gradient = isinstance(fill_color[0], (tuple, list))
     seg_w  = (w - gap * (segments - 1)) / segments
     filled = max(0.0, min(pct, 1.0)) * segments
@@ -430,7 +449,7 @@ def _segmented_bar(draw: ImageDraw.ImageDraw, x, y, w, h, pct, segments, track_c
         draw.rectangle([sx, y, sx + seg_w, y + h], fill=track_color)
         amt = max(0.0, min(1.0, filled - i))
         if amt > 0:
-            seg_fill = _lerp_color(fill_color[0], fill_color[1], i / max(segments - 1, 1)) if is_gradient else fill_color
+            seg_fill = _lerp_multi(list(fill_color), i / max(segments - 1, 1)) if is_gradient else fill_color
             draw.rectangle([sx, y, sx + seg_w * amt, y + h], fill=seg_fill)
 
 def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = False, background_bytes: Optional[bytes] = None, accent_colors: Optional[tuple] = None) -> Image.Image:
@@ -441,11 +460,12 @@ def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = Fal
     avatar ring.
 
     `accent_colors` (premium-only, caller enforces that) is an optional
-    ((r,g,b), (r,g,b)) pair — when set, it replaces the fixed gold palette
-    with the user's own 2-color gradient: darker tints for the background,
-    the two colors themselves split across the corner brackets/HUD dots so
-    the frame itself visibly reads as a gradient, not just a single swapped
-    color.
+    list of 2-3 (r,g,b) stops — when set, it replaces the fixed gold
+    palette with the user's own gradient: darker tints of every stop for
+    the background, the first/last colors split across the corner
+    brackets/HUD dots (with the exact middle stop on the middle bracket)
+    so the frame itself visibly reads as a gradient, not just a single
+    swapped color.
 
     `background_bytes` (premium-only feature, caller enforces that) swaps
     the flat gradient for a user-uploaded image, cropped to cover the full
@@ -455,19 +475,19 @@ def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = Fal
     either way, so a custom background still unmistakably reads as a
     VALLENT EXS card, not a random image with text slapped on."""
     if premium and accent_colors:
-        c1, c2   = accent_colors
-        bg_top    = _darken(c1, 0.09)
-        bg_bottom = _darken(c2, 0.22)
-        border    = _darken(c1, 0.5)
-        corner    = c1
-        corner2   = c2
-        blood     = _darken(c2, 0.5)
+        colors    = list(accent_colors)
+        bg_colors = [_darken(c, 0.09 + i * (0.13 / max(len(colors) - 1, 1))) for i, c in enumerate(colors)]
+        border    = _darken(colors[0], 0.5)
+        corner    = colors[0]
+        corner2   = colors[-1]
+        corner_mid = _lerp_multi(colors, 0.5)
+        blood     = _darken(colors[-1], 0.5)
     else:
-        bg_top    = GOLD_BG_TOP if premium else BG_TOP
-        bg_bottom = GOLD_BG_BTM if premium else BG_BOTTOM
+        bg_colors = [GOLD_BG_TOP, GOLD_BG_BTM] if premium else [BG_TOP, BG_BOTTOM]
         border    = GOLD_DARK   if premium else DARK_RED
         corner    = GOLD        if premium else CRIMSON
         corner2   = corner
+        corner_mid = corner
         blood     = GOLD_DARK   if premium else BLOOD
 
     custom_bg = cover_image(background_bytes, (W, H)) if background_bytes else None
@@ -482,7 +502,7 @@ def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = Fal
         side_scrim = side_scrim.filter(ImageFilter.GaussianBlur(40))
         base = Image.alpha_composite(base, side_scrim)
     else:
-        base = _vertical_gradient((W, H), bg_top, bg_bottom).convert("RGBA")
+        base = _vertical_gradient_multi((W, H), bg_colors).convert("RGBA")
         glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         gd = ImageDraw.Draw(glow)
         bx, by = blood_xy or (-180, H - 220)
@@ -520,11 +540,11 @@ def _card_base(W: int, H: int, cut: int = 48, blood_xy=None, premium: bool = Fal
         draw.line(inset_pts, fill=(*corner, 100), width=1)
 
         _corner_bracket(draw, 16, 16, 26, (*corner, 235), width=3)
-        _corner_bracket(draw, 16, H - 16, 26, (*_lerp_color(corner, corner2, 0.5), 235), flip_y=True, width=3)
+        _corner_bracket(draw, 16, H - 16, 26, (*corner_mid, 235), flip_y=True, width=3)
         _corner_bracket(draw, W - 16, H - 16, 26, (*corner2, 235), flip_x=True, flip_y=True, width=3)
 
         # small glowing HUD dots at each bracket's vertex
-        for (bx, by), dot_c in [((16, 16), corner), ((16, H - 16), _lerp_color(corner, corner2, 0.5)), ((W - 16, H - 16), corner2)]:
+        for (bx, by), dot_c in [((16, 16), corner), ((16, H - 16), corner_mid), ((W - 16, H - 16), corner2)]:
             draw.ellipse([bx - 4, by - 4, bx + 4, by + 4], fill=(*dot_c, 90))
             draw.ellipse([bx - 2, by - 2, bx + 2, by + 2], fill=(*dot_c, 255))
     else:
@@ -595,7 +615,7 @@ def render_rank_card(
         size -= 2
     draw_text(draw, (text_x, name_y), uname, F_DISPLAY, size, WHITE)
     if grad:
-        underline = _horizontal_gradient((50, 4), grad[0], grad[1]).convert("RGBA")
+        underline = _horizontal_gradient_multi((50, 4), grad).convert("RGBA")
         canvas.paste(underline, (text_x, name_y + size + 2))
     else:
         draw.rectangle([text_x, name_y + size + 2, text_x + 50, name_y + size + 6], fill=(*accent, 255))
@@ -606,7 +626,7 @@ def render_rank_card(
         # "PREMIUM" alone reads cleaner than "PREMIUM MEMBER" — same info,
         # less clutter, and it leaves room to breathe next to the diamond.
         if grad:
-            _gradient_text(canvas, (text_x + 20, sub_y), "PREMIUM", F_BOLD, 22, grad[0], grad[1])
+            _gradient_text(canvas, (text_x + 20, sub_y), "PREMIUM", F_BOLD, 22, grad)
             draw = ImageDraw.Draw(canvas)
         else:
             draw.text((text_x + 20, sub_y), "PREMIUM", font=f_small, fill=GOLD)
@@ -644,11 +664,14 @@ def render_rank_card(
 
 def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_level: int, is_premium: bool = False, role_names: list | None = None, background_bytes: Optional[bytes] = None, accent_colors: Optional[tuple] = None) -> io.BytesIO:
     W, H = 934, 282
-    grad = accent_colors if (is_premium and accent_colors) else None
-    accent    = grad[0] if grad else (GOLD if is_premium else CRIMSON)
-    bg_top    = _darken(grad[0], 0.09) if grad else (GOLD_BG_TOP if is_premium else (18, 4, 6))
-    bg_bottom = _darken(grad[1], 0.24) if grad else (GOLD_BG_BTM if is_premium else (48, 6, 10))
-    border    = _darken(grad[0], 0.5) if grad else (GOLD_DARK if is_premium else DARK_RED)
+    grad = list(accent_colors) if (is_premium and accent_colors) else None
+    accent = grad[0] if grad else (GOLD if is_premium else CRIMSON)
+    if grad:
+        bg_colors = [_darken(c, 0.09 + i * (0.15 / max(len(grad) - 1, 1))) for i, c in enumerate(grad)]
+        border    = _darken(grad[0], 0.5)
+    else:
+        bg_colors = [GOLD_BG_TOP, GOLD_BG_BTM] if is_premium else [(18, 4, 6), (48, 6, 10)]
+        border    = GOLD_DARK if is_premium else DARK_RED
 
     custom_bg = cover_image(background_bytes, (W, H)) if (is_premium and background_bytes) else None
     if custom_bg is not None:
@@ -659,11 +682,11 @@ def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_
         side_scrim = side_scrim.filter(ImageFilter.GaussianBlur(40))
         card = Image.alpha_composite(card, side_scrim)
     else:
-        card = _vertical_gradient((W, H), bg_top, bg_bottom).convert("RGBA")
+        card = _vertical_gradient_multi((W, H), bg_colors).convert("RGBA")
         glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         gd = ImageDraw.Draw(glow)
         cx, cy = 160, H // 2
-        glow_color2 = grad[1] if grad else accent
+        glow_color2 = grad[-1] if grad else accent
         for r, a in [(230, 26), (170, 40), (110, 60)]:
             gd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*_lerp_color(accent, glow_color2, min(r / 230, 1)), a))
         card = Image.alpha_composite(card, glow)
@@ -694,7 +717,7 @@ def render_levelup_card(avatar_bytes: bytes, username: str, old_level: int, new_
         _draw_diamond(draw, text_x + lvlup_w + 7, 46 + 18, 7, accent)
         if grad:
             card_canvas = card  # already RGBA
-            _gradient_text(card_canvas, (text_x + lvlup_w + 20, 46), "PREMIUM", F_BOLD, 24, grad[0], grad[1])
+            _gradient_text(card_canvas, (text_x + lvlup_w + 20, 46), "PREMIUM", F_BOLD, 24, grad)
             draw = ImageDraw.Draw(card)
         else:
             draw.text((text_x + lvlup_w + 20, 46), "PREMIUM", font=_font(F_BOLD, 24), fill=GOLD)
