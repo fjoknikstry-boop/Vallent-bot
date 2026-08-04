@@ -53,6 +53,8 @@ from emoji_config import (
     e
 )
 import rank_card
+import profile_card
+from PIL import Image
 import antinuke
 import ticket_types
 import vote_system
@@ -118,6 +120,8 @@ def load_config() -> dict:
             "user_custom_badges": {},
             "premium_backgrounds": {},   # uid(str) -> image URL, custom rank card background (premium-only)
             "premium_colors": {},        # uid(str) -> [hex1, hex2], custom 2-color gradient accent (premium-only)
+            "profile_ids": {},           # uid(str) -> int, sequential "member no." shown on the ID card, assigned once
+            "profile_id_counter": 0,     # last-assigned profile_ids number
             "status_channel_id": None,
             "votes":             {},
             "payment_methods": {
@@ -143,6 +147,8 @@ def load_config() -> dict:
     data.setdefault("user_custom_badges", {})   # uid(str) -> [badge_id, ...] — which custom badges each user holds
     data.setdefault("premium_backgrounds", {})  # uid(str) -> image URL, custom rank card background (premium-only)
     data.setdefault("premium_colors", {})       # uid(str) -> [hex1, hex2], custom 2-color gradient accent (premium-only)
+    data.setdefault("profile_ids", {})          # uid(str) -> int, sequential "member no." shown on the ID card, assigned once
+    data.setdefault("profile_id_counter", 0)    # last-assigned profile_ids number
     data.setdefault("moonkeeper_users",     [])   # uid list — manual Moonkeeper grants (independent of bot_roles hierarchy)
     data.setdefault("moonkeeper_sync_role", None)  # single Discord role ID synced to Moonkeeper, if any
     data.setdefault("role_sync",        {})
@@ -598,6 +604,62 @@ def get_premium_accent(is_prem: bool, uid: int) -> Optional[tuple]:
         return None
     return (c1, c2)
 
+def int_to_rgb(hex_int: int) -> tuple:
+    """0xDC143C -> (220, 20, 60) — BOT_ROLE_BADGES stores colors as a hex
+    int (for discord.Embed.color), the ID card needs plain RGB tuples."""
+    return ((hex_int >> 16) & 0xFF, (hex_int >> 8) & 0xFF, hex_int & 0xFF)
+
+def get_member_no(uid: int) -> int:
+    """A stable, sequential 'member number' for the ID card — assigned
+    once the first time a user's card is ever generated, then reused
+    forever after (never reassigned, never reused even if data is pruned)."""
+    ids = cfg.setdefault("profile_ids", {})
+    key = str(uid)
+    if key not in ids:
+        cfg["profile_id_counter"] = cfg.get("profile_id_counter", 0) + 1
+        ids[key] = cfg["profile_id_counter"]
+        save_config(cfg)
+    return ids[key]
+
+_CUSTOM_EMOJI_ID_RE = re.compile(r"^<a?:[a-zA-Z0-9_]{2,32}:(\d+)>$")
+
+async def fetch_badge_icon_images(uid: int) -> list:
+    """Every badge this user holds (bot-role + custom), ready to paste onto
+    the ID card: custom Discord emoji get their actual image downloaded
+    from Discord's CDN in parallel; plain unicode/text emoji are left as
+    text (drawn with the bundled emoji-fallback font, no network needed).
+    A single badge's icon failing to download never drops the badge or
+    breaks the others — it just falls back to drawing its raw character."""
+    badges = get_user_badges(uid)
+    role_infos  = [BOT_ROLE_BADGES.get(b, BOT_ROLE_BADGES["user"]) for b in badges]
+    custom_defs = get_custom_badges(uid)
+    entries = [{"emoji": info.get("emoji", "")} for info in role_infos]
+    entries += [{"emoji": cb.get("emoji", "")} for cb in custom_defs]
+
+    async def resolve(entry):
+        raw = entry["emoji"]
+        m = _CUSTOM_EMOJI_ID_RE.match(raw or "")
+        if not m:
+            return {"kind": "text", "char": raw or "\u2022", "color": (245, 245, 245)}
+        emoji_id = m.group(1)
+        url = f"https://cdn.discordapp.com/emojis/{emoji_id}.png?size=64"
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                    if resp.status != 200:
+                        return {"kind": "text", "char": "\u2022", "color": (245, 245, 245)}
+                    data = await resp.read()
+            img = await asyncio.to_thread(Image.open, io.BytesIO(data))
+            img.load()
+            return {"kind": "image", "img": img}
+        except Exception:
+            return {"kind": "text", "char": "\u2022", "color": (245, 245, 245)}
+
+    if not entries:
+        return []
+    return await asyncio.gather(*(resolve(e) for e in entries))
+
 async def check_premium_expiry():
     now        = datetime.datetime.now(datetime.timezone.utc)
     expiry_map = cfg.get("premium_expiry", {})
@@ -941,68 +1003,58 @@ def _resolve_badge_target(token: str) -> Optional[int]:
         return None
     return int(m.group(1) or m.group(2))
 
-def build_profile_embed(user: discord.abc.User) -> discord.Embed:
-    uid        = user.id
-    role       = get_bot_role(uid)
-    badges     = get_user_badges(uid)
-    expiry_map = cfg.get("premium_expiry", {})
-    has_prem   = uid in cfg.get("premium_users", [])
-    cmds_run   = cfg.get("commands_run", {}).get(str(uid), 0)
-    top        = role if role != "user" else (badges[0] if badges else "user")
-    color      = BOT_ROLE_BADGES.get(top, BOT_ROLE_BADGES["user"])["color"]
+async def build_profile_card_file(target: discord.Member) -> discord.File:
+    """Fetches everything the profile ID card needs (avatar, badge icons,
+    custom background/gradient, level, dates) and renders it — shared by
+    both `profile` and `/profile` so the two commands can never drift
+    apart. Runs the actual Pillow render in a thread so it never blocks
+    the event loop."""
+    uid = target.id
+    role      = get_bot_role(uid)
+    role_info = BOT_ROLE_BADGES.get(role, BOT_ROLE_BADGES["user"])
+    hierarchy_label = re.sub(r"^[^\w]+", "", role_info["label"]).upper()  # drop the "• " prefix
+    hierarchy_color = int_to_rgb(role_info["color"])
 
-    profile_icon = e(ICON_PROFILE, "🪪")
-    embed = discord.Embed(title=f"{profile_icon} {user.display_name}'s Profile".strip(), color=color)
-    embed.set_thumbnail(url=user.display_avatar.url)
-
-    # ── ALL BADGES — its own field, one badge per line (bot-role badges +
-    # owner-granted custom badges, in that order) ───────────────────────
-    badge_lines, total_badges = _badge_display_lines(uid)
-    if badge_lines:
-        badges_value = "\n".join(badge_lines)
-    else:
-        invite = SUPPORT_INVITE
-        badges_value = "No badges yet."
-        if invite:
-            badges_value += "\n[Join the support server](" + invite + ") to get the **USER** badge!"
-        else:
-            badges_value += "\nJoin the support server to get the **USER** badge!"
-
-    badges_icon = e(ICON_BADGES, "✨")
-    embed.add_field(name=f"{badges_icon} __ALL BADGES__".strip(), value=badges_value, inline=False)
-
-    # ── Total Badges & Commands Runned — two fields side by side ───────
-    embed.add_field(name="Total Badges", value="**" + str(total_badges) + "**", inline=True)
-    embed.add_field(name=f"{e(ICON_COMMANDS, '⚙️')} Commands Runned".strip(), value="**" + str(cmds_run) + "**", inline=True)
-
-    # ── Premium — its own field, only shown if active ───────────────────
-    if has_prem:
-        exp_str = expiry_map.get(str(uid))
-        prem_value = "Lifetime"
+    is_prem = uid in cfg.get("premium_users", [])
+    if is_prem:
+        exp_str = cfg.get("premium_expiry", {}).get(str(uid))
+        premium_text = "Active — Lifetime"
         if exp_str:
             try:
                 exp = datetime.datetime.fromisoformat(exp_str)
                 if exp.tzinfo is None:
                     exp = exp.replace(tzinfo=datetime.timezone.utc)
-                prem_value = discord.utils.format_dt(exp, "R")
+                days_left = (exp - datetime.datetime.now(datetime.timezone.utc)).days
+                premium_text = f"Active — {max(days_left, 0)}d left" if days_left >= 0 else "Expired"
             except Exception:
-                prem_value = "Active"
-        embed.add_field(name=f"{e(ICON_PREMIUM_TAG, '💎')} Premium".strip(), value=prem_value, inline=True)
+                premium_text = "Active"
+    else:
+        premium_text = "Not Active"
 
-    embed.set_footer(
-        text=f"{BOT_NAME} • {BOT_TAGLINE}",
-        icon_url=user.display_avatar.url
+    avatar_url = str(target.display_avatar.with_format("png").with_size(256))
+    import aiohttp
+    async with aiohttp.ClientSession() as session:
+        async with session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            avatar_bytes = await resp.read()
+
+    badge_icons   = await fetch_badge_icon_images(uid)
+    bg_bytes      = await fetch_rank_bg_bytes(is_prem, uid)
+    accent_colors = get_premium_accent(is_prem, uid)
+    member_no     = get_member_no(uid)
+
+    gc    = guild_cfg(cfg, target.guild.id)
+    level = gc["members_xp"].get(str(uid), {}).get("level", 0)
+
+    joined_str  = target.joined_at.strftime("%b %d, %Y") if target.joined_at else "Unknown"
+    created_str = target.created_at.strftime("%b %d, %Y")
+
+    buf = await asyncio.to_thread(
+        profile_card.render_profile_card,
+        avatar_bytes, target.display_name, member_no, hierarchy_label, hierarchy_color,
+        premium_text, is_prem, badge_icons, joined_str, created_str, level,
+        bg_bytes, accent_colors
     )
-
-    # Same custom background set via `rankbg`/`/rankbg` doubles as this
-    # profile embed's banner — one background, reused everywhere premium
-    # cares about, instead of a second separate thing to configure.
-    if has_prem:
-        bg_url = cfg.get("premium_backgrounds", {}).get(str(uid))
-        if bg_url:
-            embed.set_image(url=bg_url)
-
-    return embed
+    return discord.File(buf, filename="profile.png")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2970,14 +3022,13 @@ async def pfx_addemoji(ctx, emoji_or_url: str = "", *, name: str = ""):
 @bot.command(name="profile", aliases=["p", "pf"])
 async def pfx_profile(ctx, member: discord.Member = None):
     target = member or ctx.author
-    embed  = build_profile_embed(target)
-    embed.set_author(name="Profile & Badge Panel", icon_url=target.display_avatar.url)
-    # Requested By in the footer with avatar
-    embed.set_footer(
-        text=BOT_NAME + "  |  Requested By " + ctx.author.display_name,
-        icon_url=ctx.author.display_avatar.url
-    )
-    await ctx.send(embed=embed)
+    async with ctx.typing():
+        try:
+            file = await build_profile_card_file(target)
+            await ctx.send(file=file)
+        except Exception:
+            logging.exception(f"[{BOT_NAME}] profile card render gagal")
+            await ctx.send(embed=error_embed("Couldn't generate that profile card right now — try again in a bit."))
 
 # ── RANK & LEADERBOARD ────────────────────────────────────────────
 
@@ -5977,13 +6028,13 @@ async def slash_leaderboard(i: discord.Interaction):
 @app_commands.describe(member="The member whose profile you want to view")
 async def slash_profile(i: discord.Interaction, member: Optional[discord.Member] = None):
     target = member or i.user
-    embed  = build_profile_embed(target)
-    embed.set_author(name="Profile & Badge Panel", icon_url=target.display_avatar.url)
-    embed.set_footer(
-        text=BOT_NAME + "  |  Requested By " + i.user.display_name,
-        icon_url=i.user.display_avatar.url
-    )
-    await i.response.send_message(embed=embed)
+    await i.response.defer()
+    try:
+        file = await build_profile_card_file(target)
+        await i.followup.send(file=file)
+    except Exception:
+        logging.exception(f"[{BOT_NAME}] profile card render gagal")
+        await i.followup.send(embed=error_embed("Couldn't generate that profile card right now — try again in a bit."))
 
 @bot.tree.command(name="userinfo", description="View detailed info about a member.")
 @app_commands.describe(member="The member you want info about")
