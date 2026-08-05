@@ -103,8 +103,24 @@ def build_webhook_app(auth_secret: str, on_vote: Callable[[int], Awaitable[None]
     app = web.Application()
 
     async def handle_vote(request: web.Request) -> web.Response:
-        if request.headers.get("Authorization") != auth_secret:
-            log.warning("Rejected a top.gg webhook call with a bad/missing Authorization header.")
+        got = request.headers.get("Authorization")
+        if got != auth_secret:
+            if got is None:
+                log.warning(
+                    "Rejected a top.gg webhook call: no Authorization header was sent at all — "
+                    "the Authorization field on top.gg's Webhooks tab is probably empty."
+                )
+            elif got.strip() == (auth_secret or "").strip():
+                log.warning(
+                    "Rejected a top.gg webhook call: Authorization matched after trimming whitespace — "
+                    "check for a stray leading/trailing space on either side (top.gg's field or the env var)."
+                )
+            else:
+                log.warning(
+                    f"Rejected a top.gg webhook call: Authorization header present ({len(got)} chars) but "
+                    f"didn't match the configured secret ({len(auth_secret or '')} chars) — "
+                    "make sure both sides have the EXACT same value."
+                )
             return web.Response(status=401, text="unauthorized")
         try:
             payload = await request.json()
