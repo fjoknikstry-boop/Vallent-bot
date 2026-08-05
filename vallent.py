@@ -3083,6 +3083,7 @@ async def pfx_addemoji(ctx, emoji_or_url: str = "", *, name: str = ""):
 # ── PROFILE ───────────────────────────────────────────────────────
 
 @bot.command(name="profile", aliases=["p", "pf"])
+@commands.cooldown(1, 10, commands.BucketType.user)
 async def pfx_profile(ctx, member: discord.Member = None):
     target = member or ctx.author
     async with ctx.typing():
@@ -3164,6 +3165,7 @@ def _support_boost_promo(uid: int):
     return ("\n".join(lines) if lines else None), (view if view.children else None)
 
 @bot.command(name="rank", aliases=["r"])
+@commands.cooldown(1, 6, commands.BucketType.user)
 async def pfx_rank(ctx, member: discord.Member = None):
     import aiohttp
     target      = member or ctx.author
@@ -6016,6 +6018,7 @@ async def pfx_commandlist(ctx):
 
 @bot.tree.command(name="rank", description="View your rank card or another member's.")
 @app_commands.describe(member="The member whose rank you want to view")
+@app_commands.checks.cooldown(1, 6, key=lambda i: i.user.id)
 async def slash_rank(i: discord.Interaction, member: Optional[discord.Member] = None):
     await i.response.defer()
     target      = member or i.user
@@ -6241,6 +6244,7 @@ async def slash_leaderboard(i: discord.Interaction):
 
 @bot.tree.command(name="profile", description="View your profile card and badges, or another member's.")
 @app_commands.describe(member="The member whose profile you want to view")
+@app_commands.checks.cooldown(1, 10, key=lambda i: i.user.id)
 async def slash_profile(i: discord.Interaction, member: Optional[discord.Member] = None):
     target = member or i.user
     await i.response.defer()
@@ -7840,6 +7844,8 @@ async def on_app_command_error(i: discord.Interaction, error: app_commands.AppCo
     msg = str(error)
     if isinstance(error, app_commands.MissingPermissions):
         msg = "You don't have permission to use this command."
+    elif isinstance(error, app_commands.CommandOnCooldown):
+        msg = f"Slow down — try again in **{error.retry_after:.1f}s**."
     elif "channel id specified is invalid" in msg.lower():
         # Known Discord-side glitch: happens when a client (often mobile)
         # is holding a stale cached copy of this command's option
@@ -7863,6 +7869,9 @@ async def on_app_command_error(i: discord.Interaction, error: app_commands.AppCo
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
+        return
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(embed=error_embed(f"Slow down — try again in **{error.retry_after:.1f}s**."), delete_after=5)
         return
     if isinstance(error, commands.CheckFailure):
         await ctx.send(embed=error_embed("You don't have access to this command."), delete_after=5)
