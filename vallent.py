@@ -819,11 +819,36 @@ _vote_webhook_started = False  # guards against starting the web server twice on
 async def _handle_topgg_vote(uid: int):
     """Called by vote_system's webhook app for every CONFIRMED real vote.
     Grants the +10% / 20-min boost (extend_only so it never shortens a
-    longer boost already running) and updates the vote ledger."""
+    longer boost already running), updates the vote ledger, and DMs the
+    voter their reward — best-effort, a closed-DM user still gets the
+    boost, they just don't get the notification."""
     grant_xp_boost(uid, minutes=vote_system.BOOST_MINUTES, multiplier=vote_system.BOOST_MULTIPLIER, extend_only=True)
-    vote_system.record_vote(cfg.setdefault("votes", {}), str(uid))
+    entry = vote_system.record_vote(cfg.setdefault("votes", {}), str(uid))
     save_config(cfg)
     print(f"[{BOT_NAME}] Vote reward granted to user {uid} (top.gg webhook).")
+
+    try:
+        user = bot.get_user(uid) or await bot.fetch_user(uid)
+        streak = entry.get("streak", 1)
+        embed = discord.Embed(
+            title="🎉 Thanks for voting!",
+            description=(
+                f"You just earned a **+{int((vote_system.BOOST_MULTIPLIER - 1) * 100)}% XP Boost** "
+                f"for the next **{vote_system.BOOST_MINUTES} minutes** on every server using {BOT_NAME}!\n\n"
+                f"🔥 Vote streak: **{streak}**\n"
+                f"You can vote again in **{vote_system.VOTE_COOLDOWN_HOURS} hours**."
+            ),
+            color=COLOR_SUCCESS,
+            timestamp=discord.utils.utcnow()
+        )
+        if TOPGG_VOTE_URL:
+            embed.add_field(name="Vote again later", value=f"[Click here]({TOPGG_VOTE_URL})", inline=False)
+        embed.set_footer(text=BOT_NAME)
+        await user.send(embed=embed)
+    except Exception:
+        # DMs closed / user uninstalled / whatever — the boost itself is
+        # already granted above regardless, this is just the notification.
+        logging.warning(f"[{BOT_NAME}] Couldn't DM vote reward notification to {uid} (DMs likely closed).")
 
 async def start_vote_webhook_server():
     """Starts the small aiohttp server that receives top.gg's vote webhook,
@@ -1417,7 +1442,7 @@ async def do_ping(reply_fn):
     embed = base_embed("Pong!", f"Latency: **{lat}ms**", COLOR_SUCCESS if lat < 100 else COLOR_WARNING)
     await reply_fn(embed=embed)
 
-AFK_FREE_SLOTS = 8  # max concurrently-AFK members per server without voting
+AFK_FREE_SLOTS = 5  # max concurrently-AFK members per server without voting
 
 async def do_afk_set(guild: discord.Guild, author: discord.abc.User, reason: str, reply_fn):
     """Mark `author` as AFK in this guild. Any message they send afterwards
