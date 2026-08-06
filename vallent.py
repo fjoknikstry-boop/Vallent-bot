@@ -326,6 +326,21 @@ def _title_with_icon(icon: str, fallback: str, text: str) -> str:
 def base_embed(title: str, description: str = "", color: int = COLOR_PRIMARY) -> discord.Embed:
     return _footer(discord.Embed(title=title, description=description, color=color))
 
+def heading_md(title: str) -> str:
+    """Turn a title into Components V2 markdown, auto-picking a smaller
+    heading level (`#` -> `##` -> `###`) as it gets longer. Discord has no
+    variable font-size for these text displays — heading level is the only
+    lever we get — so a long title downgrades to a smaller heading instead
+    of wrapping into a huge multi-line block like a short one would at `#`.
+    Length thresholds are tuned for how much a single line comfortably fits
+    at each level on a phone-width client before it wraps."""
+    n = len(title)
+    if n <= 20:
+        return f"# {title}"
+    if n <= 40:
+        return f"## {title}"
+    return f"### {title}"
+
 def success_embed(desc: str) -> discord.Embed:
     return base_embed(_title_with_icon(ICON_SUCCESS, "✅", "Success"), desc, COLOR_SUCCESS)
 
@@ -2058,7 +2073,7 @@ class TicketPanelLayout(discord.ui.LayoutView):
         style     = BUTTON_STYLES.get(panel.get("button_style"), discord.ButtonStyle.danger)
         open_type = panel.get("open_type", "button")
 
-        text_parts = [f"# {title}", description]
+        text_parts = [heading_md(title), description]
         content_item = (
             discord.ui.Section(*text_parts, accessory=discord.ui.Thumbnail(thumbnail))
             if thumbnail else discord.ui.TextDisplay("\n\n".join(text_parts))
@@ -4694,7 +4709,7 @@ def build_embed_layout(draft: dict) -> discord.ui.LayoutView:
     color       = draft.get("color") or COLOR_PRIMARY
     links       = draft.get("links") or []
 
-    text_parts = ([f"# {title}"] if title else []) + ([description] if description else [])
+    text_parts = ([heading_md(title)] if title else []) + ([description] if description else [])
     if not text_parts:
         text_parts = ["*Nothing set yet.*"]
 
@@ -4732,7 +4747,7 @@ async def handle_component_button_click(interaction: discord.Interaction):
     if btn.get("kind") != "response":
         return
 
-    text_parts = ([f"# {btn['response_title']}"] if btn.get("response_title") else []) + \
+    text_parts = ([heading_md(btn['response_title'])] if btn.get("response_title") else []) + \
                  ([btn["response_description"]] if btn.get("response_description") else [])
     if not text_parts:
         text_parts = ["*(nothing set)*"]
@@ -4774,7 +4789,7 @@ class MessageComponentLayout(discord.ui.LayoutView):
         color       = comp.get("color") or COLOR_PRIMARY
         buttons     = comp.get("buttons") or []
 
-        text_parts = ([f"# {title}"] if title else []) + ([description] if description else [])
+        text_parts = ([heading_md(title)] if title else []) + ([description] if description else [])
         if not text_parts:
             text_parts = ["*Nothing set yet.*"]
         content_item = (
