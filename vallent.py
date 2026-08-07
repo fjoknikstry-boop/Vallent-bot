@@ -22,6 +22,8 @@ Features:
 import discord
 import aiohttp
 import io
+import traceback
+import sys
 from discord import app_commands
 from discord.ext import commands, tasks
 import json
@@ -125,6 +127,9 @@ def load_config() -> dict:
             "profile_id_counter": 0,     # last-assigned profile_ids number
             "profile_backgrounds": {},   # uid(str) -> image URL, custom ID card background (premium-only, separate from premium_backgrounds)
             "profile_colors": {},        # uid(str) -> [hex1, hex2], custom ID card gradient (premium-only, separate from premium_colors)
+            "active_giveaways": {},      # message_id(str) -> giveaway dict, so a giveaway survives a bot restart
+            "giveaway_history": {},      # message_id(str) -> ended giveaway dict (capped), so `giveaway reroll` still works after it's over
+            "error_log_channel_id": None,  # channel where unexpected errors get auto-reported
             "status_channel_id": None,
             "votes":             {},
             "payment_methods": {
@@ -154,6 +159,9 @@ def load_config() -> dict:
     data.setdefault("profile_id_counter", 0)    # last-assigned profile_ids number
     data.setdefault("profile_backgrounds", {})  # uid(str) -> image URL, custom ID card background (premium-only, separate from premium_backgrounds)
     data.setdefault("profile_colors", {})       # uid(str) -> [hex1, hex2], custom ID card gradient (premium-only, separate from premium_colors)
+    data.setdefault("active_giveaways", {})     # message_id(str) -> giveaway dict, so a giveaway survives a bot restart
+    data.setdefault("giveaway_history", {})     # message_id(str) -> ended giveaway dict (capped), so `giveaway reroll` still works after it's over
+    data.setdefault("error_log_channel_id", None)  # channel where unexpected errors get auto-reported
     data.setdefault("moonkeeper_users",     [])   # uid list — manual Moonkeeper grants (independent of bot_roles hierarchy)
     data.setdefault("moonkeeper_sync_role", None)  # single Discord role ID synced to Moonkeeper, if any
     data.setdefault("role_sync",        {})
@@ -352,6 +360,76 @@ def warning_embed(title: str, desc: str) -> discord.Embed:
 
 def info_embed(title: str, desc: str) -> discord.Embed:
     return base_embed(_title_with_icon(ICON_INFO, "ℹ️", title), desc, COLOR_INFO)
+
+_LAST_ERROR_REPORT: dict = {}  # (error_type, location) -> unix ts of last report, for basic dedup/rate-limit
+
+async def report_error(
+    error: BaseException,
+    *,
+    location: str,
+    user: Optional[discord.abc.User] = None,
+    guild: Optional[discord.Guild] = None,
+    channel: Optional[discord.abc.Messageable] = None,
+    extra: Optional[str] = None,
+):
+    """Posts a clean, professional error report to the configured error
+    log channel (`errorlog channel #channel`) — so real bugs surface
+    immediately in the support server instead of only living in Railway
+    logs nobody's watching. Never raises itself (a bug in the reporter
+    must never crash whatever it was reporting on, or shadow the
+    original error) and always ALSO logs normally regardless of whether
+    the Discord report succeeds.
+
+    `location` is a short label for where this happened (a command name,
+    an event handler, a background task) — that plus the exception type
+    is used for light rate-limiting so one recurring bug doesn't spam the
+    channel every single time it fires (max once per 60s per unique
+    error+location pair)."""
+    tb_text = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    logging.error(f"[{BOT_NAME}] Unhandled error in {location}:\n{tb_text}")
+
+    ch_id = cfg.get("error_log_channel_id")
+    if not ch_id:
+        return
+    key = (type(error).__name__, location)
+    now = time.time()
+    if now - _LAST_ERROR_REPORT.get(key, 0) < 60:
+        return
+    _LAST_ERROR_REPORT[key] = now
+
+    try:
+        log_channel = bot.get_channel(ch_id) or await bot.fetch_channel(ch_id)
+    except Exception:
+        return
+
+    embed = discord.Embed(
+        title="⚠️ Unhandled Error",
+        color=COLOR_ERROR,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Location", value=f"`{location}`", inline=True)
+    embed.add_field(name="Type", value=f"`{type(error).__name__}`", inline=True)
+    if guild:
+        embed.add_field(name="Server", value=f"{guild.name}\n`{guild.id}`", inline=True)
+    if user:
+        embed.add_field(name="User", value=f"{user}\n`{user.id}`", inline=True)
+    if channel is not None and hasattr(channel, "mention"):
+        embed.add_field(name="Channel", value=channel.mention, inline=True)
+    if extra:
+        embed.add_field(name="Context", value=extra[:1024], inline=False)
+    msg = str(error) or "(no message)"
+    embed.add_field(name="Message", value=f"```{msg[:1000]}```", inline=False)
+    embed.set_footer(text=f"{BOT_NAME} • Auto-reported")
+
+    try:
+        if len(tb_text) > 3800:
+            file = discord.File(io.BytesIO(tb_text.encode("utf-8")), filename="traceback.txt")
+            await log_channel.send(embed=embed, file=file)
+        else:
+            embed.add_field(name="Traceback", value=f"```py\n{tb_text[-1000:]}\n```", inline=False)
+            await log_channel.send(embed=embed)
+    except Exception:
+        logging.warning(f"[{BOT_NAME}] Couldn't deliver error report to log channel {ch_id}.")
 
 # ══════════════════════════════════════════════════════════════════
 # XP / LEVELING
@@ -1215,7 +1293,7 @@ async def _antispam_log(guild: discord.Guild, gc: dict, member: discord.Member, 
 # OWNER / PERMISSION HELPERS
 # ══════════════════════════════════════════════════════════════════
 
-OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave", "vxservers", "vxguilds", "ownerhelp", "botstatus", "synccommands"}
+OWNER_ONLY_CMDS = {"maintenance", "noprefix", "botrole", "grantpremium", "premiumlock", "blacklist", "vxleave", "vxservers", "vxguilds", "ownerhelp", "botstatus", "synccommands", "errorlog"}
 
 def is_owner():
     async def predicate(ctx: commands.Context) -> bool:
@@ -2127,14 +2205,77 @@ class TicketPanelLayout(discord.ui.LayoutView):
 import random
 active_giveaways: dict[int, dict] = {}
 
+def save_giveaways():
+    """Mirror the in-memory active_giveaways dict to disk (cfg["active_giveaways"],
+    keyed by message_id as a string since JSON keys must be strings) — called
+    after every change (create, entry add/remove, end) so a giveaway survives
+    a bot restart instead of vanishing silently the moment the process bounces."""
+    cfg["active_giveaways"] = {str(mid): gw for mid, gw in active_giveaways.items() if not gw.get("ended")}
+    save_config(cfg)
+
+def schedule_giveaway_end(gw: dict):
+    """Schedule (or reschedule, after a restart) the timer that ends this
+    giveaway, based on its stored ends_ts rather than a fixed duration —
+    so a giveaway that had, say, 3 hours left when the bot restarted still
+    ends 3 hours from now, not from whenever the process happened to come
+    back up. Safe to call more than once for the same giveaway: end_giveaway()
+    is a no-op once gw['ended'] is True."""
+    remaining = gw["ends_ts"] - discord.utils.utcnow().timestamp()
+    async def _timer():
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+        current = active_giveaways.get(gw["message_id"])
+        if current:
+            await end_giveaway(current)
+    asyncio.create_task(_timer())
+
+_giveaways_restored = False
+
+async def restore_giveaways():
+    """Called once from on_ready — reloads every still-active giveaway from
+    disk into active_giveaways and reschedules (or, if the bot was down past
+    the deadline, immediately runs) its end timer. Without this, anything
+    saved by save_giveaways() would load back into memory on the next
+    save_giveaways() call but never actually re-arm its end timer, so it'd
+    just sit there forever never ending.
+
+    Guarded to run only once per process: on_ready can fire again on a
+    gateway reconnect (not just a fresh process start), and re-restoring
+    then would schedule a second, redundant end-timer for every giveaway
+    still running."""
+    global _giveaways_restored
+    if _giveaways_restored:
+        return
+    _giveaways_restored = True
+    stored = cfg.get("active_giveaways", {})
+    if not stored:
+        return
+    restored = 0
+    for mid_str, gw in list(stored.items()):
+        if gw.get("ended"):
+            continue
+        try:
+            mid = int(mid_str)
+        except (TypeError, ValueError):
+            continue
+        gw["message_id"] = mid
+        active_giveaways[mid] = gw
+        schedule_giveaway_end(gw)
+        bot.add_view(GiveawayView(mid))
+        restored += 1
+    if restored:
+        logging.info(f"[{BOT_NAME}] Restored {restored} active giveaway(s) from disk.")
+
 def build_giveaway_embed(gw: dict) -> discord.Embed:
     ends_dt = datetime.datetime.utcfromtimestamp(gw["ends_ts"]).replace(tzinfo=datetime.timezone.utc)
+    entry_count = len(set(gw.get("entries", [])))
     embed   = discord.Embed(
-        title=f"GIVEAWAY — {gw['prize']}",
+        title=f"🎉 {gw['prize']}",
         description=(
             (gw.get("description", "") + "\n\n" if gw.get("description") else "") +
-            f"React with 🎉 to enter!\n\n"
+            "Click **Join Giveaway** below to enter!\n\n"
             f"**Winners:** {gw['winner_count']}\n"
+            f"**Entries:** {entry_count}\n"
             f"**Ends:** {discord.utils.format_dt(ends_dt, 'R')}\n"
             f"**Hosted by:** <@{gw['host_id']}>"
         ),
@@ -2145,14 +2286,96 @@ def build_giveaway_embed(gw: dict) -> discord.Embed:
         embed.add_field(name="Required Role", value=f"<@&{gw['required_role']}>", inline=True)
     if gw.get("winner_role_id"):
         embed.add_field(name="Winner Role", value=f"<@&{gw['winner_role_id']}>", inline=True)
-    embed.set_footer(text=f"{BOT_NAME} Giveaway • React 🎉 to enter")
+    embed.set_footer(text=f"{BOT_NAME} Giveaway")
     return embed
+
+class GiveawayView(discord.ui.View):
+    """Persistent, per-giveaway view — the message_id is baked into each
+    button's custom_id (buttons are built by hand in __init__ instead of
+    the @discord.ui.button decorator, since that only supports a fixed
+    custom_id at class-definition time and we need a different one per
+    giveaway). Re-registered for every still-active giveaway on startup
+    via restore_giveaways(), so Join/Participants keep working across a
+    bot restart exactly like the giveaway timer itself does."""
+    def __init__(self, message_id: int, ended: bool = False):
+        super().__init__(timeout=None)
+        self.message_id = message_id
+
+        join_btn = discord.ui.Button(
+            label="Join Giveaway", emoji=(ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉"),
+            style=discord.ButtonStyle.success,
+            custom_id=f"vx_gw_join:{message_id}",
+            disabled=ended,
+        )
+        join_btn.callback = self.join_callback
+        self.add_item(join_btn)
+
+        participants_btn = discord.ui.Button(
+            label="Participants", emoji="👥",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"vx_gw_participants:{message_id}",
+        )
+        participants_btn.callback = self.participants_callback
+        self.add_item(participants_btn)
+
+    async def join_callback(self, interaction: discord.Interaction):
+        gw = active_giveaways.get(self.message_id)
+        if not gw or gw.get("ended"):
+            return await interaction.response.send_message(embed=error_embed("This giveaway has ended."), ephemeral=True)
+        member = interaction.user
+        req_role_id = gw.get("required_role")
+        if req_role_id and not any(r.id == req_role_id for r in member.roles):
+            role = interaction.guild.get_role(req_role_id) if interaction.guild else None
+            return await interaction.response.send_message(
+                embed=error_embed(f"You need the {role.mention if role else 'required'} role to enter this giveaway."),
+                ephemeral=True
+            )
+        if member.id in gw["entries"]:
+            gw["entries"].remove(member.id)
+            save_giveaways()
+            await interaction.response.send_message(embed=info_embed("Left Giveaway", f"You've left the giveaway for **{gw['prize']}**."), ephemeral=True)
+        else:
+            gw["entries"].append(member.id)
+            save_giveaways()
+            await interaction.response.send_message(embed=success_embed(f"You're in! Good luck winning **{gw['prize']}**."), ephemeral=True)
+        try:
+            await interaction.message.edit(embed=build_giveaway_embed(gw))
+        except Exception:
+            pass
+
+    async def participants_callback(self, interaction: discord.Interaction):
+        gw = active_giveaways.get(self.message_id) or cfg.get("giveaway_history", {}).get(str(self.message_id))
+        if not gw:
+            return await interaction.response.send_message(embed=error_embed("This giveaway has ended."), ephemeral=True)
+        entries = list(dict.fromkeys(gw.get("entries", [])))  # dedupe, keep join order
+        if not entries:
+            return await interaction.response.send_message(embed=info_embed("Participants", "No one has joined yet — be the first!"), ephemeral=True)
+        shown = entries[:40]
+        lines = "\n".join(f"{i+1}. <@{uid}>" for i, uid in enumerate(shown))
+        if len(entries) > 40:
+            lines += f"\n*... and {len(entries) - 40} more*"
+        await interaction.response.send_message(embed=info_embed(f"Participants ({len(entries)})", lines), ephemeral=True)
+
+def save_giveaway_history(gw: dict):
+    """Keeps an ended giveaway's final entries/winners around (capped to
+    the most recent 50) so `giveaway reroll` still has something to work
+    with after it's over — reactions used to double as that record, but
+    buttons don't leave anything on the message itself to read back."""
+    hist = cfg.setdefault("giveaway_history", {})
+    hist[str(gw["message_id"])] = gw
+    if len(hist) > 50:
+        oldest = sorted(hist.values(), key=lambda g: g.get("ends_ts", 0))[:len(hist) - 50]
+        for old in oldest:
+            hist.pop(str(old["message_id"]), None)
+    save_config(cfg)
 
 async def end_giveaway(gw: dict):
     if gw.get("ended"):
         return
     gw["ended"] = True
     active_giveaways.pop(gw["message_id"], None)
+    save_giveaways()
+    save_giveaway_history(gw)
     channel = bot.get_channel(gw["channel_id"])
     if not channel:
         return
@@ -2160,13 +2383,14 @@ async def end_giveaway(gw: dict):
         msg = await channel.fetch_message(gw["message_id"])
     except Exception:
         return
+    ended_view = GiveawayView(gw["message_id"], ended=True)
     entries = list(set(gw.get("entries", [])))
     if not entries:
         ended_embed = build_giveaway_embed(gw)
         ended_embed.description = "**Giveaway Ended**\n\nNo entries."
         ended_embed.color = 0x4B5563
         try:
-            await msg.edit(embed=ended_embed)
+            await msg.edit(embed=ended_embed, view=ended_view)
         except Exception:
             pass
         await channel.send(embed=info_embed("Giveaway Ended", f"No winners for **{gw['prize']}**."))
@@ -2179,7 +2403,7 @@ async def end_giveaway(gw: dict):
     ended_embed.description = f"**Giveaway Ended!**\n\n**Winners:** {winner_str}"
     ended_embed.color = 0x4B5563
     try:
-        await msg.edit(embed=ended_embed)
+        await msg.edit(embed=ended_embed, view=ended_view)
     except Exception:
         pass
     role_note = ""
@@ -2283,6 +2507,19 @@ async def sync_premium_descriptions():
 # ══════════════════════════════════════════════════════════════════
 
 @bot.event
+async def on_error(event_method: str, *args, **kwargs):
+    """Catches anything unhandled inside an event listener (on_message,
+    on_member_join, reaction handlers, etc.) — the class of bug that
+    on_command_error/on_app_command_error never sees since it isn't
+    inside a command at all. Discord.py's default behavior here is just
+    to print the traceback and move on; this keeps that (via report_error's
+    own logging) and ALSO reports it to the error log channel."""
+    exc_type, exc, _ = sys.exc_info()
+    if exc is None:
+        return
+    await report_error(exc, location=f"event:{event_method}")
+
+@bot.event
 async def on_ready():
     print(f"[{BOT_NAME}] Ready as {bot.user} (ID: {bot.user.id})")
 
@@ -2325,6 +2562,8 @@ async def on_ready():
     for gcfg in cfg.get("guilds", {}).values():
         for cid, comp in gcfg.get("message_components", {}).items():
             bot.add_view(MessageComponentLayout(cid, comp))
+
+    await restore_giveaways()
 
     if not cleanup_spam_cache.is_running():
         cleanup_spam_cache.start()
@@ -2840,37 +3079,6 @@ async def on_member_update(before: discord.Member, after: discord.Member):
                 pass
             break
 
-@bot.event
-async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    GIVEAWAY_EMOJI = ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉"
-    if str(payload.emoji) != GIVEAWAY_EMOJI:
-        return
-    gw = active_giveaways.get(payload.message_id)
-    if not gw or gw.get("ended"):
-        return
-    guild = bot.get_guild(payload.guild_id)
-    if not guild:
-        return
-    member = guild.get_member(payload.user_id)
-    if not member or member.bot:
-        return
-    if payload.user_id in gw["entries"]:
-        return
-    req_role = gw.get("required_role")
-    if req_role and not any(r.id == req_role for r in member.roles):
-        return
-    gw["entries"].append(payload.user_id)
-
-@bot.event
-async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    GIVEAWAY_EMOJI = ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉"
-    if str(payload.emoji) != GIVEAWAY_EMOJI:
-        return
-    gw = active_giveaways.get(payload.message_id)
-    if not gw or gw.get("ended"):
-        return
-    if payload.user_id in gw["entries"]:
-        gw["entries"].remove(payload.user_id)
 
 # ══════════════════════════════════════════════════════════════════
 # PREFIX COMMANDS — MODERATION
@@ -3936,20 +4144,15 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
         if not args: return await ctx.send(embed=error_embed("Usage: `giveaway reroll <message_id> [count]`"))
         try: mid = int(args[0]); count = int(args[1]) if len(args) > 1 else 1
         except ValueError: return await ctx.send(embed=error_embed("ID and count must be numbers."))
-        try: msg = await ctx.channel.fetch_message(mid)
-        except discord.NotFound: return await ctx.send(embed=error_embed("Message not found."))
-        entries = []
-        target_emoji = ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉"
-        for reaction in msg.reactions:
-            if str(reaction.emoji) == target_emoji or str(reaction.emoji) == "🎉":
-                async for user in reaction.users():
-                    if not user.bot: entries.append(user.id)
-                break
-        if not entries: return await ctx.send(embed=error_embed("No entries."))
+        gw = cfg.get("giveaway_history", {}).get(str(mid))
+        if not gw or gw.get("guild_id") != ctx.guild.id:
+            return await ctx.send(embed=error_embed("No ended giveaway found with that message ID — `giveaway reroll` only works on giveaways that already finished."))
+        entries = list(set(gw.get("entries", [])))
+        if not entries: return await ctx.send(embed=error_embed("That giveaway had no entries."))
         count   = max(1, min(count, len(entries)))
-        winners = random.sample(list(set(entries)), count)
+        winners = random.sample(entries, count)
         ws      = " ".join(f"<@{w}>" for w in winners)
-        embed   = discord.Embed(title=f"{e(ICON_WINNER, '🏆')} Giveaway Rerolled!".strip(), description=f"New winner(s): {ws}", color=COLOR_SUCCESS, timestamp=discord.utils.utcnow())
+        embed   = discord.Embed(title=f"{e(ICON_WINNER, '🏆')} Giveaway Rerolled!".strip(), description=f"**{gw['prize']}**\n\nNew winner(s): {ws}", color=COLOR_SUCCESS, timestamp=discord.utils.utcnow())
         embed.set_footer(text=BOT_NAME)
         await ctx.send(content=ws, embed=embed)
     elif sub == "start":
@@ -3994,15 +4197,18 @@ async def pfx_giveaway(ctx, sub: str = "", *args):
         gw_embed = build_giveaway_embed(gw)
         try:
             msg = await ctx.channel.send(embed=gw_embed)
-            await msg.add_reaction(ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉")
         except discord.Forbidden:
             return await ctx.send(embed=error_embed("The bot can't send messages in this channel."))
         gw["message_id"] = msg.id
+        view = GiveawayView(msg.id)
+        try:
+            await msg.edit(view=view)
+        except Exception:
+            pass
+        bot.add_view(view)
         active_giveaways[msg.id] = gw
-        async def _timer():
-            await asyncio.sleep(dur_secs)
-            if msg.id in active_giveaways: await end_giveaway(active_giveaways[msg.id])
-        asyncio.create_task(_timer())
+        save_giveaways()
+        schedule_giveaway_end(gw)
         ends_dt = datetime.datetime.utcfromtimestamp(ends_ts).replace(tzinfo=datetime.timezone.utc)
         confirm = success_embed(f"Giveaway started!\n\nPrize: {prize}\nWinners: {winner_count}\nEnds: {discord.utils.format_dt(ends_dt,'R')}")
         if req_role: confirm.add_field(name="Required Role", value=req_role.mention, inline=True)
@@ -5147,6 +5353,38 @@ async def pfx_maintenance(ctx, action: str = "", *, reason: str = ""):
             "`maintenance off` — unlock again\n"
             "`maintenance status` — check the current status"))
 
+@bot.command(name="errorlog", aliases=["errlog"])
+@is_owner()
+async def pfx_errorlog(ctx, sub: str = "", channel: discord.TextChannel = None):
+    """Owner-only. Configures the channel where unexpected bot errors get
+    auto-reported (command bugs, event-listener bugs, etc.) — so real
+    issues surface immediately instead of only living in Railway logs."""
+    sub = sub.lower()
+    if sub == "channel":
+        ch = channel or ctx.channel
+        cfg["error_log_channel_id"] = ch.id
+        save_config(cfg)
+        await ctx.send(embed=success_embed(f"Error reports will now be posted to {ch.mention}."))
+    elif sub == "off":
+        cfg["error_log_channel_id"] = None
+        save_config(cfg)
+        await ctx.send(embed=success_embed("Error reporting disabled."))
+    elif sub == "test":
+        try:
+            raise RuntimeError("This is a test error triggered by `errorlog test` — not a real bug.")
+        except RuntimeError as e:
+            await report_error(e, location="errorlog test", user=ctx.author, guild=ctx.guild, channel=ctx.channel)
+        await ctx.send(embed=success_embed("Test error sent — check the configured channel."))
+    else:
+        ch_id = cfg.get("error_log_channel_id")
+        current = f"<#{ch_id}>" if ch_id else "*(not set)*"
+        await ctx.send(embed=info_embed("Error Log", (
+            f"**Current channel:** {current}\n\n"
+            "`errorlog channel [#channel]` — set where errors get reported (defaults to this channel)\n"
+            "`errorlog off` — disable error reporting\n"
+            "`errorlog test` — send a fake error to confirm it's working"
+        )))
+
 # ── BOT STATUS UPDATES — posts a NOTHING-style status card to a channel ──
 BOT_STATUS_PRESETS = {
     "online":      {"icon": ICON_STATUS_ONLINE,      "fallback": "🟢", "color": COLOR_SUCCESS,
@@ -5664,6 +5902,36 @@ async def pfx_custombadge(ctx, action: str = "", *args):
         "emoji are 100% yours to decide, including this server's custom emoji. Shows up right "
         "alongside the other badges on `profile`."
     )))
+
+@bot.command(name="checkcustom", aliases=["debugcustom"])
+@is_owner_or_staff()
+async def pfx_checkcustom(ctx, member: discord.Member = None):
+    """Owner/staff-only. Dumps the RAW stored values (not the rendered
+    result) for a member's rank/level-up + ID card customization, plus
+    their live premium status — so a report of 'my background/color
+    reset' can be settled by looking at exactly what's on disk right now
+    instead of guessing from the rendered image."""
+    target = member or ctx.author
+    uid = str(target.id)
+    is_prem = target.id in cfg.get("premium_users", [])
+    exp_str = cfg.get("premium_expiry", {}).get(uid)
+
+    lines = [f"**is_prem:** `{is_prem}`"]
+    if exp_str:
+        lines.append(f"**premium_expiry:** `{exp_str}`")
+    else:
+        lines.append("**premium_expiry:** *(none stored — permanent)*")
+
+    for label, store_key in [
+        ("rankbg (premium_backgrounds)", "premium_backgrounds"),
+        ("rankcolor (premium_colors)",   "premium_colors"),
+        ("idcardbg (profile_backgrounds)", "profile_backgrounds"),
+        ("idcardcolor (profile_colors)", "profile_colors"),
+    ]:
+        val = cfg.get(store_key, {}).get(uid)
+        lines.append(f"**{label}:** `{val!r}`")
+
+    await ctx.send(embed=info_embed(f"Raw Customization Data — {target.display_name}", "\n".join(lines)))
 
 @bot.command(name="grantpremium", aliases=["gp"])
 @is_owner_or_staff()
@@ -7857,10 +8125,13 @@ async def on_member_join(member: discord.Member):
 @bot.tree.error
 async def on_app_command_error(i: discord.Interaction, error: app_commands.AppCommandError):
     msg = str(error)
+    unexpected = True
     if isinstance(error, app_commands.MissingPermissions):
         msg = "You don't have permission to use this command."
+        unexpected = False
     elif isinstance(error, app_commands.CommandOnCooldown):
         msg = f"Slow down — try again in **{error.retry_after:.1f}s**."
+        unexpected = False
     elif "channel id specified is invalid" in msg.lower():
         # Known Discord-side glitch: happens when a client (often mobile)
         # is holding a stale cached copy of this command's option
@@ -7873,6 +8144,15 @@ async def on_app_command_error(i: discord.Interaction, error: app_commands.AppCo
             "copy of this command. Fully close and reopen Discord (or try from desktop), then run the "
             "command again."
         )
+        unexpected = False
+    if unexpected:
+        real_error = getattr(error, "original", error)
+        cmd_name = i.command.qualified_name if i.command else "unknown"
+        await report_error(
+            real_error, location=f"/{cmd_name}",
+            user=i.user, guild=i.guild, channel=i.channel
+        )
+        msg = "Something went wrong running that command — it's been reported automatically."
     try:
         await i.response.send_message(embed=error_embed(msg), ephemeral=True)
     except discord.InteractionResponded:
@@ -7897,7 +8177,15 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.BadArgument):
         await ctx.send(embed=error_embed(f"Invalid argument: {error}"), delete_after=5)
         return
-    logging.error(f"[{BOT_NAME}] Command error: {error}")
+    real_error = getattr(error, "original", error)
+    await report_error(
+        real_error, location=ctx.command.qualified_name if ctx.command else "unknown",
+        user=ctx.author, guild=ctx.guild, channel=ctx.channel
+    )
+    try:
+        await ctx.send(embed=error_embed("Something went wrong running that command — it's been reported automatically."), delete_after=8)
+    except Exception:
+        pass
 
 # ══════════════════════════════════════════════════════════════════
 # ENTRY POINT
