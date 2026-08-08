@@ -47,7 +47,7 @@ from emoji_config import (
     ICON_GIVEAWAY, ICON_ANTISPAM, ICON_OWNER,
     ICON_SUCCESS, ICON_ERROR, ICON_WARNING, ICON_LOADING,
     ICON_PROFILE, ICON_BADGES, ICON_COMMANDS, ICON_PREMIUM_TAG,
-    ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_WINNER,
+    ICON_TICKET_OPEN, ICON_TICKET_CLOSE, ICON_GIVEAWAY_REACT, ICON_GIVEAWAY_PARTICIPANTS, ICON_WINNER,
     ICON_BOOST, ICON_ANTINUKE, ICON_IGNORE, ICON_AUTOMOD, ICON_AUTORESPONSE,
     ICON_AFK, ICON_VERIFICATION,
     ICON_STATUS_ONLINE, ICON_STATUS_OFFLINE, ICON_STATUS_MAINTENANCE,
@@ -2303,7 +2303,7 @@ class GiveawayView(discord.ui.View):
 
         join_btn = discord.ui.Button(
             label="Join Giveaway", emoji=(ICON_GIVEAWAY_REACT if ICON_GIVEAWAY_REACT else "🎉"),
-            style=discord.ButtonStyle.success,
+            style=discord.ButtonStyle.danger,
             custom_id=f"vx_gw_join:{message_id}",
             disabled=ended,
         )
@@ -2311,7 +2311,7 @@ class GiveawayView(discord.ui.View):
         self.add_item(join_btn)
 
         participants_btn = discord.ui.Button(
-            label="Participants", emoji="👥",
+            label="Participants", emoji=(ICON_GIVEAWAY_PARTICIPANTS if ICON_GIVEAWAY_PARTICIPANTS else "👥"),
             style=discord.ButtonStyle.secondary,
             custom_id=f"vx_gw_participants:{message_id}",
         )
