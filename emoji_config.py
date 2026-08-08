@@ -90,8 +90,9 @@ ICON_TICKET_OPEN  = "<:emoji_53:1528949967207534702>"  # Icon tombol Open Ticket
 ICON_TICKET_CLOSE = "<:emoji_53:1528949983645138984>"  # Icon tombol Close Ticket
 
 # Giveaway icons
-ICON_GIVEAWAY_REACT = "<a:emoji_51:1529240194920874164>" # Icon reaksi giveaway (default 🎉 kalau kosong)
-ICON_WINNER          = "<a:emoji_53:1522406976632389855>" # Icon pengumuman pemenang
+ICON_GIVEAWAY_REACT = "<a:emoji_81:1535491674191433798>" # Icon reaksi giveaway (default 🎉 kalau kosong)
+ICON_GIVEAWAY_PARTICIPANTS = "<:emoji_83:1535492163750862848>"
+ICON_WINNER          = "<a:emoji_82:1535491699336421466>" # Icon pengumuman pemenang
 
 # ══════════════════════════════════════════════════════════════════
 # HELPER FUNCTION
