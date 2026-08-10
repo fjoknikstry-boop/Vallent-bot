@@ -92,23 +92,38 @@ def next_vote_time(votes: dict, uid: str) -> Optional[datetime.datetime]:
     return ready_at if ready_at > now else None
 
 
-def build_webhook_app(auth_secret: str, on_vote: Callable[[int], Awaitable[None]]) -> web.Application:
-    """Build the aiohttp web app that receives top.gg's vote webhook.
-    `on_vote(user_id)` is awaited for every CONFIRMED real vote
-    (`type == "upvote"`) — vallent.py supplies this callback to grant
+def build_webhook_app(auth_secret: str, on_vote: Callable[[int], Awaitable[None]], app: Optional[web.Application] = None) -> web.Application:
+    """Build (or add routes to) the aiohttp web app that receives top.gg's
+    vote webhook. `on_vote(user_id)` is awaited for every CONFIRMED real
+    vote (`type == "upvote"`) — vallent.py supplies this callback to grant
     the actual XP boost + save config, so this module stays free of any
     bot/cfg dependency. `type == "test"` pings are answered 200 OK but
     never call `on_vote`, so hitting top.gg's dashboard "Test" button
-    can't be used to farm free boosts."""
-    app = web.Application()
+    can't be used to farm free boosts.
+
+    Pass an existing `app` (e.g. one the dashboard module already built
+    routes onto) to add this route to it instead of creating a second
+    aiohttp app — Railway (and most hosts) only expose one port per
+    service, so the vote webhook and the dashboard have to share a single
+    app/port rather than each trying to bind their own."""
+    app = app if app is not None else web.Application()
 
     async def handle_vote(request: web.Request) -> web.Response:
         got = request.headers.get("Authorization")
         if got != auth_secret:
             if got is None:
+                # Dump every header top.gg actually sent (names + values —
+                # these are all top.gg's own request headers, never our
+                # secret, so safe to log in full). If top.gg has moved to
+                # a signature-based scheme (e.g. a header carrying an HMAC
+                # signature instead of the raw secret), this is what will
+                # reveal it — the raw secret alone can't reproduce that
+                # signature, so we'd need to switch this handler to verify
+                # a signature instead of a straight string match.
+                all_headers = {k: v for k, v in request.headers.items()}
                 log.warning(
-                    "Rejected a top.gg webhook call: no Authorization header was sent at all — "
-                    "the Authorization field on top.gg's Webhooks tab is probably empty."
+                    "Rejected a top.gg webhook call: no Authorization header was sent at all. "
+                    f"Full headers received instead: {all_headers}"
                 )
             elif got.strip() == (auth_secret or "").strip():
                 log.warning(
