@@ -57,6 +57,7 @@ from emoji_config import (
 )
 import rank_card
 import profile_card
+import dashboard
 from PIL import Image
 import antinuke
 import ticket_types
@@ -94,9 +95,17 @@ TOPGG_VOTE_URL      = os.getenv("TOPGG_VOTE_URL", "")        # e.g. https://top.
 TOPGG_WEBHOOK_AUTH   = os.getenv("TOPGG_WEBHOOK_AUTH", "")    # secret string, must match top.gg's Webhooks tab
 # Railway auto-injects PORT when the service has Public Networking turned
 # on — that's the port your app MUST bind to for Railway's public domain
-# to actually reach it. VOTE_WEBHOOK_PORT is only a manual fallback for
-# non-Railway hosts; on Railway, PORT always wins.
-VOTE_WEBHOOK_PORT    = int(os.getenv("PORT") or os.getenv("VOTE_WEBHOOK_PORT", "8080"))
+# to actually reach it. WEB_PORT is only a manual fallback for
+# non-Railway hosts; on Railway, PORT always wins. Shared by the top.gg
+# webhook AND the dashboard below — one process, one port, one app.
+WEB_PORT             = int(os.getenv("PORT") or os.getenv("VOTE_WEBHOOK_PORT", "8080"))
+
+# Web dashboard — all optional. Without DISCORD_CLIENT_SECRET set, the
+# dashboard routes simply never get registered (no login link works, but
+# nothing crashes and the vote webhook still runs fine on its own).
+DASHBOARD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "")
+DASHBOARD_REDIRECT_URI  = os.getenv("DASHBOARD_REDIRECT_URI", "")   # e.g. https://your-domain/auth/discord/callback
+DASHBOARD_SESSION_SECRET = os.getenv("SESSION_SECRET", "")          # any long random string, signs the login cookie
 
 SPAM_THRESHOLD = 3
 SPAM_WINDOW    = 8.0
@@ -944,23 +953,65 @@ async def _handle_topgg_vote(uid: int):
         logging.warning(f"[{BOT_NAME}] Couldn't DM vote reward notification to {uid} (DMs likely closed).")
 
 async def start_vote_webhook_server():
-    """Starts the small aiohttp server that receives top.gg's vote webhook,
-    if TOPGG_WEBHOOK_AUTH is configured. Safe to call repeatedly — only
-    ever actually starts once (guarded by _vote_webhook_started), same
-    pattern as the .is_running() guards on the background tasks below."""
+    """Starts the single aiohttp server that hosts both the top.gg vote
+    webhook and the web dashboard, on whichever of those is actually
+    configured — safe to call repeatedly, only ever actually binds the
+    port once (guarded by _vote_webhook_started). Kept under its old name
+    since that's what on_ready already calls; it just does more now."""
     global _vote_webhook_started
-    if _vote_webhook_started or not TOPGG_WEBHOOK_AUTH:
+    if _vote_webhook_started:
+        return
+    if not TOPGG_WEBHOOK_AUTH and not DASHBOARD_CLIENT_SECRET:
         return
     try:
-        app    = vote_system.build_webhook_app(TOPGG_WEBHOOK_AUTH, _handle_topgg_vote)
+        app = aiohttp_web.Application()
+
+        if TOPGG_WEBHOOK_AUTH:
+            vote_system.build_webhook_app(TOPGG_WEBHOOK_AUTH, _handle_topgg_vote, app=app)
+
+        if DASHBOARD_CLIENT_SECRET and DASHBOARD_REDIRECT_URI and DASHBOARD_SESSION_SECRET:
+            def _get_leveling(guild_id: int) -> dict:
+                gc = guild_cfg(cfg, guild_id)
+                ch = gc.get("level_channel")
+                return {
+                    "enabled": gc.get("leveling_enabled", True),
+                    "channel_id": str(ch) if ch else None,
+                    "difficulty": gc.get("xp_difficulty", 1.0),
+                }
+
+            def _set_leveling(guild_id: int, update: dict) -> None:
+                gc = guild_cfg(cfg, guild_id)
+                if "enabled" in update:
+                    gc["leveling_enabled"] = update["enabled"]
+                if "channel_id" in update:
+                    gc["level_channel"] = int(update["channel_id"]) if update["channel_id"] else None
+                if "difficulty" in update:
+                    gc["xp_difficulty"] = update["difficulty"]
+                save_config(cfg)
+
+            dashboard.build_dashboard_routes(
+                app,
+                client_id=str(bot.user.id),
+                client_secret=DASHBOARD_CLIENT_SECRET,
+                redirect_uri=DASHBOARD_REDIRECT_URI,
+                session_secret=DASHBOARD_SESSION_SECRET,
+                get_bot=lambda: bot,
+                get_leveling=_get_leveling,
+                set_leveling=_set_leveling,
+            )
+            print(f"[{BOT_NAME}] Web dashboard live at {DASHBOARD_REDIRECT_URI.rsplit('/auth/', 1)[0]}/dashboard")
+        elif DASHBOARD_CLIENT_SECRET:
+            logging.warning(f"[{BOT_NAME}] DISCORD_CLIENT_SECRET is set but DASHBOARD_REDIRECT_URI/SESSION_SECRET are missing — dashboard not started.")
+
         runner = aiohttp_web.AppRunner(app)
         await runner.setup()
-        site = aiohttp_web.TCPSite(runner, "0.0.0.0", VOTE_WEBHOOK_PORT)
+        site = aiohttp_web.TCPSite(runner, "0.0.0.0", WEB_PORT)
         await site.start()
         _vote_webhook_started = True
-        print(f"[{BOT_NAME}] top.gg vote webhook listening on port {VOTE_WEBHOOK_PORT} (path /topgg/vote).")
+        if TOPGG_WEBHOOK_AUTH:
+            print(f"[{BOT_NAME}] top.gg vote webhook listening on port {WEB_PORT} (path /topgg/vote).")
     except Exception:
-        logging.exception(f"[{BOT_NAME}] Failed to start the top.gg vote webhook server")
+        logging.exception(f"[{BOT_NAME}] Failed to start the web server")
 
 def can_receive_join_boost(uid: int, cooldown_hours: int = 24) -> bool:
     """Anti-farm guard for the support-server join XP boost. Without this,
@@ -6152,7 +6203,8 @@ OWNER_HELP_CATEGORY = ("owner", "Owner Only", ICON_OWNER, "👑", (
     "`premiumlock add/remove/list`\n"
     "`blacklist add/remove/list`\n"
     "`vxservers` — view every server the bot is in\n"
-    "`vxleave <guild_id>`"
+    "`vxleave <guild_id>`\n"
+    "`errorlog channel/off/test` — where unexpected bot errors get auto-reported"
 ))
 
 DELEGATED_HELP_CATEGORY = ("delegated_access", "Access Management", "", "🌙", (
