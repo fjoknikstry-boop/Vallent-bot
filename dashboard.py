@@ -410,6 +410,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .guild-note{ font-size:11px; color:var(--muted-2); margin-top:2px; }
   .page-title{ font-size:32px; margin-bottom:6px; }
   .page-sub{ color:var(--muted); font-size:14px; margin-bottom:36px; }
+  .sys-card{ background:var(--surface); border:1px solid var(--line); border-radius:12px; margin-bottom:14px; overflow:hidden; }
+  .sys-card-head{ display:flex; align-items:center; gap:14px; padding:20px 24px; cursor:pointer; user-select:none; }
+  .sys-card-head:hover{ background:rgba(255,255,255,0.02); }
+  .sys-card-icon{ width:38px; height:38px; border-radius:9px; background:var(--surface-2); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:17px; flex-shrink:0; }
+  .sys-card-title{ flex:1; min-width:0; }
+  .sys-card-title h2{ font-family:'Outfit',sans-serif; text-transform:none; font-weight:700; font-size:16px; letter-spacing:0; margin-bottom:2px; }
+  .sys-card-title p{ font-size:12.5px; color:var(--muted-2); }
+  .status-badge{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; padding:4px 10px; border-radius:20px; flex-shrink:0; }
+  .status-badge.on{ background:rgba(74,222,128,0.15); color:#4ade80; }
+  .status-badge.off{ background:rgba(255,255,255,0.06); color:var(--muted-2); }
+  .sys-card-chevron{ width:20px; height:20px; flex-shrink:0; transition:transform .2s ease; color:var(--muted); }
+  .sys-card.open .sys-card-chevron{ transform:rotate(180deg); }
+  .sys-card-body{ max-height:0; overflow:hidden; transition:max-height .25s ease; }
+  .sys-card.open .sys-card-body{ max-height:2000px; }
+  .sys-card-body-inner{ padding:4px 24px 26px; border-top:1px solid var(--line); padding-top:22px; }
+
   .panel{ background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:28px; margin-bottom:20px; }
   .panel-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; }
   .panel-head h2{ font-family:'Outfit',sans-serif; text-transform:none; font-weight:700; font-size:17px; letter-spacing:0; }
@@ -492,6 +508,28 @@ function renderGuildPicker(me) {
   app.appendChild(grid);
 }
 
+function makeSysCard(icon, title, subtitle, enabled, bodyHtml) {
+  const card = el(`
+    <div class="sys-card">
+      <div class="sys-card-head">
+        <div class="sys-card-icon">${icon}</div>
+        <div class="sys-card-title"><h2>${title}</h2><p>${subtitle}</p></div>
+        <span class="status-badge ${enabled ? 'on' : 'off'}" data-badge>${enabled ? 'Enabled' : 'Disabled'}</span>
+        <svg class="sys-card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+      <div class="sys-card-body"><div class="sys-card-body-inner">${bodyHtml}</div></div>
+    </div>
+  `);
+  card.querySelector('.sys-card-head').addEventListener('click', () => card.classList.toggle('open'));
+  return card;
+}
+
+function setBadge(card, enabled) {
+  const badge = card.querySelector('[data-badge]');
+  badge.textContent = enabled ? 'Enabled' : 'Disabled';
+  badge.className = `status-badge ${enabled ? 'on' : 'off'}`;
+}
+
 async function renderGuildEditor(guildId) {
   app.innerHTML = '<div class="loading">Loading server settings…</div>';
   const [lvlRes, chRes, anRes] = await Promise.all([
@@ -509,75 +547,86 @@ async function renderGuildEditor(guildId) {
 
   app.innerHTML = '';
   app.appendChild(el(`<a href="/dashboard" class="back-link">&larr; All Servers</a>`));
-  app.appendChild(el(`<h1 class="page-title">Server Settings</h1><p class="page-sub">More systems (Moderation, Tickets, Antispam, Verification...) are on the way — Leveling and Anti-Nuke are live here so far.</p>`));
+  app.appendChild(el(`<h1 class="page-title">Server Settings</h1><p class="page-sub">Click a system below to open its settings. More systems (Moderation, Tickets, Antispam, Verification...) are on the way.</p>`));
 
-  const panel = el(`
-    <div class="panel">
-      <div class="panel-head">
-        <h2>Level &amp; XP</h2>
-        <label class="toggle"><input type="checkbox" id="lvlEnabled" ${lvl.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label>
-      </div>
-      <div class="field">
-        <label>Level-Up Announcement Channel</label>
-        <select id="lvlChannel">
-          <option value="">— None (no announcement) —</option>
-          ${channels.map(c => `<option value="${c.id}" ${lvl.channel_id === c.id ? 'selected' : ''}>#${c.name}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field">
-        <label>XP Difficulty Multiplier (0.1 – 10)</label>
-        <input type="number" id="lvlDifficulty" min="0.1" max="10" step="0.1" value="${lvl.difficulty}">
-      </div>
-      <div class="save-row">
-        <button class="btn btn-primary" id="saveLvl">Save Changes</button>
-        <span class="save-status" id="lvlStatus"></span>
-      </div>
+  // ---------------- Level & XP ----------------
+  const lvlCard = makeSysCard('📈', 'Level &amp; XP', 'XP gain, level-up announcements, difficulty', lvl.enabled, `
+    <div class="field">
+      <label>Enabled</label>
+      <label class="toggle"><input type="checkbox" id="lvlEnabled" ${lvl.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label>
+    </div>
+    <div class="field">
+      <label>Level-Up Announcement Channel</label>
+      <select id="lvlChannel">
+        <option value="">— None (no announcement) —</option>
+        ${channels.map(c => `<option value="${c.id}" ${lvl.channel_id === c.id ? 'selected' : ''}>#${c.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field">
+      <label>XP Difficulty Multiplier (0.1 – 10)</label>
+      <input type="number" id="lvlDifficulty" min="0.1" max="10" step="0.1" value="${lvl.difficulty}">
+    </div>
+    <div class="save-row">
+      <button class="btn btn-primary" id="saveLvl">Save Changes</button>
+      <span class="save-status" id="lvlStatus"></span>
     </div>
   `);
-  app.appendChild(panel);
+  app.appendChild(lvlCard);
 
-  const anPanel = el(`
-    <div class="panel">
-      <div class="panel-head">
-        <h2>Anti-Nuke</h2>
-        <label class="toggle"><input type="checkbox" id="anEnabled" ${an.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label>
-      </div>
-      ${!an.bot_has_audit_log_perm ? `<div class="soon-note" style="color:var(--crimson);margin-bottom:16px;">The bot is missing the "View Audit Log" permission — Anti-Nuke can't detect anything until that's granted in Discord's server settings.</div>` : ''}
-      <div class="field">
-        <label>Alert Log Channel</label>
-        <select id="anLogChannel">
-          <option value="">— None —</option>
-          ${channels.map(c => `<option value="${c.id}" ${an.log_channel === c.id ? 'selected' : ''}>#${c.name}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field">
-        <label>Punishment</label>
-        <select id="anPunishment">
-          <option value="strip_roles" ${an.punishment === 'strip_roles' ? 'selected' : ''}>Strip Roles</option>
-          <option value="kick" ${an.punishment === 'kick' ? 'selected' : ''}>Kick</option>
-          <option value="ban" ${an.punishment === 'ban' ? 'selected' : ''}>Ban</option>
-        </select>
-      </div>
-      <div class="save-row">
-        <button class="btn btn-primary" id="saveAn">Save Changes</button>
-        <span class="save-status" id="anStatus"></span>
-      </div>
+  document.getElementById('saveLvl').onclick = async (e) => {
+    e.stopPropagation();
+    const status = document.getElementById('lvlStatus');
+    status.textContent = 'Saving...'; status.className = 'save-status';
+    const body = {
+      enabled: document.getElementById('lvlEnabled').checked,
+      channel_id: document.getElementById('lvlChannel').value || null,
+      difficulty: parseFloat(document.getElementById('lvlDifficulty').value),
+    };
+    const res = await api(`/api/guilds/${guildId}/leveling`, { method: 'PATCH', body: JSON.stringify(body) });
+    if (res.ok) { status.textContent = 'Saved.'; status.className = 'save-status ok'; setBadge(lvlCard, body.enabled); }
+    else { status.textContent = 'Failed to save — try again.'; status.className = 'save-status err'; }
+  };
 
-      <div class="field" style="margin-top:28px;">
-        <label>Whitelist (trusted staff exempt from detection)</label>
-        <div id="wlList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;"></div>
-        <div style="display:flex;gap:8px;">
-          <input type="text" id="wlUserId" placeholder="Discord User ID" style="flex:1;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;color:var(--ink);font-family:'Outfit',sans-serif;font-size:14px;">
-          <button class="btn btn-ghost" id="wlAdd">Add</button>
-        </div>
-        <span class="save-status" id="wlStatus"></span>
+  // ---------------- Anti-Nuke ----------------
+  const anCard = makeSysCard('🛡️', 'Anti-Nuke', 'Raid protection, mass-action detection', an.enabled, `
+    <div class="field">
+      <label>Enabled</label>
+      <label class="toggle"><input type="checkbox" id="anEnabled" ${an.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label>
+    </div>
+    ${!an.bot_has_audit_log_perm ? `<div class="soon-note" style="color:var(--crimson);margin-bottom:16px;">The bot is missing the "View Audit Log" permission — Anti-Nuke can't detect anything until that's granted in Discord's server settings.</div>` : ''}
+    <div class="field">
+      <label>Alert Log Channel</label>
+      <select id="anLogChannel">
+        <option value="">— None —</option>
+        ${channels.map(c => `<option value="${c.id}" ${an.log_channel === c.id ? 'selected' : ''}>#${c.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field">
+      <label>Punishment</label>
+      <select id="anPunishment">
+        <option value="strip_roles" ${an.punishment === 'strip_roles' ? 'selected' : ''}>Strip Roles</option>
+        <option value="kick" ${an.punishment === 'kick' ? 'selected' : ''}>Kick</option>
+        <option value="ban" ${an.punishment === 'ban' ? 'selected' : ''}>Ban</option>
+      </select>
+    </div>
+    <div class="save-row">
+      <button class="btn btn-primary" id="saveAn">Save Changes</button>
+      <span class="save-status" id="anStatus"></span>
+    </div>
+    <div class="field" style="margin-top:28px;">
+      <label>Whitelist (trusted staff exempt from detection)</label>
+      <div id="wlList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;"></div>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="wlUserId" placeholder="Discord User ID" style="flex:1;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;color:var(--ink);font-family:'Outfit',sans-serif;font-size:14px;">
+        <button class="btn btn-ghost" id="wlAdd">Add</button>
       </div>
+      <span class="save-status" id="wlStatus"></span>
     </div>
   `);
-  app.appendChild(anPanel);
+  app.appendChild(anCard);
 
   function renderWhitelist(list) {
-    const wlList = document.getElementById('wlList');
+    const wlList = anCard.querySelector('#wlList');
     wlList.innerHTML = '';
     if (!list.length) { wlList.appendChild(el(`<div class="soon-note">No one whitelisted yet.</div>`)); return; }
     list.forEach(u => {
@@ -589,6 +638,7 @@ async function renderGuildEditor(guildId) {
         </div>
       `);
       row.querySelector('button').onclick = async (e) => {
+        e.stopPropagation();
         const uid = e.target.getAttribute('data-uid');
         const res = await api(`/api/guilds/${guildId}/antinuke/whitelist/${uid}`, { method: 'DELETE' });
         if (res.ok) { const data = await res.json(); renderWhitelist(data.whitelist); }
@@ -598,9 +648,10 @@ async function renderGuildEditor(guildId) {
   }
   renderWhitelist(an.whitelist);
 
-  document.getElementById('wlAdd').onclick = async () => {
-    const input = document.getElementById('wlUserId');
-    const status = document.getElementById('wlStatus');
+  anCard.querySelector('#wlAdd').onclick = async (e) => {
+    e.stopPropagation();
+    const input = anCard.querySelector('#wlUserId');
+    const status = anCard.querySelector('#wlStatus');
     const uid = input.value.trim();
     if (!uid) return;
     status.textContent = 'Adding...'; status.className = 'save-status';
@@ -610,39 +661,28 @@ async function renderGuildEditor(guildId) {
     else { status.textContent = data.error || 'Failed to add.'; status.className = 'save-status err'; }
   };
 
-  document.getElementById('saveAn').onclick = async () => {
-    const status = document.getElementById('anStatus');
+  anCard.querySelector('#saveAn').onclick = async (e) => {
+    e.stopPropagation();
+    const status = anCard.querySelector('#anStatus');
     status.textContent = 'Saving...'; status.className = 'save-status';
     const body = {
-      enabled: document.getElementById('anEnabled').checked,
-      log_channel: document.getElementById('anLogChannel').value || null,
-      punishment: document.getElementById('anPunishment').value,
+      enabled: anCard.querySelector('#anEnabled').checked,
+      log_channel: anCard.querySelector('#anLogChannel').value || null,
+      punishment: anCard.querySelector('#anPunishment').value,
     };
     const res = await api(`/api/guilds/${guildId}/antinuke`, { method: 'PATCH', body: JSON.stringify(body) });
     const data = await res.json();
-    if (res.ok) { status.textContent = 'Saved.'; status.className = 'save-status ok'; }
-    else { status.textContent = data.error || 'Failed to save — try again.'; status.className = 'save-status err'; document.getElementById('anEnabled').checked = an.enabled; }
+    if (res.ok) { status.textContent = 'Saved.'; status.className = 'save-status ok'; setBadge(anCard, body.enabled); }
+    else { status.textContent = data.error || 'Failed to save — try again.'; status.className = 'save-status err'; anCard.querySelector('#anEnabled').checked = an.enabled; }
   };
 
+  // ---------------- Coming soon ----------------
   app.appendChild(el(`
     <div class="panel" style="opacity:0.5;">
       <div class="panel-head"><h2>Moderation, Tickets, Antispam &amp; more</h2></div>
       <div class="soon-note">Coming in a future update — for now, configure these with commands in Discord.</div>
     </div>
   `));
-
-  document.getElementById('saveLvl').onclick = async () => {
-    const status = document.getElementById('lvlStatus');
-    status.textContent = 'Saving...'; status.className = 'save-status';
-    const body = {
-      enabled: document.getElementById('lvlEnabled').checked,
-      channel_id: document.getElementById('lvlChannel').value || null,
-      difficulty: parseFloat(document.getElementById('lvlDifficulty').value),
-    };
-    const res = await api(`/api/guilds/${guildId}/leveling`, { method: 'PATCH', body: JSON.stringify(body) });
-    if (res.ok) { status.textContent = 'Saved.'; status.className = 'save-status ok'; }
-    else { status.textContent = 'Failed to save — try again.'; status.className = 'save-status err'; }
-  };
 }
 
 async function boot() {
