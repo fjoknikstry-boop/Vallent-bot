@@ -413,7 +413,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .sys-card{ background:var(--surface); border:1px solid var(--line); border-radius:12px; margin-bottom:14px; overflow:hidden; }
   .sys-card-head{ display:flex; align-items:center; gap:14px; padding:20px 24px; cursor:pointer; user-select:none; }
   .sys-card-head:hover{ background:rgba(255,255,255,0.02); }
-  .sys-card-icon{ width:38px; height:38px; border-radius:9px; background:var(--surface-2); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:17px; flex-shrink:0; }
+  .sys-card-icon{ width:38px; height:38px; border-radius:9px; background:var(--surface-2); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .sys-card-icon svg{ width:18px; height:18px; }
   .sys-card-title{ flex:1; min-width:0; }
   .sys-card-title h2{ font-family:'Outfit',sans-serif; text-transform:none; font-weight:700; font-size:16px; letter-spacing:0; margin-bottom:2px; }
   .sys-card-title p{ font-size:12.5px; color:var(--muted-2); }
@@ -550,7 +551,7 @@ async function renderGuildEditor(guildId) {
   app.appendChild(el(`<h1 class="page-title">Server Settings</h1><p class="page-sub">Click a system below to open its settings. More systems (Moderation, Tickets, Antispam, Verification...) are on the way.</p>`));
 
   // ---------------- Level & XP ----------------
-  const lvlCard = makeSysCard('📈', 'Level &amp; XP', 'XP gain, level-up announcements, difficulty', lvl.enabled, `
+  const lvlCard = makeSysCard('<svg viewBox="0 0 24 24" fill="none" stroke="#f5a623" stroke-width="1.6"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>', 'Level &amp; XP', 'XP gain, level-up announcements, difficulty', lvl.enabled, `
     <div class="field">
       <label>Enabled</label>
       <label class="toggle"><input type="checkbox" id="lvlEnabled" ${lvl.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label>
@@ -588,7 +589,7 @@ async function renderGuildEditor(guildId) {
   };
 
   // ---------------- Anti-Nuke ----------------
-  const anCard = makeSysCard('🛡️', 'Anti-Nuke', 'Raid protection, mass-action detection', an.enabled, `
+  const anCard = makeSysCard('<svg viewBox="0 0 24 24" fill="none" stroke="#a80f2c" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>', 'Anti-Nuke', 'Raid protection, mass-action detection', an.enabled, `
     <div class="field">
       <label>Enabled</label>
       <label class="toggle"><input type="checkbox" id="anEnabled" ${an.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label>
