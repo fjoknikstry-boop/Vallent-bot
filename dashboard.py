@@ -95,6 +95,10 @@ def build_dashboard_routes(
     get_bot: Callable[[], object],
     get_leveling: Callable[[int], dict],
     set_leveling: Callable[[int, dict], None],
+    get_antinuke: Callable[[int], dict],
+    set_antinuke: Callable[[int, dict], Optional[str]],
+    add_antinuke_whitelist: Callable[[int, int], Optional[str]],
+    remove_antinuke_whitelist: Callable[[int, int], None],
 ) -> None:
     """Registers every /auth, /dashboard, and /api route onto the shared
     aiohttp `app` (the same one the top.gg webhook runs on). Everything
@@ -102,6 +106,9 @@ def build_dashboard_routes(
       - get_bot()                    -> the discord.py Bot instance
       - get_leveling(guild_id)       -> {"enabled": bool, "channel_id": str|None, "difficulty": float}
       - set_leveling(guild_id, dict) -> applies + persists a partial update
+      - get_antinuke(guild_id)       -> {"enabled", "log_channel", "punishment", "whitelist": [...], "bot_has_audit_log_perm"}
+      - set_antinuke(guild_id, dict) -> applies + persists a partial update; returns an error string or None
+      - add/remove_antinuke_whitelist(guild_id, user_id) -> mutate the whitelist by one user
     """
 
     def _session_from_request(request: web.Request) -> Optional[dict]:
@@ -269,6 +276,67 @@ def build_dashboard_routes(
         channels = [{"id": str(c.id), "name": c.name} for c in guild.text_channels]
         return web.json_response(channels)
 
+    async def api_get_antinuke(request: web.Request) -> web.Response:
+        guild_id = request.match_info["guild_id"]
+        _, err = _require_guild_access(request, guild_id)
+        if err:
+            return err
+        return web.json_response(get_antinuke(int(guild_id)))
+
+    async def api_patch_antinuke(request: web.Request) -> web.Response:
+        guild_id = request.match_info["guild_id"]
+        _, err = _require_guild_access(request, guild_id)
+        if err:
+            return err
+        if request.headers.get("X-Requested-With") != "vallent-dashboard":
+            return web.json_response({"error": "bad_request"}, status=400)
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        update = {}
+        if "enabled" in body:
+            update["enabled"] = bool(body["enabled"])
+        if "log_channel" in body:
+            update["log_channel"] = str(body["log_channel"]) if body["log_channel"] else None
+        if "punishment" in body:
+            update["punishment"] = str(body["punishment"])
+        error = set_antinuke(int(guild_id), update)
+        if error:
+            return web.json_response({"error": error}, status=400)
+        return web.json_response(get_antinuke(int(guild_id)))
+
+    async def api_add_antinuke_whitelist(request: web.Request) -> web.Response:
+        guild_id = request.match_info["guild_id"]
+        _, err = _require_guild_access(request, guild_id)
+        if err:
+            return err
+        if request.headers.get("X-Requested-With") != "vallent-dashboard":
+            return web.json_response({"error": "bad_request"}, status=400)
+        try:
+            body = await request.json()
+            user_id = int(body["user_id"])
+        except Exception:
+            return web.json_response({"error": "invalid_user_id"}, status=400)
+        error = add_antinuke_whitelist(int(guild_id), user_id)
+        if error:
+            return web.json_response({"error": error}, status=400)
+        return web.json_response(get_antinuke(int(guild_id)))
+
+    async def api_remove_antinuke_whitelist(request: web.Request) -> web.Response:
+        guild_id = request.match_info["guild_id"]
+        user_id = request.match_info["user_id"]
+        _, err = _require_guild_access(request, guild_id)
+        if err:
+            return err
+        if request.headers.get("X-Requested-With") != "vallent-dashboard":
+            return web.json_response({"error": "bad_request"}, status=400)
+        try:
+            remove_antinuke_whitelist(int(guild_id), int(user_id))
+        except Exception:
+            return web.json_response({"error": "invalid_user_id"}, status=400)
+        return web.json_response(get_antinuke(int(guild_id)))
+
     # ---------------- Frontend shell ----------------
 
     async def serve_dashboard_shell(request: web.Request) -> web.Response:
@@ -281,6 +349,10 @@ def build_dashboard_routes(
     app.router.add_get("/api/guilds/{guild_id}/leveling", api_get_leveling)
     app.router.add_patch("/api/guilds/{guild_id}/leveling", api_patch_leveling)
     app.router.add_get("/api/guilds/{guild_id}/channels", api_guild_channels)
+    app.router.add_get("/api/guilds/{guild_id}/antinuke", api_get_antinuke)
+    app.router.add_patch("/api/guilds/{guild_id}/antinuke", api_patch_antinuke)
+    app.router.add_post("/api/guilds/{guild_id}/antinuke/whitelist", api_add_antinuke_whitelist)
+    app.router.add_delete("/api/guilds/{guild_id}/antinuke/whitelist/{user_id}", api_remove_antinuke_whitelist)
     app.router.add_get("/dashboard", serve_dashboard_shell)
     app.router.add_get("/dashboard/{guild_id}", serve_dashboard_shell)
 
@@ -422,9 +494,10 @@ function renderGuildPicker(me) {
 
 async function renderGuildEditor(guildId) {
   app.innerHTML = '<div class="loading">Loading server settings…</div>';
-  const [lvlRes, chRes] = await Promise.all([
+  const [lvlRes, chRes, anRes] = await Promise.all([
     api(`/api/guilds/${guildId}/leveling`),
     api(`/api/guilds/${guildId}/channels`),
+    api(`/api/guilds/${guildId}/antinuke`),
   ]);
   if (lvlRes.status === 403 || lvlRes.status === 404) {
     app.innerHTML = `<div class="loading">You don't have access to manage this server.</div>`;
@@ -432,10 +505,11 @@ async function renderGuildEditor(guildId) {
   }
   const lvl = await lvlRes.json();
   const channels = await chRes.json();
+  const an = await anRes.json();
 
   app.innerHTML = '';
   app.appendChild(el(`<a href="/dashboard" class="back-link">&larr; All Servers</a>`));
-  app.appendChild(el(`<h1 class="page-title">Server Settings</h1><p class="page-sub">More systems (Moderation, Tickets, Anti-Nuke...) are on the way — Leveling is the first one live here.</p>`));
+  app.appendChild(el(`<h1 class="page-title">Server Settings</h1><p class="page-sub">More systems (Moderation, Tickets, Antispam, Verification...) are on the way — Leveling and Anti-Nuke are live here so far.</p>`));
 
   const panel = el(`
     <div class="panel">
@@ -462,9 +536,97 @@ async function renderGuildEditor(guildId) {
   `);
   app.appendChild(panel);
 
+  const anPanel = el(`
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Anti-Nuke</h2>
+        <label class="toggle"><input type="checkbox" id="anEnabled" ${an.enabled ? 'checked' : ''}><span class="toggle-slider"></span></label>
+      </div>
+      ${!an.bot_has_audit_log_perm ? `<div class="soon-note" style="color:var(--crimson);margin-bottom:16px;">The bot is missing the "View Audit Log" permission — Anti-Nuke can't detect anything until that's granted in Discord's server settings.</div>` : ''}
+      <div class="field">
+        <label>Alert Log Channel</label>
+        <select id="anLogChannel">
+          <option value="">— None —</option>
+          ${channels.map(c => `<option value="${c.id}" ${an.log_channel === c.id ? 'selected' : ''}>#${c.name}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label>Punishment</label>
+        <select id="anPunishment">
+          <option value="strip_roles" ${an.punishment === 'strip_roles' ? 'selected' : ''}>Strip Roles</option>
+          <option value="kick" ${an.punishment === 'kick' ? 'selected' : ''}>Kick</option>
+          <option value="ban" ${an.punishment === 'ban' ? 'selected' : ''}>Ban</option>
+        </select>
+      </div>
+      <div class="save-row">
+        <button class="btn btn-primary" id="saveAn">Save Changes</button>
+        <span class="save-status" id="anStatus"></span>
+      </div>
+
+      <div class="field" style="margin-top:28px;">
+        <label>Whitelist (trusted staff exempt from detection)</label>
+        <div id="wlList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;"></div>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="wlUserId" placeholder="Discord User ID" style="flex:1;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;color:var(--ink);font-family:'Outfit',sans-serif;font-size:14px;">
+          <button class="btn btn-ghost" id="wlAdd">Add</button>
+        </div>
+        <span class="save-status" id="wlStatus"></span>
+      </div>
+    </div>
+  `);
+  app.appendChild(anPanel);
+
+  function renderWhitelist(list) {
+    const wlList = document.getElementById('wlList');
+    wlList.innerHTML = '';
+    if (!list.length) { wlList.appendChild(el(`<div class="soon-note">No one whitelisted yet.</div>`)); return; }
+    list.forEach(u => {
+      const row = el(`
+        <div style="display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;">
+          ${u.avatar ? `<img src="${u.avatar}" style="width:24px;height:24px;border-radius:50%;">` : `<div style="width:24px;height:24px;border-radius:50%;background:var(--surface);"></div>`}
+          <span style="flex:1;font-size:13.5px;">${u.name}</span>
+          <button data-uid="${u.id}" style="background:transparent;border:none;color:var(--muted-2);cursor:pointer;font-size:16px;">&times;</button>
+        </div>
+      `);
+      row.querySelector('button').onclick = async (e) => {
+        const uid = e.target.getAttribute('data-uid');
+        const res = await api(`/api/guilds/${guildId}/antinuke/whitelist/${uid}`, { method: 'DELETE' });
+        if (res.ok) { const data = await res.json(); renderWhitelist(data.whitelist); }
+      };
+      wlList.appendChild(row);
+    });
+  }
+  renderWhitelist(an.whitelist);
+
+  document.getElementById('wlAdd').onclick = async () => {
+    const input = document.getElementById('wlUserId');
+    const status = document.getElementById('wlStatus');
+    const uid = input.value.trim();
+    if (!uid) return;
+    status.textContent = 'Adding...'; status.className = 'save-status';
+    const res = await api(`/api/guilds/${guildId}/antinuke/whitelist`, { method: 'POST', body: JSON.stringify({ user_id: uid }) });
+    const data = await res.json();
+    if (res.ok) { status.textContent = ''; input.value = ''; renderWhitelist(data.whitelist); }
+    else { status.textContent = data.error || 'Failed to add.'; status.className = 'save-status err'; }
+  };
+
+  document.getElementById('saveAn').onclick = async () => {
+    const status = document.getElementById('anStatus');
+    status.textContent = 'Saving...'; status.className = 'save-status';
+    const body = {
+      enabled: document.getElementById('anEnabled').checked,
+      log_channel: document.getElementById('anLogChannel').value || null,
+      punishment: document.getElementById('anPunishment').value,
+    };
+    const res = await api(`/api/guilds/${guildId}/antinuke`, { method: 'PATCH', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (res.ok) { status.textContent = 'Saved.'; status.className = 'save-status ok'; }
+    else { status.textContent = data.error || 'Failed to save — try again.'; status.className = 'save-status err'; document.getElementById('anEnabled').checked = an.enabled; }
+  };
+
   app.appendChild(el(`
     <div class="panel" style="opacity:0.5;">
-      <div class="panel-head"><h2>Moderation, Tickets, Anti-Nuke &amp; more</h2></div>
+      <div class="panel-head"><h2>Moderation, Tickets, Antispam &amp; more</h2></div>
       <div class="soon-note">Coming in a future update — for now, configure these with commands in Discord.</div>
     </div>
   `));
