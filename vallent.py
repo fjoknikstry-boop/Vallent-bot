@@ -989,6 +989,66 @@ async def start_vote_webhook_server():
                     gc["xp_difficulty"] = update["difficulty"]
                 save_config(cfg)
 
+            def _get_antinuke(guild_id: int) -> dict:
+                gc = guild_cfg(cfg, guild_id)
+                ac = gc.get("antinuke", {})
+                guild = bot.get_guild(guild_id)
+                whitelist = []
+                for uid in ac.get("whitelist", []):
+                    member = guild.get_member(uid) if guild else None
+                    whitelist.append({
+                        "id": str(uid),
+                        "name": member.display_name if member else f"Unknown ({uid})",
+                        "avatar": str(member.display_avatar.url) if member else None,
+                    })
+                return {
+                    "enabled": ac.get("enabled", False),
+                    "log_channel": str(ac["log_channel"]) if ac.get("log_channel") else None,
+                    "punishment": ac.get("punishment", "strip_roles"),
+                    "whitelist": whitelist,
+                    "bot_has_audit_log_perm": bool(guild and guild.me.guild_permissions.view_audit_log),
+                }
+
+            def _set_antinuke(guild_id: int, update: dict) -> Optional[str]:
+                """Returns an error string on failure, None on success —
+                mirrors the command's own check that the bot actually has
+                View Audit Log before anti-nuke can be turned on."""
+                gc = guild_cfg(cfg, guild_id)
+                ac = gc.setdefault("antinuke", {"enabled": False, "log_channel": None, "whitelist": [], "punishment": "strip_roles"})
+                if "enabled" in update and update["enabled"]:
+                    guild = bot.get_guild(guild_id)
+                    if not guild or not guild.me.guild_permissions.view_audit_log:
+                        return "The bot needs the View Audit Log permission before Anti-Nuke can be enabled."
+                if "enabled" in update:
+                    ac["enabled"] = update["enabled"]
+                if "log_channel" in update:
+                    ac["log_channel"] = int(update["log_channel"]) if update["log_channel"] else None
+                if "punishment" in update:
+                    if update["punishment"] not in ("strip_roles", "kick", "ban"):
+                        return "Invalid punishment option."
+                    ac["punishment"] = update["punishment"]
+                save_config(cfg)
+                return None
+
+            def _add_antinuke_whitelist(guild_id: int, user_id: int) -> Optional[str]:
+                gc = guild_cfg(cfg, guild_id)
+                ac = gc.setdefault("antinuke", {"enabled": False, "log_channel": None, "whitelist": [], "punishment": "strip_roles"})
+                guild = bot.get_guild(guild_id)
+                if not guild or not guild.get_member(user_id):
+                    return "That user isn't a member of this server."
+                wl = ac.setdefault("whitelist", [])
+                if user_id not in wl:
+                    wl.append(user_id)
+                    save_config(cfg)
+                return None
+
+            def _remove_antinuke_whitelist(guild_id: int, user_id: int) -> None:
+                gc = guild_cfg(cfg, guild_id)
+                wl = gc.get("antinuke", {}).get("whitelist", [])
+                if user_id in wl:
+                    wl.remove(user_id)
+                    save_config(cfg)
+
             dashboard.build_dashboard_routes(
                 app,
                 client_id=str(bot.user.id),
@@ -998,6 +1058,10 @@ async def start_vote_webhook_server():
                 get_bot=lambda: bot,
                 get_leveling=_get_leveling,
                 set_leveling=_set_leveling,
+                get_antinuke=_get_antinuke,
+                set_antinuke=_set_antinuke,
+                add_antinuke_whitelist=_add_antinuke_whitelist,
+                remove_antinuke_whitelist=_remove_antinuke_whitelist,
             )
             print(f"[{BOT_NAME}] Web dashboard live at {DASHBOARD_REDIRECT_URI.rsplit('/auth/', 1)[0]}/dashboard")
         elif DASHBOARD_CLIENT_SECRET:
