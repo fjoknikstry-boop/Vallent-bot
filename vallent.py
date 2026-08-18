@@ -1049,6 +1049,85 @@ async def start_vote_webhook_server():
                     wl.remove(user_id)
                     save_config(cfg)
 
+            def _get_antispam(guild_id: int) -> dict:
+                gc = guild_cfg(cfg, guild_id)
+                ac = gc.get("antispam", {})
+                guild = bot.get_guild(guild_id)
+
+                def _resolve_users(ids):
+                    out = []
+                    for uid in ids:
+                        m = guild.get_member(uid) if guild else None
+                        out.append({"id": str(uid), "name": m.display_name if m else f"Unknown ({uid})",
+                                    "avatar": str(m.display_avatar.url) if m else None})
+                    return out
+
+                def _resolve_roles(ids):
+                    out = []
+                    for rid in ids:
+                        r = guild.get_role(rid) if guild else None
+                        out.append({"id": str(rid), "name": r.name if r else f"Unknown ({rid})",
+                                    "color": (f"#{r.color.value:06x}" if r and r.color.value else "#a3908d")})
+                    return out
+
+                return {
+                    "trap_channel": str(ac["trap_channel"]) if ac.get("trap_channel") else None,
+                    "log_channel": str(ac["log_channel"]) if ac.get("log_channel") else None,
+                    "punishment": ac.get("punishment", "ban"),
+                    "threshold": ac.get("threshold", SPAM_THRESHOLD),
+                    "window": ac.get("window", SPAM_WINDOW),
+                    "flood_count": ac.get("flood_count", 5),
+                    "flood_window": ac.get("flood_window", 4),
+                    "ignore_users": _resolve_users(ac.get("ignore_users", [])),
+                    "ignore_roles": _resolve_roles(ac.get("ignore_roles", [])),
+                }
+
+            def _set_antispam(guild_id: int, update: dict) -> Optional[str]:
+                gc = guild_cfg(cfg, guild_id)
+                ac = gc.setdefault("antispam", {})
+                if "trap_channel" in update:
+                    ac["trap_channel"] = int(update["trap_channel"]) if update["trap_channel"] else None
+                if "log_channel" in update:
+                    ac["log_channel"] = int(update["log_channel"]) if update["log_channel"] else None
+                if "punishment" in update:
+                    if update["punishment"] not in ("ban", "kick", "timeout"):
+                        return "Invalid punishment option."
+                    ac["punishment"] = update["punishment"]
+                for int_field in ("threshold", "window", "flood_count", "flood_window"):
+                    if int_field in update:
+                        try:
+                            val = int(update[int_field])
+                        except (TypeError, ValueError):
+                            return f"Invalid value for {int_field}."
+                        if val < 1:
+                            return f"{int_field} must be at least 1."
+                        ac[int_field] = val
+                save_config(cfg)
+                return None
+
+            def _add_antispam_ignore(guild_id: int, kind: str, target_id: int) -> Optional[str]:
+                gc = guild_cfg(cfg, guild_id)
+                ac = gc.setdefault("antispam", {})
+                guild = bot.get_guild(guild_id)
+                key = "ignore_users" if kind == "user" else "ignore_roles"
+                if kind == "user" and (not guild or not guild.get_member(target_id)):
+                    return "That user isn't a member of this server."
+                if kind == "role" and (not guild or not guild.get_role(target_id)):
+                    return "That role doesn't exist on this server."
+                lst = ac.setdefault(key, [])
+                if target_id not in lst:
+                    lst.append(target_id)
+                    save_config(cfg)
+                return None
+
+            def _remove_antispam_ignore(guild_id: int, kind: str, target_id: int) -> None:
+                gc = guild_cfg(cfg, guild_id)
+                key = "ignore_users" if kind == "user" else "ignore_roles"
+                lst = gc.get("antispam", {}).get(key, [])
+                if target_id in lst:
+                    lst.remove(target_id)
+                    save_config(cfg)
+
             dashboard.build_dashboard_routes(
                 app,
                 client_id=str(bot.user.id),
@@ -1062,6 +1141,10 @@ async def start_vote_webhook_server():
                 set_antinuke=_set_antinuke,
                 add_antinuke_whitelist=_add_antinuke_whitelist,
                 remove_antinuke_whitelist=_remove_antinuke_whitelist,
+                get_antispam=_get_antispam,
+                set_antispam=_set_antispam,
+                add_antispam_ignore=_add_antispam_ignore,
+                remove_antispam_ignore=_remove_antispam_ignore,
             )
             print(f"[{BOT_NAME}] Web dashboard live at {DASHBOARD_REDIRECT_URI.rsplit('/auth/', 1)[0]}/dashboard")
         elif DASHBOARD_CLIENT_SECRET:

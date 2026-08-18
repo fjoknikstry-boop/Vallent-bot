@@ -99,6 +99,10 @@ def build_dashboard_routes(
     set_antinuke: Callable[[int, dict], Optional[str]],
     add_antinuke_whitelist: Callable[[int, int], Optional[str]],
     remove_antinuke_whitelist: Callable[[int, int], None],
+    get_antispam: Callable[[int], dict],
+    set_antispam: Callable[[int, dict], Optional[str]],
+    add_antispam_ignore: Callable[[int, str, int], Optional[str]],
+    remove_antispam_ignore: Callable[[int, str, int], None],
 ) -> None:
     """Registers every /auth, /dashboard, and /api route onto the shared
     aiohttp `app` (the same one the top.gg webhook runs on). Everything
@@ -337,6 +341,75 @@ def build_dashboard_routes(
             return web.json_response({"error": "invalid_user_id"}, status=400)
         return web.json_response(get_antinuke(int(guild_id)))
 
+    async def api_get_antispam(request: web.Request) -> web.Response:
+        guild_id = request.match_info["guild_id"]
+        _, err = _require_guild_access(request, guild_id)
+        if err:
+            return err
+        return web.json_response(get_antispam(int(guild_id)))
+
+    async def api_patch_antispam(request: web.Request) -> web.Response:
+        guild_id = request.match_info["guild_id"]
+        _, err = _require_guild_access(request, guild_id)
+        if err:
+            return err
+        if request.headers.get("X-Requested-With") != "vallent-dashboard":
+            return web.json_response({"error": "bad_request"}, status=400)
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        update = {}
+        for field in ("trap_channel", "log_channel"):
+            if field in body:
+                update[field] = str(body[field]) if body[field] else None
+        if "punishment" in body:
+            update["punishment"] = str(body["punishment"])
+        for field in ("threshold", "window", "flood_count", "flood_window"):
+            if field in body:
+                update[field] = body[field]
+        error = set_antispam(int(guild_id), update)
+        if error:
+            return web.json_response({"error": error}, status=400)
+        return web.json_response(get_antispam(int(guild_id)))
+
+    async def api_add_antispam_ignore(request: web.Request) -> web.Response:
+        guild_id = request.match_info["guild_id"]
+        kind = request.match_info["kind"]
+        _, err = _require_guild_access(request, guild_id)
+        if err:
+            return err
+        if kind not in ("user", "role"):
+            return web.json_response({"error": "invalid_kind"}, status=400)
+        if request.headers.get("X-Requested-With") != "vallent-dashboard":
+            return web.json_response({"error": "bad_request"}, status=400)
+        try:
+            body = await request.json()
+            target_id = int(body["id"])
+        except Exception:
+            return web.json_response({"error": "invalid_id"}, status=400)
+        error = add_antispam_ignore(int(guild_id), kind, target_id)
+        if error:
+            return web.json_response({"error": error}, status=400)
+        return web.json_response(get_antispam(int(guild_id)))
+
+    async def api_remove_antispam_ignore(request: web.Request) -> web.Response:
+        guild_id = request.match_info["guild_id"]
+        kind = request.match_info["kind"]
+        target_id = request.match_info["target_id"]
+        _, err = _require_guild_access(request, guild_id)
+        if err:
+            return err
+        if kind not in ("user", "role"):
+            return web.json_response({"error": "invalid_kind"}, status=400)
+        if request.headers.get("X-Requested-With") != "vallent-dashboard":
+            return web.json_response({"error": "bad_request"}, status=400)
+        try:
+            remove_antispam_ignore(int(guild_id), kind, int(target_id))
+        except Exception:
+            return web.json_response({"error": "invalid_id"}, status=400)
+        return web.json_response(get_antispam(int(guild_id)))
+
     # ---------------- Frontend shell ----------------
 
     async def serve_dashboard_shell(request: web.Request) -> web.Response:
@@ -353,6 +426,10 @@ def build_dashboard_routes(
     app.router.add_patch("/api/guilds/{guild_id}/antinuke", api_patch_antinuke)
     app.router.add_post("/api/guilds/{guild_id}/antinuke/whitelist", api_add_antinuke_whitelist)
     app.router.add_delete("/api/guilds/{guild_id}/antinuke/whitelist/{user_id}", api_remove_antinuke_whitelist)
+    app.router.add_get("/api/guilds/{guild_id}/antispam", api_get_antispam)
+    app.router.add_patch("/api/guilds/{guild_id}/antispam", api_patch_antispam)
+    app.router.add_post("/api/guilds/{guild_id}/antispam/ignore/{kind}", api_add_antispam_ignore)
+    app.router.add_delete("/api/guilds/{guild_id}/antispam/ignore/{kind}/{target_id}", api_remove_antispam_ignore)
     app.router.add_get("/dashboard", serve_dashboard_shell)
     app.router.add_get("/dashboard/{guild_id}", serve_dashboard_shell)
 
@@ -509,13 +586,18 @@ function renderGuildPicker(me) {
   app.appendChild(grid);
 }
 
+function badgeHtml(enabled) {
+  if (enabled === null) return `<span class="status-badge" data-badge style="background:rgba(245,166,35,0.15);color:var(--gold);">Always Active</span>`;
+  return `<span class="status-badge ${enabled ? 'on' : 'off'}" data-badge>${enabled ? 'Enabled' : 'Disabled'}</span>`;
+}
+
 function makeSysCard(icon, title, subtitle, enabled, bodyHtml) {
   const card = el(`
     <div class="sys-card">
       <div class="sys-card-head">
         <div class="sys-card-icon">${icon}</div>
         <div class="sys-card-title"><h2>${title}</h2><p>${subtitle}</p></div>
-        <span class="status-badge ${enabled ? 'on' : 'off'}" data-badge>${enabled ? 'Enabled' : 'Disabled'}</span>
+        ${badgeHtml(enabled)}
         <svg class="sys-card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
       </div>
       <div class="sys-card-body"><div class="sys-card-body-inner">${bodyHtml}</div></div>
@@ -533,10 +615,11 @@ function setBadge(card, enabled) {
 
 async function renderGuildEditor(guildId) {
   app.innerHTML = '<div class="loading">Loading server settings…</div>';
-  const [lvlRes, chRes, anRes] = await Promise.all([
+  const [lvlRes, chRes, anRes, asRes] = await Promise.all([
     api(`/api/guilds/${guildId}/leveling`),
     api(`/api/guilds/${guildId}/channels`),
     api(`/api/guilds/${guildId}/antinuke`),
+    api(`/api/guilds/${guildId}/antispam`),
   ]);
   if (lvlRes.status === 403 || lvlRes.status === 404) {
     app.innerHTML = `<div class="loading">You don't have access to manage this server.</div>`;
@@ -545,10 +628,11 @@ async function renderGuildEditor(guildId) {
   const lvl = await lvlRes.json();
   const channels = await chRes.json();
   const an = await anRes.json();
+  const as_ = await asRes.json();
 
   app.innerHTML = '';
   app.appendChild(el(`<a href="/dashboard" class="back-link">&larr; All Servers</a>`));
-  app.appendChild(el(`<h1 class="page-title">Server Settings</h1><p class="page-sub">Click a system below to open its settings. More systems (Moderation, Tickets, Antispam, Verification...) are on the way.</p>`));
+  app.appendChild(el(`<h1 class="page-title">Server Settings</h1><p class="page-sub">Click a system below to open its settings. More systems (Moderation, Tickets, Verification...) are on the way.</p>`));
 
   // ---------------- Level & XP ----------------
   const lvlCard = makeSysCard('<svg viewBox="0 0 24 24" fill="none" stroke="#f5a623" stroke-width="1.6"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>', 'Level &amp; XP', 'XP gain, level-up announcements, difficulty', lvl.enabled, `
@@ -677,10 +761,165 @@ async function renderGuildEditor(guildId) {
     else { status.textContent = data.error || 'Failed to save — try again.'; status.className = 'save-status err'; anCard.querySelector('#anEnabled').checked = an.enabled; }
   };
 
+  // ---------------- Antispam ----------------
+  const asCard = makeSysCard('<svg viewBox="0 0 24 24" fill="none" stroke="#a80f2c" stroke-width="1.6"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4"/></svg>', 'Antispam', 'Flood &amp; cross-channel spam detection', null, `
+    <div class="field">
+      <label>Honeypot / Trap Channel</label>
+      <select id="asTrapChannel">
+        <option value="">— None —</option>
+        ${channels.map(c => `<option value="${c.id}" ${as_.trap_channel === c.id ? 'selected' : ''}>#${c.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field">
+      <label>Alert Log Channel</label>
+      <select id="asLogChannel">
+        <option value="">— None —</option>
+        ${channels.map(c => `<option value="${c.id}" ${as_.log_channel === c.id ? 'selected' : ''}>#${c.name}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field">
+      <label>Punishment</label>
+      <select id="asPunishment">
+        <option value="ban" ${as_.punishment === 'ban' ? 'selected' : ''}>Ban</option>
+        <option value="kick" ${as_.punishment === 'kick' ? 'selected' : ''}>Kick</option>
+        <option value="timeout" ${as_.punishment === 'timeout' ? 'selected' : ''}>Timeout</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Cross-Channel Spam — messages / seconds</label>
+      <div style="display:flex;gap:10px;">
+        <input type="number" id="asThreshold" min="1" value="${as_.threshold}" style="flex:1;">
+        <input type="number" id="asWindow" min="1" value="${as_.window}" style="flex:1;">
+      </div>
+    </div>
+    <div class="field">
+      <label>Same-Channel Flood — messages / seconds</label>
+      <div style="display:flex;gap:10px;">
+        <input type="number" id="asFloodCount" min="1" value="${as_.flood_count}" style="flex:1;">
+        <input type="number" id="asFloodWindow" min="1" value="${as_.flood_window}" style="flex:1;">
+      </div>
+    </div>
+    <div class="save-row">
+      <button class="btn btn-primary" id="saveAs">Save Changes</button>
+      <span class="save-status" id="asStatus"></span>
+    </div>
+
+    <div class="field" style="margin-top:28px;">
+      <label>Ignored Users (exempt from spam detection)</label>
+      <div id="asUserList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;"></div>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="asUserId" placeholder="Discord User ID" style="flex:1;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;color:var(--ink);font-family:'Outfit',sans-serif;font-size:14px;">
+        <button class="btn btn-ghost" id="asUserAdd">Add</button>
+      </div>
+      <span class="save-status" id="asUserStatus"></span>
+    </div>
+
+    <div class="field">
+      <label>Ignored Roles (exempt from spam detection)</label>
+      <div id="asRoleList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;"></div>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="asRoleId" placeholder="Discord Role ID" style="flex:1;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;color:var(--ink);font-family:'Outfit',sans-serif;font-size:14px;">
+        <button class="btn btn-ghost" id="asRoleAdd">Add</button>
+      </div>
+      <span class="save-status" id="asRoleStatus"></span>
+    </div>
+  `);
+  app.appendChild(asCard);
+
+  function renderIgnoreUsers(list) {
+    const box = asCard.querySelector('#asUserList');
+    box.innerHTML = '';
+    if (!list.length) { box.appendChild(el(`<div class="soon-note">None ignored.</div>`)); return; }
+    list.forEach(u => {
+      const row = el(`
+        <div style="display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;">
+          ${u.avatar ? `<img src="${u.avatar}" style="width:24px;height:24px;border-radius:50%;">` : `<div style="width:24px;height:24px;border-radius:50%;background:var(--surface);"></div>`}
+          <span style="flex:1;font-size:13.5px;">${u.name}</span>
+          <button data-id="${u.id}" style="background:transparent;border:none;color:var(--muted-2);cursor:pointer;font-size:16px;">&times;</button>
+        </div>
+      `);
+      row.querySelector('button').onclick = async (e) => {
+        e.stopPropagation();
+        const res = await api(`/api/guilds/${guildId}/antispam/ignore/user/${e.target.getAttribute('data-id')}`, { method: 'DELETE' });
+        if (res.ok) { const data = await res.json(); renderIgnoreUsers(data.ignore_users); }
+      };
+      box.appendChild(row);
+    });
+  }
+
+  function renderIgnoreRoles(list) {
+    const box = asCard.querySelector('#asRoleList');
+    box.innerHTML = '';
+    if (!list.length) { box.appendChild(el(`<div class="soon-note">None ignored.</div>`)); return; }
+    list.forEach(r => {
+      const row = el(`
+        <div style="display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;">
+          <div style="width:10px;height:10px;border-radius:50%;background:${r.color};"></div>
+          <span style="flex:1;font-size:13.5px;">${r.name}</span>
+          <button data-id="${r.id}" style="background:transparent;border:none;color:var(--muted-2);cursor:pointer;font-size:16px;">&times;</button>
+        </div>
+      `);
+      row.querySelector('button').onclick = async (e) => {
+        e.stopPropagation();
+        const res = await api(`/api/guilds/${guildId}/antispam/ignore/role/${e.target.getAttribute('data-id')}`, { method: 'DELETE' });
+        if (res.ok) { const data = await res.json(); renderIgnoreRoles(data.ignore_roles); }
+      };
+      box.appendChild(row);
+    });
+  }
+
+  renderIgnoreUsers(as_.ignore_users);
+  renderIgnoreRoles(as_.ignore_roles);
+
+  asCard.querySelector('#asUserAdd').onclick = async (e) => {
+    e.stopPropagation();
+    const input = asCard.querySelector('#asUserId');
+    const status = asCard.querySelector('#asUserStatus');
+    const id = input.value.trim();
+    if (!id) return;
+    status.textContent = 'Adding...'; status.className = 'save-status';
+    const res = await api(`/api/guilds/${guildId}/antispam/ignore/user`, { method: 'POST', body: JSON.stringify({ id }) });
+    const data = await res.json();
+    if (res.ok) { status.textContent = ''; input.value = ''; renderIgnoreUsers(data.ignore_users); }
+    else { status.textContent = data.error || 'Failed to add.'; status.className = 'save-status err'; }
+  };
+
+  asCard.querySelector('#asRoleAdd').onclick = async (e) => {
+    e.stopPropagation();
+    const input = asCard.querySelector('#asRoleId');
+    const status = asCard.querySelector('#asRoleStatus');
+    const id = input.value.trim();
+    if (!id) return;
+    status.textContent = 'Adding...'; status.className = 'save-status';
+    const res = await api(`/api/guilds/${guildId}/antispam/ignore/role`, { method: 'POST', body: JSON.stringify({ id }) });
+    const data = await res.json();
+    if (res.ok) { status.textContent = ''; input.value = ''; renderIgnoreRoles(data.ignore_roles); }
+    else { status.textContent = data.error || 'Failed to add.'; status.className = 'save-status err'; }
+  };
+
+  asCard.querySelector('#saveAs').onclick = async (e) => {
+    e.stopPropagation();
+    const status = asCard.querySelector('#asStatus');
+    status.textContent = 'Saving...'; status.className = 'save-status';
+    const body = {
+      trap_channel: asCard.querySelector('#asTrapChannel').value || null,
+      log_channel: asCard.querySelector('#asLogChannel').value || null,
+      punishment: asCard.querySelector('#asPunishment').value,
+      threshold: parseInt(asCard.querySelector('#asThreshold').value, 10),
+      window: parseInt(asCard.querySelector('#asWindow').value, 10),
+      flood_count: parseInt(asCard.querySelector('#asFloodCount').value, 10),
+      flood_window: parseInt(asCard.querySelector('#asFloodWindow').value, 10),
+    };
+    const res = await api(`/api/guilds/${guildId}/antispam`, { method: 'PATCH', body: JSON.stringify(body) });
+    const data = await res.json();
+    if (res.ok) { status.textContent = 'Saved.'; status.className = 'save-status ok'; }
+    else { status.textContent = data.error || 'Failed to save — try again.'; status.className = 'save-status err'; }
+  };
+
   // ---------------- Coming soon ----------------
   app.appendChild(el(`
     <div class="panel" style="opacity:0.5;">
-      <div class="panel-head"><h2>Moderation, Tickets, Antispam &amp; more</h2></div>
+      <div class="panel-head"><h2>Moderation, Tickets, Verification &amp; more</h2></div>
       <div class="soon-note">Coming in a future update — for now, configure these with commands in Discord.</div>
     </div>
   `));
